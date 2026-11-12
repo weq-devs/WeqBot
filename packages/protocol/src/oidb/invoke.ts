@@ -7,7 +7,8 @@
  */
 
 import { decode, encode, type ProtoMessage } from '../protobuf';
-import { sendOidb, sendPacket, type NativePort, type SsoTarget } from '@weqbot/wire';
+import type { NativePort, SsoTarget } from '@weqbot/wire';
+import { sendOidb, sendPacket } from '../transport';
 
 export interface OidbSpec<TParams, TResult> {
   command: number;

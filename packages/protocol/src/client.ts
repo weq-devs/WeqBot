@@ -7,7 +7,7 @@
 
 import type { NativePort, SsoTarget } from '@weqbot/wire';
 import { invokeOidb, invokeTrpc, type OidbSpec, type TrpcSpec } from './oidb/invoke';
-import { sendPacket } from '@weqbot/wire';
+import { sendPacket } from './transport';
 
 export interface ProtocolClientOptions {
   native: NativePort;

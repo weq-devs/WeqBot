@@ -21,3 +21,4 @@ export {
   type TrpcSpec,
 } from './invoke';
 export { bytesToHex, ensureRetCodeZero, toInt } from './shared';
+export * from './media-schemas';

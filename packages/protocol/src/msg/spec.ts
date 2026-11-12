@@ -1,9 +1,10 @@
 /**
  * 消息元素（骨架版）。
  *
- * 真实的元素词表很大（Ark / 卡片 / 表情 / 文件 / 语音 / 合并转发 …），P3 从
- * `WeQ/packages/codec/src/element/{types,spec,registry}.ts` 整体搬运。这里先固定
- * **OneBot 适配真正依赖的那几种**，让上层能先跑通文本链路。
+ * 真实的元素形状由 `./decode.ts` 与 `./send-elements.ts` 的输出/入参定义（例如
+ * `{ kind: 'text', textContent }`），`./schemas.ts` 的 `ELEM` 是它们的 wire 来源。
+ * 本文件只是骨架期给 OneBot 适配层用的中间类型，P4 收尾时会被真实形状取代。
+ * **不要引入 `@weq/codec`** —— 那是解数据库的模型，不是网线协议模型。
  *
  * 约定：元素是**纯数据**，encode/decode 在 `msg/element.ts`；不要把 buf/id 之类
  * 的运行时句柄塞进元素里。

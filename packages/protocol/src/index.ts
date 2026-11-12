@@ -9,9 +9,16 @@
  */
 
 export { createProtocolClient, type ProtocolClient, type ProtocolClientOptions } from './client';
-export * from './oidb';
+export * from './highway';
 export * from './msg';
+export * from './oidb';
 export * from './push';
+export * from './transport';
+export {
+  RED_BAG_SIGN_SALT1,
+  RED_BAG_SIGN_SALT2,
+  signRedBagRequest as signRedBagRequestPure,
+} from './redbag/sign';
 export { decode, encode, message } from './protobuf';
 export type { ProtoField, ProtoMessage, ScalarType } from './protobuf';
 export {
