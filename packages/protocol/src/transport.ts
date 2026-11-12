@@ -2,7 +2,7 @@
  * Packet transport —— 从 `WeQ/packages/protocol/src/transport.ts` 搬运，只改两处：
  *
  *   1. `NtHelperBinding` → {@link NativePort}（结构类型，由宿主注入）；
- *   2. `pid: number` → {@link SsoTarget}（pid 或 mode2 句柄，同一命名空间）。
+ *   2. `pid: number` → {@link SessionId}（native 分配的会话句柄，不再是进程 pid）。
  *
  * 其余逻辑（中央签名表查表、override 只给调试用、原生签名优先/TS 兜底）逐行未动。
  *
@@ -13,7 +13,7 @@
  */
 
 import { WeqBotError } from '@weqbot/common';
-import type { NativePort, SsoTarget } from '@weqbot/wire';
+import type { NativePort, SessionId } from '@weqbot/wire';
 import { signRedBagRequest as signRedBagRequestTs } from './redbag/sign';
 import { oidbCommand, resolveSign, type ResolvedSign } from './sign-policy';
 
@@ -53,9 +53,10 @@ function signArgs(cmd: string, override?: Partial<ResolvedSign>): ResolvedSign {
   return override ? { ...resolveSign(cmd), ...override } : resolveSign(cmd);
 }
 
-function assertTarget(target: SsoTarget, who: string): void {
-  if (!Number.isInteger(target) || target < 0) {
-    throw new WeqBotError('UNKNOWN', `${who}: 非法 SSO 目标 ${target}`);
+/** 会话句柄由 native 从 1 开始分配；0 / 负数 / 小数一律视为调用方 bug。 */
+function assertSessionId(sessionId: SessionId, who: string): void {
+  if (!Number.isInteger(sessionId) || sessionId < 1) {
+    throw new WeqBotError('UNKNOWN', `${who}: 非法会话 ID ${sessionId}`);
   }
 }
 
@@ -66,20 +67,20 @@ function assertTarget(target: SsoTarget, who: string): void {
  */
 export async function sendOidb(
   nt: OidbNative,
-  target: SsoTarget,
+  sessionId: SessionId,
   req: OidbRequest,
   override?: Partial<ResolvedSign>,
 ): Promise<Uint8Array> {
-  assertTarget(target, 'sendOidb');
-  const { needSign, mode } = signArgs(oidbCommand(req.command, req.subCommand), override);
+  assertSessionId(sessionId, 'sendOidb');
+  const { needSign, mode: signMode } = signArgs(oidbCommand(req.command, req.subCommand), override);
   const reply = await nt.sendOidbPacket(
-    target,
+    sessionId,
     req.command,
     req.subCommand,
     req.body,
     req.isUid ?? false,
     needSign,
-    mode,
+    signMode,
   );
   return new Uint8Array(reply);
 }
@@ -91,14 +92,14 @@ export async function sendOidb(
  */
 export async function sendPacket(
   nt: TrpcNative,
-  target: SsoTarget,
+  sessionId: SessionId,
   cmd: string,
   body: Uint8Array,
   override?: Partial<ResolvedSign>,
 ): Promise<Uint8Array> {
-  assertTarget(target, 'sendPacket');
-  const { needSign, mode } = signArgs(cmd, override);
-  const reply = await nt.sendPacket(target, cmd, body, needSign, mode);
+  assertSessionId(sessionId, 'sendPacket');
+  const { needSign, mode: signMode } = signArgs(cmd, override);
+  const reply = await nt.sendPacket(sessionId, cmd, body, needSign, signMode);
   return new Uint8Array(reply);
 }
 

@@ -33,33 +33,32 @@ export function decodeEnvelope(line: string): ControlEnvelope {
 
   const envelope = parsed as Record<string, unknown>;
 
-  if (envelope['v'] !== CONTROL_PROTOCOL_VERSION) {
-    throw invalid(`协议版本不符：期望 ${CONTROL_PROTOCOL_VERSION}，收到 ${String(envelope['v'])}`);
+  if (envelope.v !== CONTROL_PROTOCOL_VERSION) {
+    throw invalid(`协议版本不符：期望 ${CONTROL_PROTOCOL_VERSION}，收到 ${String(envelope.v)}`);
   }
 
-  switch (envelope['kind']) {
+  switch (envelope.kind) {
     case 'request': {
-      if (!isId(envelope['id'])) throw invalid('request 缺少整数 id');
-      if (typeof envelope['method'] !== 'string' || envelope['method'] === '') {
+      if (!isId(envelope.id)) throw invalid('request 缺少整数 id');
+      if (typeof envelope.method !== 'string' || envelope.method === '') {
         throw invalid('request 缺少 method');
       }
       return envelope as unknown as ControlEnvelope;
     }
     case 'response': {
-      if (!isId(envelope['id'])) throw invalid('response 缺少整数 id');
-      if (typeof envelope['ok'] !== 'boolean') throw invalid('response 缺少布尔 ok');
-      if (!envelope['ok'] && !isFailure(envelope['error']))
-        throw invalid('失败的 response 缺少 error');
+      if (!isId(envelope.id)) throw invalid('response 缺少整数 id');
+      if (typeof envelope.ok !== 'boolean') throw invalid('response 缺少布尔 ok');
+      if (!envelope.ok && !isFailure(envelope.error)) throw invalid('失败的 response 缺少 error');
       return envelope as unknown as ControlEnvelope;
     }
     case 'event': {
-      if (typeof envelope['event'] !== 'string' || envelope['event'] === '') {
+      if (typeof envelope.event !== 'string' || envelope.event === '') {
         throw invalid('event 缺少 event 名');
       }
       return envelope as unknown as ControlEnvelope;
     }
     default:
-      throw invalid(`未知 kind：${String(envelope['kind'])}`);
+      throw invalid(`未知 kind：${String(envelope.kind)}`);
   }
 }
 
@@ -100,7 +99,7 @@ function isId(value: unknown): value is number {
 function isFailure(value: unknown): value is ControlFailure {
   if (typeof value !== 'object' || value === null) return false;
   const failure = value as Record<string, unknown>;
-  return typeof failure['code'] === 'string' && typeof failure['message'] === 'string';
+  return typeof failure.code === 'string' && typeof failure.message === 'string';
 }
 
 function invalid(message: string): WeqBotError {

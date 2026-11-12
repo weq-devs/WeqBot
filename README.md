@@ -3,7 +3,6 @@
 独立的 QQ bot 框架：自己完成登录、上线注册与心跳（**mode2**），不借用 QQ 客户端的在线会话；
 也可以作为**纯 TypeScript** 嵌进 WeQ desktop，由宿主注入已有的原生组件。
 
-
 ## 三处运行形态
 
 | 形态             | 原生组件                                                          | 入口                                         |
@@ -29,9 +28,9 @@ common  ←  wire  ←  protocol  ←  session  ←  onebot
   （NDJSON over stdio），零业务依赖。
 
 - **`@weqbot/common`** — 日志 / 错误码 / 事件总线 / 退避 / 字节工具，零业务依赖。
-- **`@weqbot/wire`** — `NativePort` 契约、`SsoTarget`、签名策略表、发包包装。
+- **`@weqbot/wire`** — `NativePort` 契约、`SessionId` / `SessionMode`、能力探测、宿主绑定适配。
 - **`@weqbot/protocol`** — protobuf 运行时、OIDB/trpc spec、消息编解码、推送解码（搬运自 `@weq/protocol`）。
-- **`@weqbot/session`** — a1 凭据、`quickLogin`、`openOnline`、状态机、`BotEvent` 契约。
+- **`@weqbot/session`** — a1 凭据、`quickLogin`、`openSession(mode 1|2)`、状态机、`BotEvent` 契约。
 - **`@weqbot/onebot`** — OneBot v11 事件/动作/网络适配。
 - **`@weqbot/bot`** — `createBot()` 门面，宿主与测试的唯一入口。
 - **`@weqbot/control`** — desktop ↔ sidecar 控制通道契约与 NDJSON 编解码。
@@ -41,8 +40,9 @@ common  ←  wire  ←  protocol  ←  session  ←  onebot
 
 ```bash
 pnpm install
-pnpm verify          # 架构护栏 + 全量类型检查
+pnpm verify          # 架构护栏 + 全量类型检查 + 契约测试
 pnpm typecheck
+pnpm test
 pnpm lint
 pnpm check:pure-ts   # 只跑架构护栏
 pnpm dev:cli --help  # CLI（源码直接跑，靠 tsx；P6 再出打包产物）

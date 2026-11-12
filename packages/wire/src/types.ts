@@ -1,51 +1,55 @@
 /**
  * 原生端口契约（`NativePort`）—— weqbot 与 nt_helper 之间的**唯一**接缝。
  *
- * ## 为什么是一份结构类型，而不是 `import type { NtHelperBinding } from '@weq/native'`
+ * ## 三层边界
  *
- * bot 要同时活在三处：
+ * ```
+ * 进程层   pid        hook / scanSessionMaterial / 数据库 / capture / runtime modules
+ * 凭据层   a1         quickLogin / qrLogin → SsoSessionConfig
+ * 会话层   sessionId  openSession / send* / closeSession / sinks
+ * ```
  *
- *   1. 独立进程（`@weqbot/node`）拿 **slim native**；
- *   2. 嵌进 WeQ desktop，由 WeQ 注入**自己那份 full native**（纯 TS 打包，不带第二份 .node）；
- *   3. 测试里拿桩实现。
+ * **pid 只属于进程层，绝不跨进会话层。** 会话的身份由 native 分配的
+ * {@link SessionId} 持有，与「票据从哪来」无关：扫描得到的、`quickLogin`
+ * 换来的、`qrLogin` 换来的，最终都是同一份 {@link SsoSessionConfig}，
+ * 都走同一个 {@link NativePort.openSession}。
  *
- * 只要 weqbot 不 import `@weq/native`，第 2 种就不会把 WeQ 的私有包拖进依赖图，
- * 也不会让「两份 native」有存在的理由。宿主传进来的对象只要**结构上**满足
- * `NativePort` 即可（WeQ 的 `platform.native` 天然满足，见 `adaptNativeBinding`）。
+ * ## 为什么 `openSession` 只有一个 mode 参数
+ *
+ * mode 1（借用）与 mode 2（自建）的差别只有两件事：
+ *
+ *   - 是否发 `SsoInfoSync` 注册；
+ *   - 是否启动心跳。
+ *
+ * 连接、请求关联、签名、推送通道、关闭流程全部共用。`closeSession` 是否发
+ * `UnRegister` 由会话自己的 `registered` 状态决定，不是第三个 mode 分支。
  *
  * ## 必选 vs 可选
  *
- * 必选的只有两个发包出口（mode1 的 pid 路径和 mode2 的 handle 路径共用它们）。
- * 其余全部可选 —— 旧产物 / 阉割产物缺能力时由 `capabilities.ts` 探测并给出
- * 明确的 `NATIVE_MISSING_CAPABILITY`，而不是让类型在编译期把宿主卡死。
+ * 必选的只有两个发包出口。其余全部可选 —— 旧产物 / 阉割产物缺能力时由
+ * `capabilities.ts` 探测并给出明确的 `NATIVE_MISSING_CAPABILITY`，而不是让
+ * 类型在编译期把宿主卡死。
  */
 
 /**
- * SSO 发包目标。
+ * 会话身份。由 native 分配，从 1 开始，进程内不复用。
  *
- * **同一个 number 命名空间，两个来源**：
- *   - `[1, ONLINE_TARGET_BASE)` —— QQ 进程 pid（mode1：借 QQ 的会话物料）；
- *   - `[ONLINE_TARGET_BASE, …)` —— `openOnline()` 分配的在线会话句柄（mode2）。
- *
- * 这样 `sendPacket` / `sendOidbPacket` 只需要一个出口，`@weq/protocol` 那 161 个
- * spec 文件可以逐字搬运（它们传的就是 `pid: number`），不需要为 mode2 复制一套。
- *
- * 句柄区间取 1<<24 是因为 pid 的实际上限远小于它（Linux `pid_max` 默认 4194304，
- * 但 native 侧会在分配时校验冲突，不会真的撞上）。
+ * 它是**不透明句柄**，不是 pid，也不是 fd。协议层继续把它当 `number` 透传，
+ * 这样从 `WeQ/packages/protocol` 逐字搬来的 161 个 spec 文件不需要改签名。
  */
-export type SsoTarget = number;
+export type SessionId = number;
 
-/** mode2 在线会话句柄的起点。 */
-export const ONLINE_TARGET_BASE = 1 << 24;
-
-/** 把从 0 开始的序号包成在线句柄。 */
-export function onlineHandle(index: number): SsoTarget {
-  return ONLINE_TARGET_BASE + index;
-}
-
-export function isOnlineTarget(target: SsoTarget): boolean {
-  return target >= ONLINE_TARGET_BASE;
-}
+/**
+ * 会话的在线归属。
+ *
+ * - `1`（借用）：账号的在线状态由外部（QQ 本体）维持。本会话只持有自己的连接，
+ *   不发 `SsoInfoSync`、不起心跳；关闭时不发 `UnRegister`。
+ * - `2`（自建）：本会话拥有账号的在线状态。连接后必须完成 `SsoInfoSync`，
+ *   启动心跳，并等待首屏 `InfoSyncPush` 收敛后才算 `online`。
+ *
+ * 不要在 `sendPacket` 的签名 mode（2/3）上复用它；两者语义无关。
+ */
+export type SessionMode = 1 | 2;
 
 /** 签名器 VM mode。Linux 的 VM ABI 没有这个参数，固定 3。 */
 export type SignMode = 2 | 3;
@@ -75,8 +79,8 @@ export interface NativeBuildInfo {
 /**
  * 签名器位置信息：QQ 的 `wrapper.node` 与静态扫描出的 RVA。
  *
- * mode2 没有 QQ 登录会话，`sec_sign` 只能靠 wrapper 算；`sec_extra` / `sec_token`
- * 的输入必须由 TS 侧给（见 {@link OnlineOpenOptions.secure}）。
+ * mode 1 / mode 2 都需要它：`sec_sign` 只能靠 wrapper 算。`sec_extra` / `sec_token`
+ * 的输入在 {@link SsoSessionConfig} 里（`qua` / `secToken`）。
  */
 export interface SignerPaths {
   /** QQ 的 `wrapper.node` 绝对路径；null = 只能发不需要签名的命令。 */
@@ -86,26 +90,11 @@ export interface SignerPaths {
 }
 
 /**
- * mode2 需要 TS 侧提供的 `SsoSecureInfo` 原始素材。
- *
- * 这三者是一组（用户口径里的「extra」）：`sec_sign` 由 wrapper 算，`sec_extra` 是
- * `protobuf { 2: QUA }`，`sec_token` 在 mode1 来自 `scanSessionMaterial`、在 mode2
- * 没有来源，只能本地生成（生成规则见 TODO「待验证 / secToken」）。
- */
-export interface SecureMaterial {
-  /** 完整 QUA，如 `V1_LNX_NQ_3.2.34_53644_GW_B`（拼 `sec_extra` 用）。 */
-  qua: string;
-  /** `SecToken` 原文；mode2 由本地生成或从凭据库取。 */
-  secToken: string;
-  /** 覆盖 tag 15 `traceParent`（调试 / 离线比对用）。 */
-  traceParent?: string | null;
-}
-
-/**
  * 一条 SSO 会话的物料（对应 nt_helper 的 `SsoSessionConfig`）。
  *
- * mode1：由 WeQ 从 QQ 进程内存扫出来，字节级原样下传。
- * mode2：由 `quickLogin(a1)` 的返回 + 设备档案拼出来，**只在内存里活**。
+ * **来源不进类型**：扫描、`quickLogin`、`qrLogin` 产出的都是这一份结构。
+ * 「不许把扫描物料用于自建上线」是调用纪律，由 native 的 `openSession`
+ * 前置检查（QQ 是否在线）兜底，而不是靠字段区分。
  */
 export interface SsoSessionConfig {
   uin: string;
@@ -146,7 +135,7 @@ export interface DeviceProfile {
 }
 
 /**
- * mode1 的快速登录入参（对应 nt_helper 的 `QuickLoginOptions`）。
+ * 快速登录入参（对应 nt_helper 的 `QuickLoginOptions`）。
  *
  * `a1` 是**唯一需要长期持久化的凭据**；a2/d2/d2Key 是它的派生物，运行期易失。
  */
@@ -166,34 +155,67 @@ export interface QuickLoginOptions {
 
 export interface QuickLoginResult {
   uin: string;
+  /** 账号 uid（`u_...`）。`openSession` 的 `SsoSessionConfig.uid` 从这里来。 */
   uid: string;
+  /**
+   * 登录过程中服务端下发的新 a1（来自 `0x18` / `0x106` / EasyLogin）。
+   * 没轮换时为 null / 省略；调用方拿到后应写回 vault。
+   */
+  a1?: Uint8Array | null;
   a2: Uint8Array;
   d2: Uint8Array;
   d2Key: Uint8Array;
-  pskey?: string | null;
+  /** 顺路取到的 Web 凭据：域名 → `p_skey`。 */
+  pskey?: Record<string, string> | null;
 }
 
-/** mode2 上线入参：只有 a1 派生物 + 设备档案 + 签名素材，**不接受扫描来的 a2/d2**。 */
-export interface OnlineOpenOptions {
-  uin: string;
-  a1: Uint8Array;
-  guid: string;
-  device: DeviceProfile;
-  secure: SecureMaterial;
+/**
+ * 打开一个会话。这是 mode 1 / mode 2 唯一的汇聚点。
+ *
+ * - `session` 是票据，来源不参与判断；
+ * - `mode` 决定是否注册 + 心跳；
+ * - `signer` 两种模式都需要；
+ * - `device` / `wireProfile` 只有 mode 2 需要（`SsoInfoSync` 的 RegisterInfo）。
+ */
+export interface OpenSessionOptions {
+  session: SsoSessionConfig;
+  mode: SessionMode;
   signer: SignerPaths;
-  /**
-   * wire 档位名（见 TODO「wire profile」）。native 侧按名字取常量组，
-   * 换档不改 TS 代码。
-   */
+  /** mode 2 必填；mode 1 忽略。 */
+  device?: DeviceProfile;
+  /** wire 档位名（见 TODO「wire profile」）。mode 2 可选。 */
   wireProfile?: string;
 }
 
-export interface OnlineSession {
-  /** 发给 `sendPacket` / `sendOidbPacket` 的句柄（≥ ONLINE_TARGET_BASE）。 */
-  handle: SsoTarget;
+/** `openSession` 的结果。 */
+export interface OpenedSession {
+  /** 发给 `sendPacket` / `sendOidbPacket` 的不透明句柄。 */
+  sessionId: SessionId;
   uin: string;
-  /** native 侧是否已经完成注册（`SsoInfoSync` 已被服务端接受）。 */
+  uid: string;
+  mode: SessionMode;
+  /**
+   * mode 1：`open`（连接已建立或可懒建立，账号在线状态不归我们）；
+   * mode 2：`online`（注册成功且首屏同步已收敛）。
+   */
+  state: 'open' | 'online';
+  /** mode 2 是否已被服务端接受 `SsoInfoSync`；mode 1 恒 false。 */
   registered: boolean;
+  /** mode 2 是否已完成 `InfoSyncPush` 首屏同步；mode 1 恒 false。 */
+  synced: boolean;
+}
+
+/** 会话的运行时快照，诊断 / 控制通道用。 */
+export interface SessionInfo {
+  sessionId: SessionId;
+  uin: string;
+  uid: string;
+  mode: SessionMode;
+  state: 'open' | 'online' | 'closed';
+  registered: boolean;
+  synced: boolean;
+  /** 最近一次 native 上报状态变化的时间（ms）。 */
+  lastEventAt: number | null;
 }
 
 /**
@@ -203,7 +225,7 @@ export interface OnlineSession {
  * 解包在 `@weqbot/protocol/push`，这样新增推送类型不需要动 native。
  */
 export interface PushFrame {
-  handle: SsoTarget;
+  sessionId: SessionId;
   /** SSO 命令名，如 `trpc.msg.olpush.OlPushService.MsgPush`。 */
   command: string;
   /** 解密后的原始 body 字节。 */
@@ -215,17 +237,25 @@ export interface PushFrame {
 }
 
 export type PushSink = (frame: PushFrame) => void;
+export type PushSinkError = (error: Error) => void;
 
-/** 原生侧主动报告的会话状态变化。 */
-export type OnlineStatusEvent =
-  | { kind: 'registered'; handle: SsoTarget; ts: number }
-  | { kind: 'heartbeat'; handle: SsoTarget; ts: number; rttMs?: number }
-  | { kind: 'reconnecting'; handle: SsoTarget; attempt: number; ts: number }
-  | { kind: 'reconnected'; handle: SsoTarget; ts: number }
-  | { kind: 'kicked'; handle: SsoTarget; ts: number; reason?: string }
-  | { kind: 'closed'; handle: SsoTarget; ts: number; reason?: string }
+/**
+ * 原生侧主动报告的会话状态变化。
+ *
+ * sink 对两种 mode 都可用；mode 1 通常不会收到 `registered` / `synced` /
+ * `heartbeat`，因为那些行为只在 mode 2 里发生。
+ */
+export type SessionStatusEvent =
+  | { kind: 'registered'; sessionId: SessionId; ts: number }
+  /** 首屏 `InfoSyncPush` 收敛，可以对外报在线。 */
+  | { kind: 'synced'; sessionId: SessionId; ts: number }
+  | { kind: 'heartbeat'; sessionId: SessionId; ts: number; rttMs?: number }
+  | { kind: 'reconnecting'; sessionId: SessionId; attempt: number; ts: number }
+  | { kind: 'reconnected'; sessionId: SessionId; ts: number }
+  | { kind: 'kicked'; sessionId: SessionId; ts: number; reason?: string }
+  | { kind: 'closed'; sessionId: SessionId; ts: number; reason?: string }
   /** TS 侧消费太慢，native 丢了帧（有界队列）。 */
-  | { kind: 'sink_overflow'; handle: SsoTarget; ts: number; dropped: number };
+  | { kind: 'sink_overflow'; sessionId: SessionId; ts: number; dropped: number };
 
 /**
  * 原生端口。
@@ -234,54 +264,70 @@ export type OnlineStatusEvent =
  * （`adaptNativeBinding` 会转成 `Buffer` 交给真 native）。
  */
 export interface NativePort {
-  // ── 发包（mode1 / mode2 共用） ────────────────────────────────────────────
+  // ── 发包（两种 mode 共用） ────────────────────────────────────────────────
   sendPacket(
-    target: SsoTarget,
+    sessionId: SessionId,
     cmd: string,
     body: Uint8Array,
     needSign?: boolean | null,
-    mode?: number | null,
+    signMode?: number | null,
   ): Promise<Uint8Array>;
 
   sendOidbPacket(
-    target: SsoTarget,
+    sessionId: SessionId,
     command: number,
     subCommand: number,
     body: Uint8Array,
     isUid: boolean,
     needSign: boolean,
-    mode?: number | null,
+    signMode?: number | null,
   ): Promise<Uint8Array>;
 
-  // ── mode1：借 QQ 会话物料 ─────────────────────────────────────────────────
-  setSsoSession?(
-    pid: number,
-    session: SsoSessionConfig,
-    wrapperPath?: string | null,
-    signCoreRva?: number | null,
-    vmRva?: number | null,
-  ): Promise<void>;
-  clearSsoSession?(pid: number): Promise<boolean>;
-  hasSsoSession?(pid: number): Promise<boolean>;
-
-  // ── mode2：自建上线 ──────────────────────────────────────────────────────
+  // ── 凭据换票（进程无关） ──────────────────────────────────────────────────
   quickLogin?(
     options: QuickLoginOptions,
     onEvent?: (error: Error | null, event: unknown) => unknown,
   ): Promise<QuickLoginResult>;
-  /** 一键闭环：换票 → `SsoInfoSync` 注册 → 起心跳 → 开推送。 */
-  openOnline?(options: OnlineOpenOptions): Promise<OnlineSession>;
-  /** 主动下线：`UnRegister` + 关连接 + 释放句柄。 */
-  closeOnline?(handle: SsoTarget, reason?: string): Promise<void>;
-  /** 订阅推送；返回取消订阅函数。 */
-  attachPushSink?(handle: SsoTarget, sink: PushSink): Promise<() => void>;
+
+  // ── 会话生命周期 ─────────────────────────────────────────────────────────
+  /** 打开一个会话；mode 2 内部完成连接 → 注册 → 心跳 → 首屏同步。 */
+  openSession?(options: OpenSessionOptions): Promise<OpenedSession>;
+  /** 关闭会话；mode 2 会先发 `UnRegister`，两种 mode 都释放连接与句柄。 */
+  closeSession?(sessionId: SessionId, reason?: string): Promise<void>;
+  /** 查询会话快照；不存在返回 null。 */
+  getSession?(sessionId: SessionId): Promise<SessionInfo | null>;
+  /**
+   * 原地替换会话的 `SecToken`；不重连、不重新登录。
+   *
+   * 下一个需要签名的包立即使用新值。用于长跑的 mode 2 在 token 到期前轮换
+   * （QQ 客户端 token 缓存 48h，24h 轮换留足余量）。
+   */
+  setSecToken?(sessionId: SessionId, token: string): Promise<boolean>;
+  /**
+   * 订阅推送帧；返回取消订阅函数。
+   *
+   * `onError` 用于 native 侧推送通道自身出错（解码失败 / 队列错误），
+   * 与帧数据无关。不传时错误只进 native 日志。
+   */
+  attachPushSink?(
+    sessionId: SessionId,
+    sink: PushSink,
+    onError?: PushSinkError,
+  ): Promise<() => void>;
   /** 订阅状态变化；返回取消订阅函数。 */
   attachStatusSink?(
-    handle: SsoTarget,
-    sink: (event: OnlineStatusEvent) => void,
+    sessionId: SessionId,
+    sink: (event: SessionStatusEvent) => void,
   ): Promise<() => void>;
 
   // ── 签名 / 诊断 ─────────────────────────────────────────────────────────
+  /**
+   * 找**已安装** QQ 的 `wrapper.node`（进程层能力，与 SSO 无关）。
+   *
+   * 宿主 / TS 拿到路径后作为 `openSession` 的 `signer.wrapperPath` 传入；
+   * native 的 SSO 层只消费路径，不做平台探测。
+   */
+  resolveWrapperPath?(): Promise<string | null>;
   warmupSigner?(wrapperPath: string): Promise<{ signCoreRva: number; vmRva: number }>;
   getBuildInfo?(): NativeBuildInfo;
 }

@@ -1,7 +1,7 @@
 /**
  * 能力探测。
  *
- * 宿主可能给一份「旧产物」或「阉割产物」：缺 `openOnline` 的 native 在老 WeQ 里
+ * 宿主可能给一份「旧产物」或「阉割产物」：缺 `openSession` 的 native 在旧安装里
  * 到处都是。bot 不能在启动时崩，也不能假装自己在线 —— 必须**先探测、再明确拒绝**。
  *
  * 判据是 `typeof nt.x === 'function'`，不是版本号：版本号在 WeQ 里跟 QQ 版本、
@@ -14,15 +14,21 @@ import type { NativePort } from './types';
 export type NativeCapability =
   | 'sendPacket'
   | 'sendOidb'
-  /** 借 QQ 会话物料（WeQ 现在的路径）。 */
-  | 'mode1'
-  /** `quickLogin(a1)`。 */
+  /** `quickLogin(a1)` / `qrLogin`：凭据换票。 */
   | 'quickLogin'
-  /** `openOnline` / `closeOnline`（mode2 的全部前提）。 */
-  | 'openOnline'
+  /** `openSession` / `closeSession`：会话生命周期的全部前提。 */
+  | 'openSession'
+  /** `setSecToken`：长跑时原地轮换签名 token。 */
+  | 'tokenRefresh'
+  /** `attachPushSink`。 */
   | 'pushSink'
+  /** `attachStatusSink`。 */
   | 'statusSink'
+  /** 已安装 QQ 的 `wrapper.node` 探测（进程层）。 */
+  | 'wrapperResolver'
+  /** `warmupSigner`。 */
   | 'signer'
+  /** `getBuildInfo`。 */
   | 'buildInfo';
 
 export interface CapabilityReport {
@@ -37,14 +43,15 @@ export interface CapabilityReport {
 const PRESENT: Array<[NativeCapability, (nt: Partial<NativePort>) => boolean]> = [
   ['sendPacket', (nt) => typeof nt.sendPacket === 'function'],
   ['sendOidb', (nt) => typeof nt.sendOidbPacket === 'function'],
-  ['mode1', (nt) => typeof nt.setSsoSession === 'function'],
   ['quickLogin', (nt) => typeof nt.quickLogin === 'function'],
   [
-    'openOnline',
-    (nt) => typeof nt.openOnline === 'function' && typeof nt.closeOnline === 'function',
+    'openSession',
+    (nt) => typeof nt.openSession === 'function' && typeof nt.closeSession === 'function',
   ],
+  ['tokenRefresh', (nt) => typeof nt.setSecToken === 'function'],
   ['pushSink', (nt) => typeof nt.attachPushSink === 'function'],
   ['statusSink', (nt) => typeof nt.attachStatusSink === 'function'],
+  ['wrapperResolver', (nt) => typeof nt.resolveWrapperPath === 'function'],
   ['signer', (nt) => typeof nt.warmupSigner === 'function'],
   ['buildInfo', (nt) => typeof nt.getBuildInfo === 'function'],
 ];

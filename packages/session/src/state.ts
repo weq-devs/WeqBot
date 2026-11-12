@@ -18,7 +18,7 @@ export type SessionState =
   | 'logging-in'
   /** 拿到 a2/d2/d2Key，尚未注册。 */
   | 'logged-in'
-  /** `openOnline`：`SsoInfoSync` 注册 + 挂推送。 */
+  /** `openSession(mode 2)`：`SsoInfoSync` 注册 + 首屏同步 + 挂推送。 */
   | 'registering'
   /** 在线：心跳由 native 维持，事件从 sink 进来。 */
   | 'online'

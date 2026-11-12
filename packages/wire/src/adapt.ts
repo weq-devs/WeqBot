@@ -2,72 +2,97 @@
  * 把宿主的原生绑定适配成 {@link NativePort}。
  *
  * 两个真实来源：
- *   - WeQ desktop：`platform.native`（`@weq/native` 的 `NtHelperBinding`）；
+ *   - WeQ desktop：`platform.native.ntHelper`（`@weq/native` 的 `NtHelperBinding`）；
  *   - 独立进程：`@weqbot/node` 的 slim 加载器（形状刻意与 WeQ 那份一致）。
  *
- * 适配层只做两件事：**字节类型归一**（`Uint8Array` ↔ `Buffer`）和**保留 this**。
+ * 适配层只做两件事：**字节类型归一**（`Uint8Array` → `Buffer`）和**保留 this**。
  * 它不做版本判断，能力探测交给 `capabilities.ts`；缺失的方法保持 `undefined`，
  * 不补桩，这样探测看到的是真实情况。
  */
 
 import type {
+  DeviceProfile,
   NativeBuildInfo,
   NativePort,
-  OnlineOpenOptions,
-  OnlineSession,
-  OnlineStatusEvent,
+  OpenedSession,
   PushFrame,
   QuickLoginOptions,
   QuickLoginResult,
+  SessionId,
+  SessionInfo,
+  SessionStatusEvent,
+  SsoSessionConfig,
 } from './types';
+
+/** napi 的 `Buffer` 参数不接受裸 `Uint8Array`，进原生前统一转换。 */
+interface RawSsoSessionConfig extends Omit<SsoSessionConfig, 'a2' | 'd2' | 'd2Key'> {
+  a2: Buffer;
+  d2: Buffer;
+  d2Key: Buffer;
+}
+
+/**
+ * native 的 `openSession` 入参是**扁平**的：`wrapperPath` / `signCoreRva` / `vmRva`
+ * 直接挂在选项上，而 wire 的 `OpenSessionOptions` 把它们收在 `signer` 里。
+ * 适配层负责翻译，native 不需要知道 `SignerPaths` 这个结构。
+ */
+interface RawOpenSessionOptions {
+  session: RawSsoSessionConfig;
+  mode: number;
+  wrapperPath?: string | null;
+  signCoreRva?: number | null;
+  vmRva?: number | null;
+  device?: DeviceProfile;
+  wireProfile?: string;
+}
+
+interface RawQuickLoginOptions extends Omit<QuickLoginOptions, 'a1'> {
+  a1: Buffer;
+}
 
 /**
  * 宿主给的原始绑定。
  *
- * 形状对齐 `nt_helper` 的 napi 导出：字节参数是 `Buffer`（napi 的 `Buffer` 参数
- * 不接受裸 `Uint8Array`），返回也是 `Buffer`。
+ * 形状对齐 `nt_helper` 的 napi 导出：字节参数是 `Buffer`，返回也是 `Buffer`。
  */
 export interface RawNativeBinding {
   sendPacket?(
-    target: number,
+    sessionId: number,
     cmd: string,
     body: Buffer,
     needSign?: boolean | null,
-    mode?: number | null,
+    signMode?: number | null,
   ): Promise<Buffer>;
 
   sendOidbPacket?(
-    target: number,
+    sessionId: number,
     command: number,
     subCommand: number,
     body: Buffer,
     isUid: boolean,
     needSign: boolean,
-    mode?: number | null,
+    signMode?: number | null,
   ): Promise<Buffer>;
 
-  setSsoSession?(
-    pid: number,
-    session: unknown,
-    wrapperPath?: string | null,
-    signCoreRva?: number | null,
-    vmRva?: number | null,
-  ): Promise<void>;
-  clearSsoSession?(pid: number): Promise<boolean>;
-  hasSsoSession?(pid: number): Promise<boolean>;
-
   quickLogin?(
-    options: QuickLoginOptions,
+    options: RawQuickLoginOptions,
     onEvent?: (error: Error | null, event: unknown) => unknown,
   ): Promise<QuickLoginResult>;
-  openOnline?(options: OnlineOpenOptions): Promise<OnlineSession>;
-  closeOnline?(handle: number, reason?: string): Promise<void>;
-  attachPushSink?(
-    handle: number,
-    sink: (error: Error | null, frame: PushFrame) => void,
-  ): Promise<() => void>;
-  attachStatusSink?(handle: number, sink: (event: OnlineStatusEvent) => void): Promise<() => void>;
 
+  openSession?(options: RawOpenSessionOptions): Promise<OpenedSession>;
+  closeSession?(sessionId: number, reason?: string): Promise<boolean>;
+  getSession?(sessionId: number): Promise<SessionInfo | null>;
+  setSecToken?(sessionId: number, token: string): Promise<boolean>;
+  attachPushSink?(
+    sessionId: number,
+    sink: (error: Error | null, frame: PushFrame) => void,
+  ): Promise<void>;
+  detachPushSink?(sessionId: number): Promise<boolean>;
+  attachStatusSink?(sessionId: number, sink: (event: SessionStatusEvent) => void): Promise<void>;
+  detachStatusSink?(sessionId: number): Promise<boolean>;
+
+  /** napi 导出名是 `resolveQqWrapperPath`；适配层映射成 `resolveWrapperPath`。 */
+  resolveQqWrapperPath?(): Promise<string | null>;
   warmupSigner?(wrapperPath: string): Promise<{ signCoreRva: number; vmRva: number }>;
   getBuildInfo?(): NativeBuildInfo;
 }
@@ -77,56 +102,106 @@ export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
 
   if (raw.sendPacket) {
     const call = raw.sendPacket.bind(raw);
-    adapted.sendPacket = async (target, cmd, body, needSign, mode) =>
-      new Uint8Array(await call(target, cmd, Buffer.from(body), needSign, mode));
+    adapted.sendPacket = async (sessionId, cmd, body, needSign, signMode) =>
+      new Uint8Array(await call(sessionId, cmd, Buffer.from(body), needSign, signMode));
   }
 
   if (raw.sendOidbPacket) {
     const call = raw.sendOidbPacket.bind(raw);
-    adapted.sendOidbPacket = async (target, command, subCommand, body, isUid, needSign, mode) =>
+    adapted.sendOidbPacket = async (
+      sessionId,
+      command,
+      subCommand,
+      body,
+      isUid,
+      needSign,
+      signMode,
+    ) =>
       new Uint8Array(
-        await call(target, command, subCommand, Buffer.from(body), isUid, needSign, mode),
+        await call(sessionId, command, subCommand, Buffer.from(body), isUid, needSign, signMode),
       );
-  }
-
-  if (raw.setSsoSession) {
-    const call = raw.setSsoSession.bind(raw);
-    adapted.setSsoSession = (pid, session, wrapperPath, signCoreRva, vmRva) =>
-      call(pid, session, wrapperPath, signCoreRva, vmRva);
-  }
-  if (raw.clearSsoSession) {
-    const call = raw.clearSsoSession.bind(raw);
-    adapted.clearSsoSession = (pid) => call(pid);
-  }
-  if (raw.hasSsoSession) {
-    const call = raw.hasSsoSession.bind(raw);
-    adapted.hasSsoSession = (pid) => call(pid);
   }
 
   if (raw.quickLogin) {
     const call = raw.quickLogin.bind(raw);
-    adapted.quickLogin = (options, onEvent) => call(options, onEvent);
+    adapted.quickLogin = (options, onEvent) =>
+      call({ ...options, a1: Buffer.from(options.a1) }, onEvent);
   }
-  if (raw.openOnline) {
-    const call = raw.openOnline.bind(raw);
-    adapted.openOnline = (options) => call(options);
+
+  if (raw.openSession) {
+    const call = raw.openSession.bind(raw);
+    adapted.openSession = (options) =>
+      call({
+        session: {
+          ...options.session,
+          a2: Buffer.from(options.session.a2),
+          d2: Buffer.from(options.session.d2),
+          d2Key: Buffer.from(options.session.d2Key),
+        },
+        mode: options.mode,
+        wrapperPath: options.signer.wrapperPath,
+        signCoreRva: options.signer.signCoreRva,
+        vmRva: options.signer.vmRva,
+        device: options.device,
+        wireProfile: options.wireProfile,
+      });
   }
-  if (raw.closeOnline) {
-    const call = raw.closeOnline.bind(raw);
-    adapted.closeOnline = (handle, reason) => call(handle, reason);
+
+  if (raw.closeSession) {
+    const call = raw.closeSession.bind(raw);
+    adapted.closeSession = async (sessionId, reason) => {
+      await call(sessionId, reason);
+    };
   }
+
+  if (raw.getSession) {
+    const call = raw.getSession.bind(raw);
+    adapted.getSession = (sessionId: SessionId) => call(sessionId);
+  }
+
+  if (raw.setSecToken) {
+    const call = raw.setSecToken.bind(raw);
+    adapted.setSecToken = (sessionId, token) => call(sessionId, token);
+  }
+
   if (raw.attachPushSink) {
     const call = raw.attachPushSink.bind(raw);
-    adapted.attachPushSink = (handle, sink) => call(handle, (_error, frame) => sink(frame));
+    const detach = raw.detachPushSink?.bind(raw);
+    adapted.attachPushSink = async (sessionId, sink, onError) => {
+      await call(sessionId, (error, frame) => {
+        if (error) {
+          onError?.(error);
+          return;
+        }
+        sink(frame);
+      });
+      return () => {
+        void detach?.(sessionId);
+      };
+    };
   }
+
   if (raw.attachStatusSink) {
     const call = raw.attachStatusSink.bind(raw);
-    adapted.attachStatusSink = (handle, sink) => call(handle, sink);
+    const detach = raw.detachStatusSink?.bind(raw);
+    adapted.attachStatusSink = async (sessionId, sink) => {
+      await call(sessionId, sink);
+      return () => {
+        void detach?.(sessionId);
+      };
+    };
   }
+
+  if (raw.resolveQqWrapperPath) {
+    const call = raw.resolveQqWrapperPath.bind(raw);
+    adapted.resolveWrapperPath = () => call();
+  }
+
   if (raw.warmupSigner) {
     const call = raw.warmupSigner.bind(raw);
     adapted.warmupSigner = (wrapperPath) => call(wrapperPath);
   }
+
   if (raw.getBuildInfo) {
     const call = raw.getBuildInfo.bind(raw);
     adapted.getBuildInfo = () => call();

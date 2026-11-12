@@ -15,6 +15,8 @@ export type WeqBotErrorCode =
   | 'ALREADY_ONLINE'
   /** 上线注册失败（SsoInfoSync 拒绝 / 超时）。 */
   | 'REGISTER_FAILED'
+  /** 找不到可用的 `wrapper.node`，无法签名。 */
+  | 'SIGNER_REQUIRED'
   /** 长连接掉了且不再重试。 */
   | 'CONNECTION_LOST'
   /** 凭据文件损坏 / 版本不认识。 */

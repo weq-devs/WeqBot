@@ -1,22 +1,37 @@
 /**
  * mode2 的 `SecToken` 生成。
  *
- * ⚠️ **这是全项目唯一一处「我们不确定服务端怎么校验」的逻辑**，所以单独成文件、
- * 单独写 TODO，不让它藏在签名代码里。
+ * 2026-11-13 的逆向结论（`nt_helper/docs/sectoken-generation-reverse-20261113.md`）：
  *
- * 背景：mode1 的 `sec_token` 来自 QQ 进程里的会话物料（`scanSessionMaterial`），
- * mode2 没有 QQ 会话，必须本地造一个。用户口径是「本地随机生成，不是服务端下发」，
- * 但**是否完全随机**（长度 / 字符集 / 是否与 guid、uin、时间有关）尚未逆向确认。
+ * - QQ 在**登录时**用 `/dev/urandom` 生成一条 12 字符、字符集 `[A-Za-z0-9]`
+ *   的 token，按 uin 缓存 48h；签名时只查表，不是每包生成，也不是服务端下发；
+ * - 同一 uin 两次登录会得到不同 token，所以它既不是账号固定值，也不是设备固定值。
  *
- * 现状：按 mode1 观测到的形态（12 字符 base64）生成。如果抓包证明服务端只做
- * 长度/字符集校验，这里就是最终实现；如果它参与 `sec_sign` 的校验链，改这一个文件。
+ * 因此这里按「每次登录生成一条新的 12 字符 base62」实现。**不要**用
+ * `Buffer.toString('base64')`：base64 会带 `+` / `/`，不在真实 token 的字符集里。
+ *
+ * 过期策略不在这里：48h 是 QQ 客户端的缓存 TTL。mode2 长跑由 `BotSession`
+ * 在 24h 左右做一次重新登录（quickLogin → 新 token → openSession），这样即使
+ * 服务端也校验 token 年龄，也永远在窗口内。
  */
 
 import { randomBytes } from 'node:crypto';
 
-/** mode1 抓包里 `SecToken` 的形态：12 个 base64 字符（= 9 字节）。 */
-const SEC_TOKEN_BYTES = 9;
+/** 真机 token：12 字符，`[A-Za-z0-9]`。 */
+const SEC_TOKEN_LENGTH = 12;
+const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+/** 62 的整数倍上限：≥ 它的字节丢弃，避免取模偏置。 */
+const UNBIASED_LIMIT = 256 - (256 % ALPHABET.length);
 
 export function generateSecToken(random: (size: number) => Uint8Array = randomBytes): string {
-  return Buffer.from(random(SEC_TOKEN_BYTES)).toString('base64');
+  let token = '';
+  while (token.length < SEC_TOKEN_LENGTH) {
+    const bytes = random(16);
+    for (const byte of bytes) {
+      if (byte >= UNBIASED_LIMIT) continue;
+      token += ALPHABET[byte % ALPHABET.length];
+      if (token.length === SEC_TOKEN_LENGTH) break;
+    }
+  }
+  return token;
 }

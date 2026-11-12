@@ -42,6 +42,21 @@ export interface BotConfig {
     /** 账号 uin（十进制串）。凭据由 vault 按 uin 取。 */
     uin: string;
   };
+  native?: {
+    /**
+     * QQ 的 `wrapper.node` 绝对路径。mode 2 的注册/签名必须用它；
+     * 不传时由 native 的 `resolveQqWrapperPath` 探测。
+     */
+    wrapperPath?: string;
+  };
+  secToken?: {
+    /**
+     * 原地轮换 `SecToken` 的间隔（ms），默认 24h。
+     *
+     * QQ 客户端的 token 缓存 TTL 是 48h；24h 轮换留一倍余量。`<= 0` 关闭自动轮换。
+     */
+    rotateMs?: number;
+  };
   onebot?: OneBotConfig;
   log?: {
     level?: LogLevel;

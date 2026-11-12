@@ -83,8 +83,8 @@ export type ControlResult<M extends ControlMethod> = ControlMethods[M]['result']
 export interface ControlStatus {
   uin: string | null;
   state: 'idle' | 'connecting' | 'online' | 'degraded' | 'closed';
-  /** 上线句柄；未上线时 null。 */
-  handle: number | null;
+  /** 会话 ID（native 分配）；未打开会话时 null。 */
+  sessionId: number | null;
   /** 最近一次 native 上报的状态变化时间（ms）。 */
   lastEventAt: number | null;
   device: DeviceProfile | null;

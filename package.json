@@ -17,7 +17,8 @@
     "format:check": "biome format .",
     "check": "biome check .",
     "check:pure-ts": "node scripts/check-pure-ts.mjs",
-    "verify": "pnpm run check:pure-ts && pnpm run typecheck"
+    "test": "node --import tsx --test \"packages/*/test/*.test.ts\"",
+    "verify": "pnpm run check:pure-ts && pnpm run typecheck && pnpm run test"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.7",

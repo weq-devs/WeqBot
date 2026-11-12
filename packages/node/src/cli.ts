@@ -3,7 +3,7 @@
  * 独立进程入口（骨架）。
  *
  * 现在只做两件真事：加载 slim native、打印能力报告。
- * 完整的启动流程（vault → quickLogin → openOnline → OneBot）在 P3/P4 落地，
+ * 完整的启动流程（vault → quickLogin → openSession → OneBot）在 P3/P4 落地，
  * 见 `TODO.md`「阶段计划」。
  */
 
