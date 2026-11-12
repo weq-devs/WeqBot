@@ -12,5 +12,17 @@ export { createProtocolClient, type ProtocolClient, type ProtocolClientOptions }
 export * from './oidb';
 export * from './msg';
 export * from './push';
-export { decode, encode, message, ProtoNotPortedError } from './protobuf';
+export { decode, encode, message } from './protobuf';
 export type { ProtoField, ProtoMessage, ScalarType } from './protobuf';
+export {
+  oidbCommand,
+  resolveSign,
+  SIGN_RULES,
+  UNCONFIRMED_SIGN_COMMANDS,
+  type PerPlatform,
+  type ResolvedSign,
+  type SignedCommand,
+  type SignMode,
+  type SignRule,
+  type SignRuleSwitch,
+} from './sign-policy';
