@@ -1,34 +1,225 @@
-/**
- * 消息编解码。
- *
- * 搬运目标（保持文件名，方便对照）：
- *   - `WeQ/packages/protocol/src/msg/{send,send-elements,send-schemas,schemas}.ts`
- *   - `WeQ/packages/protocol/src/msg/{decode,recall,send-forward,get-forward}.ts`
- *
- * 方向：**入站**（push → Message）与**出站**（Message → wire）必须共用同一份元素词表，
- * 否则 OneBot 适配层要维护两套 id 映射 —— 这是 SnowLuma 里 `element-builder` 与
- * `msg-push/decoders` 放同一个包的原因，我们照做。
- *
- * ⚠️ **不要从 `@weq/codec` 搬任何东西**：那个包是**解数据库**用的（`SqlRow` + schema DSL
- * → 元素 / 域模型），与 wire 协议是两套模型，字段语义也不同。它的 `src/element/types.ts`
- * 看起来像元素词表，实际上带着库表列的假设（例如灰度、撤回时间由图区提供）。
- * 消息元素词表就是本目录 `schemas.ts` 里的 `ELEM`，OneBot 的 segment 词表在
- * `@weqbot/onebot`，两层之间只做形状翻译。
- *
- * TODO(P3)：`encodeMessage` / `decodeMessage` 落地前，OneBot 适配层只支持文本。
- */
+export {
+  GetGroupHistory,
+  GetC2cHistory,
+  fetchGroupHistoryRaw,
+  fetchC2cHistoryRaw,
+} from './get-history';
+export type { GroupHistoryParams, C2cHistoryParams, HistoryFetchResult } from './get-history';
+export { SSO_GET_GROUP_MSG_CMD, SSO_GET_C2C_MSG_CMD } from './get-history';
 
-export * from './dataline';
-export * from './schemas';
-export * from './send-schemas';
+export { decodeMessage } from './decode';
+export type { DecodedMessage, DecodedDress } from './decode';
 
+export {
+  buildSendElems,
+  buildSendElemsWithMedia,
+  buildDressElems,
+  swapFontId16,
+  deflatePayload,
+  isSendMediaElement,
+  isSendUploadElement,
+  flashPhotoNeedsUpload,
+  FLASH_PHOTO_FALLBACK_TEXT,
+} from './send-elements';
 export type {
-  AtElement,
-  FaceElement,
-  ImageElement,
-  Message,
-  MessageElement,
-  ReplyElement,
-  TextElement,
-  UnknownElement,
-} from './spec';
+  MediaSendContext,
+  SendDress,
+  SendMediaElement,
+  SendImageElement,
+  SendFlashPhotoElement,
+  SendFlashPhotoPic,
+  SendRecordElement,
+  SendVideoElement,
+  SendElement,
+  SendTextElement,
+  SendAtElement,
+  SendFaceElement,
+  SendSuperSticker,
+  SendMfaceElement,
+  SendReplyElement,
+  SendArkElement,
+  SendXmlElement,
+  SendMarkdownElement,
+  SendPokeEmojiElement,
+  SendEmojiBounceElement,
+  SendForwardElement,
+  SendRawElement,
+  SendMediaUploadReport,
+  SendScene,
+} from './send-elements';
+
+export {
+  buildSendRequest,
+  buildSendRequestBytes,
+  buildSendRequestWithMedia,
+  isSendOk,
+  nextClientSequence,
+  parseSendResponse,
+  sendC2cMessage,
+  sendGroupMessage,
+  sendGroupTempMessage,
+  sendMessage,
+  SEND_MSG_CMD,
+  SendMsg,
+} from './send';
+export type {
+  SendGroupTempTarget,
+  SendMessageParams,
+  SendMessageReceipt,
+  SendMessageResponseInfo,
+  SendRequestBuild,
+} from './send';
+export type { SendDatalineTarget, DatalineFileNotify } from './dataline';
+
+export {
+  MESSAGE_CONTROL,
+  EMOJI_BOUNCE_DETAIL,
+  EMOJI_BOUNCE_EXTRA,
+  POKE_EXTRA,
+  QFACE_EXTRA,
+  QSMALL_FACE_EXTRA,
+  ROUTING_C2C,
+  ROUTING_GROUP,
+  ROUTING_GROUP_TEMP,
+  ROUTING_HEAD,
+  ROUTING_TRANS_0X211,
+  SEND_CONTENT_HEAD,
+  SEND_CONTENT_HEAD_TEMP,
+  SEND_MESSAGE_BODY,
+  SEND_MESSAGE_REQUEST,
+  SEND_MESSAGE_REQUEST_TEMP,
+  SEND_MESSAGE_RESPONSE,
+  SEND_RICH_TEXT,
+  SEND_SYNC_COOKIE,
+  MARKET_FACE_PB_RESERVE,
+  FLASH_PHOTO_PB,
+  FLASH_PHOTO_SERVICE_TYPE,
+} from './send-schemas';
+
+export { RecvLongMsg, fetchForwardRaw, SSO_RECV_LONG_MSG_CMD } from './get-forward';
+export type { RecvLongMsgParams, ForwardFetchResult } from './get-forward';
+export {
+  SendLongMsg,
+  sendForward,
+  uploadForward,
+  buildForwardNodeBody,
+  DEFAULT_SEND_SETTINGS,
+  FORWARD_MAX_DEPTH,
+  SSO_SEND_LONG_MSG_CMD,
+} from './send-forward';
+export type {
+  ForwardEncodeContext,
+  ForwardLevel,
+  ForwardNative,
+  ForwardNode,
+  LongMsgSettingsInput,
+  SendForwardParams,
+  SendForwardResult,
+} from './send-forward';
+export {
+  SEND_LONG_MSG_INFO,
+  SEND_LONG_MSG_REQ,
+  SEND_LONG_MSG_RESP,
+  SEND_LONG_MSG_RESP_RESULT,
+} from './send-forward';
+export {
+  LONG_MSG_UID,
+  LONG_MSG_SETTINGS,
+  RECV_LONG_MSG_INFO,
+  RECV_LONG_MSG_REQ,
+  RECV_LONG_MSG_RESP_RESULT,
+  RECV_LONG_MSG_RESP,
+  LONG_MSG_CONTENT,
+  LONG_MSG_ACTION,
+  LONG_MSG_RESULT,
+} from './get-forward';
+
+export { RecallGroup, RecallPrivate } from './recall';
+export type { RecallGroupParams, RecallPrivateParams } from './recall';
+
+export {
+  StartLocationShare,
+  ReportLocation,
+  QueryLocation,
+  buildShareLocationElements,
+  LBS_SCENE_GROUP,
+  LBS_SCENE_C2C,
+  LbsRoomStatus,
+  SHARE_LOCATION_TEXT,
+} from './lbs-share';
+export type {
+  LbsScene,
+  LbsSession,
+  StartLocationShareParams,
+  LocationShareStartResult,
+  ReportLocationParams,
+  LocationReportResult,
+  QueryLocationParams,
+  LocationRoom,
+  LocationRoomMember,
+} from './lbs-share';
+
+export { dumpProto, walkProto, extractPath, protoToJson } from './dump';
+export type {
+  DumpOptions,
+  DumpEntry,
+  PathStep,
+  ProtoJsonMap,
+  ProtoJsonNode,
+  ProtoJsonLeaf,
+} from './dump';
+
+export {
+  PUSH_MSG_BODY,
+  PUSH_MSG,
+  RESPONSE_HEAD,
+  CONTENT_HEAD,
+  MESSAGE_BODY,
+  MSG_CONTENT,
+  RICH_TEXT,
+  ELEM,
+  TEXT_ELEM,
+  TEXT_PB_RESERVE,
+  FACE_ELEM,
+  FACE_OLD_PB,
+  FACE_COMMON_PB,
+  PIC_COMMON_PB,
+  PTT_COMMON_PB,
+  VIDEO_COMMON_PB,
+  FILE_TRANS_TOP,
+  MARKDOWN_COMMON_PB,
+  INLINE_KEYBOARD_PB,
+  NOT_ONLINE_IMAGE,
+  MARKET_FACE,
+  CUSTOM_FACE,
+  TRANS_ELEM,
+  GROUP_FILE_ELEM,
+  EXTRA_INFO,
+  VIDEO_FILE,
+  GENERAL_FLAGS,
+  REPLY_ELEMENT,
+  REPLY_PB_RESERVE,
+  LIGHT_APP_ELEM,
+  WALLET_ELEM,
+  COMMON_ELEM,
+  RICH_MSG,
+  NOT_ONLINE_FILE,
+  PTT,
+  ONLINE_IMAGE,
+  FONT_INFO,
+  BUBBLE_ELEM,
+} from './schemas';
+
+export {
+  ReadedReport,
+  READ_REPORT_CMD,
+  READ_REPORT_BATCH_SIZE,
+} from './read-report';
+export type {
+  GroupReadTarget,
+  C2cReadTarget,
+  ReadReportParams,
+  ReadReportResult,
+  GroupReadResult,
+  C2cReadResult,
+} from './read-report';

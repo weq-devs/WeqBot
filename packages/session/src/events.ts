@@ -11,7 +11,6 @@
  *      上层无法决定「要不要重登 / 要不要提示用户」。
  */
 
-import type { MessageElement } from '@weqbot/protocol';
 import type { WeqBotError } from '@weqbot/common';
 import type { SessionState } from './state';
 
@@ -61,7 +60,14 @@ export interface InboundMessage {
   peer: PeerRef;
   sender: PeerRef;
   self: { uin: string; uid?: string };
-  elements: MessageElement[];
+  /**
+   * 解码后的元素列表，形状由 `@weqbot/protocol` 的 `decodeMessage` 定义
+   * （`{ kind: 'text', textContent }` 这类以 `kind` 区分的对象）。
+   *
+   * 这里刻意不改写一层自有类型：入站解出来的对象要能**原样**交给
+   * `buildSendElems` 再发出去（转发 / 搬运），多一层映射就多一处漂移。
+   */
+  elements: Record<string, unknown>[];
   /** 原始 body（仅当 `SessionOptions.keepRaw` 打开时存在，诊断用）。 */
   raw?: Uint8Array;
 }

@@ -10,8 +10,11 @@
     "noImplicitOverride": true,
     "exactOptionalPropertyTypes": false,
     "noFallthroughCasesInSwitch": true,
-    "noUnusedLocals": true,
-    "noUnusedParameters": true,
+    // 未使用检查交给 Biome（`noUnusedVariables` / `noUnusedParameters`），TS 这份关掉：
+    // `packages/protocol` 是上游逐字副本，且其它包会直接编译它的源码
+    // （paths 指向 src），开着会让脏检查从那一棵树漏到每个消费者身上。
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
 
     "esModuleInterop": true,
     "verbatimModuleSyntax": true,

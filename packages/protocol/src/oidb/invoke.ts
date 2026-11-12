@@ -1,19 +1,27 @@
 /**
- * OIDB / trpc 分发 —— 从 `WeQ/packages/protocol/src/oidb/invoke.ts` 搬运，
- * 只有 `nt`/`pid` 两个参数的类型换了名字。逻辑一行没动。
+ * OIDB / trpc call dispatch.
  *
- * OIDB 信封（command/subCommand + error_code 检查）在 native 侧处理，所以 spec
- * 只描述**内层** req/resp body。
+ * Each command is modelled as a self-contained "spec" (a namespace whose
+ * exports structurally match {@link OidbSpec} / {@link TrpcSpec}). The spec
+ * owns its wire schemas + the (de)serialize transforms; these dispatchers do
+ * the mechanical encode → send → decode → deserialize.
+ *
+ * The OIDB envelope (command/subCommand wrapping + error_code check) is handled
+ * natively in `sendOidbPacket`, so a spec only describes the INNER request /
+ * response body — no `OidbBase` schema needed on the TS side.
  */
 
 import { decode, encode, type ProtoMessage } from '../protobuf';
-import type { NativePort, SsoTarget } from '@weqbot/wire';
-import { sendOidb, sendPacket } from '../transport';
+import { sendOidb, sendPacket, type OidbNative, type TrpcNative } from '../transport';
 
+/** A single OIDB command. */
 export interface OidbSpec<TParams, TResult> {
   command: number;
   subCommand?: number;
-  /** 从参数动态解析 sub-command（0x9082：1 = 贴表情，2 = 撤回）。 */
+  /**
+   * 从参数动态解析 sub-command（0x9082：1 = 贴表情，2 = 撤回）。优先于
+   * {@link subCommand}。
+   */
   resolveSubCommand?: (params: TParams) => number;
   uinForm?: boolean;
   reqSchema: ProtoMessage;
@@ -25,8 +33,8 @@ export interface OidbSpec<TParams, TResult> {
 }
 
 export async function invokeOidb<TParams, TResult>(
-  nt: NativePort,
-  target: SsoTarget,
+  nt: OidbNative,
+  pid: number,
   spec: OidbSpec<TParams, TResult>,
   params: TParams,
 ): Promise<TResult> {
@@ -37,7 +45,7 @@ export async function invokeOidb<TParams, TResult>(
     );
   }
   const reqBytes = encode(spec.reqSchema, spec.serialize(params));
-  const respBytes = await sendOidb(nt, target, {
+  const respBytes = await sendOidb(nt, pid, {
     command: spec.command,
     subCommand,
     body: reqBytes,
@@ -50,29 +58,35 @@ export async function invokeOidb<TParams, TResult>(
   );
 }
 
+/** A trpc service reached via a raw SSO command string (no OIDB envelope). */
 export interface TrpcSpec<TParams, TResult> {
   cmd: string;
   reqSchema: ProtoMessage;
   respSchema: ProtoMessage;
   serialize(params: TParams): Record<string, unknown>;
-  /** 自定义请求体编码（运行时 schema 表达不了的 wire 形态，如 fixed32）。 */
+  /**
+   * 自定义请求体编码。用于运行时的 schema 表达不了的 wire 形态（例如 fixed32 字段）。
+   * 提供了就跳过 `encode(reqSchema, serialize(params))`。
+   */
   encodeRequest?(params: TParams): Uint8Array;
   deserialize(body: Record<string, unknown>): TResult;
-  /** 直接用原始回包字节解析，跳过 schema。 */
+  /**
+   * 直接用原始回包字节解析，跳过 schema。字段含 fixed32 这类运行时表达不了的
+   * wire 形态时用（schema 解码会把这类字段整段跳过，结果看起来「字段是空的」）。
+   */
   decodeResponse?(bytes: Uint8Array): TResult;
 }
 
 export async function invokeTrpc<TParams, TResult>(
-  nt: NativePort,
-  target: SsoTarget,
+  nt: TrpcNative,
+  pid: number,
   spec: TrpcSpec<TParams, TResult>,
   params: TParams,
 ): Promise<TResult> {
   const reqBytes = spec.encodeRequest
     ? spec.encodeRequest(params)
     : encode(spec.reqSchema, spec.serialize(params));
-  const respBytes = await sendPacket(nt, target, spec.cmd, reqBytes);
-  return spec.decodeResponse
-    ? spec.decodeResponse(respBytes)
-    : spec.deserialize(decode(spec.respSchema, respBytes));
+  const respBytes = await sendPacket(nt, pid, spec.cmd, reqBytes);
+  if (spec.decodeResponse) return spec.decodeResponse(respBytes);
+  return spec.deserialize(decode(spec.respSchema, respBytes));
 }

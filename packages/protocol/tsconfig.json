@@ -1,6 +1,9 @@
 {
   "extends": "../../tsconfig.base.json",
   "compilerOptions": {
+    // 本目录是 `WeQ/packages/protocol/src` 的**逐字副本**，只有 `transport.ts` 做了
+    // 可枚举的改造（见该文件头注释）。维护方式就是 `diff -r` 上游：任何本地风格
+    // 改动都会变成噪声，所以这里不做额外的严格化。
     "types": ["node"]
   },
   "include": ["src"]
