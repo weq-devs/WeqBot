@@ -66,9 +66,21 @@ export interface ControlMethods {
   ping: { params: Record<string, never>; result: { pid: number; ts: number } };
   /** 当前状态与设备档案（不含 a1，凭据永不出 sidecar）。 */
   status: { params: Record<string, never>; result: ControlStatus };
-  /** 交付 a1 并开始上线。WeQ 场景由宿主在 quickLogin 成功后调用。 */
+  /**
+   * 交付 a1 并开始上线。WeQ 场景由宿主在 quickLogin 成功后调用。
+   *
+   * `uid` 是 `openSession` 的必填字段：WeQ 的 `AccountConfig.uid` 是权威值。
+   * native 的 EasyLogin 不回传 uid，所以宿主不传就只能依赖 vault 里已有的值。
+   * `qqDbPath` 用于 `isQqLoggedIn` 预检（QQ 本体在线时拒绝 mode 2）。
+   */
   login: {
-    params: { a1: string; guid: string; device?: DeviceProfile };
+    params: {
+      a1: string;
+      guid: string;
+      uid?: string;
+      device?: DeviceProfile;
+      qqDbPath?: string;
+    };
     result: ControlStatus;
   };
   /** 主动下线并退出进程；宿主在 `before-quit` 里调。 */

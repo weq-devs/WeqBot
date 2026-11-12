@@ -33,6 +33,8 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
 选项:
   --account <uin>      账号 uin
   --native-dir <dir>   原生组件目录（默认 $WEQBOT_NATIVE_DIR 或 ./native/<platform>-<arch>）
+  --qq-db <path>       账号 nt_msg.db 绝对路径（mode2 预检 isQqLoggedIn 用；
+                       也可用 $WEQBOT_QQ_DB）
   --config <path>      配置文件（P3 落地）
   --check              自检模式
   --sidecar            desktop 拉起的托管模式（NDJSON over stdio，见 @weqbot/control）
@@ -46,6 +48,7 @@ async function main(argv: string[]): Promise<number> {
     options: {
       account: { type: 'string' },
       'native-dir': { type: 'string' },
+      'qq-db': { type: 'string' },
       config: { type: 'string' },
       check: { type: 'boolean', default: false },
       sidecar: { type: 'boolean', default: false },
@@ -103,8 +106,12 @@ async function main(argv: string[]): Promise<number> {
     return -1;
   }
 
+  const qqDbPath = values['qq-db'] ?? process.env.WEQBOT_QQ_DB;
   const bot = createBot({
-    config: { account: { uin: values.account } },
+    config: {
+      account: { uin: values.account },
+      ...(qqDbPath ? { qq: { dbPath: qqDbPath } } : {}),
+    },
     native,
     vault,
     logger: log,

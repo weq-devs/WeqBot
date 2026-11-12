@@ -103,7 +103,9 @@ export function runSidecar(options: SidecarOptions): SidecarHandle {
   async function login(params: {
     a1: string;
     guid: string;
+    uid?: string;
     device?: DeviceProfile;
+    qqDbPath?: string;
   }): Promise<ControlStatus> {
     if (isOnline()) return status();
     if (starting) return starting;
@@ -118,9 +120,17 @@ export function runSidecar(options: SidecarOptions): SidecarHandle {
     if (a1.length === 0) throw new WeqBotError('LOGIN_FAILED', 'a1 为空');
     device = params.device;
 
+    if (!params.uid) {
+      log.warn('控制通道没有提供 uid；EasyLogin 不回传 uid，openSession 可能缺字段', {
+        uin: options.uin,
+      });
+    }
+
+    // 控制通道没给 uid 时保留 vault 里的旧值，别把它冲成空串。
+    const existing = await options.vault.get(options.uin);
     const account: StoredAccount = {
       uin: options.uin,
-      uid: '',
+      uid: params.uid ?? existing?.uid ?? '',
       a1,
       guid: params.guid,
       device: params.device,
@@ -128,9 +138,11 @@ export function runSidecar(options: SidecarOptions): SidecarHandle {
     };
     await options.vault.put(account);
 
+    const qqDbPath = params.qqDbPath ?? process.env.WEQBOT_QQ_DB;
     const config: BotConfig = {
       account: { uin: options.uin },
       native: {},
+      ...(qqDbPath ? { qq: { dbPath: qqDbPath } } : {}),
       log: { level: 'info' },
     };
 
@@ -176,7 +188,15 @@ export function runSidecar(options: SidecarOptions): SidecarHandle {
           write(
             controlSuccess(
               envelope.id,
-              await login(envelope.params as { a1: string; guid: string; device?: DeviceProfile }),
+              await login(
+                envelope.params as {
+                  a1: string;
+                  guid: string;
+                  uid?: string;
+                  device?: DeviceProfile;
+                  qqDbPath?: string;
+                },
+              ),
             ),
           );
           return;
