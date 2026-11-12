@@ -91,8 +91,10 @@ export interface RawNativeBinding {
   attachStatusSink?(sessionId: number, sink: (event: SessionStatusEvent) => void): Promise<void>;
   detachStatusSink?(sessionId: number): Promise<boolean>;
 
-  /** napi 导出名是 `resolveQqWrapperPath`；适配层映射成 `resolveWrapperPath`。 */
-  resolveQqWrapperPath?(): Promise<string | null>;
+  /** napi 导出名是 `resolveQqWrapperPath`，且是**同步**函数；适配层包成 Promise。 */
+  resolveQqWrapperPath?(): string | null;
+  /** 同步判断 QQ 本体是否在线（按 `nt_msg.db` 的文件锁持有进程）。 */
+  isQqLoggedIn?(dbPath: string): boolean;
   warmupSigner?(wrapperPath: string): Promise<{ signCoreRva: number; vmRva: number }>;
   getBuildInfo?(): NativeBuildInfo;
 }
@@ -194,7 +196,13 @@ export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
 
   if (raw.resolveQqWrapperPath) {
     const call = raw.resolveQqWrapperPath.bind(raw);
-    adapted.resolveWrapperPath = () => call();
+    // native 是同步函数；wire 统一 Promise，调用方无需区分。
+    adapted.resolveWrapperPath = async () => call();
+  }
+
+  if (raw.isQqLoggedIn) {
+    const call = raw.isQqLoggedIn.bind(raw);
+    adapted.isQqLoggedIn = async (dbPath) => call(dbPath);
   }
 
   if (raw.warmupSigner) {

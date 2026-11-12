@@ -26,6 +26,8 @@ export type NativeCapability =
   | 'statusSink'
   /** 已安装 QQ 的 `wrapper.node` 探测（进程层）。 */
   | 'wrapperResolver'
+  /** QQ 本体是否在线（`isQqLoggedIn`，进程层）。 */
+  | 'qqLoginDetector'
   /** `warmupSigner`。 */
   | 'signer'
   /** `getBuildInfo`。 */
@@ -52,6 +54,7 @@ const PRESENT: Array<[NativeCapability, (nt: Partial<NativePort>) => boolean]> =
   ['pushSink', (nt) => typeof nt.attachPushSink === 'function'],
   ['statusSink', (nt) => typeof nt.attachStatusSink === 'function'],
   ['wrapperResolver', (nt) => typeof nt.resolveWrapperPath === 'function'],
+  ['qqLoginDetector', (nt) => typeof nt.isQqLoggedIn === 'function'],
   ['signer', (nt) => typeof nt.warmupSigner === 'function'],
   ['buildInfo', (nt) => typeof nt.getBuildInfo === 'function'],
 ];

@@ -168,8 +168,9 @@ export interface QuickLoginResult {
   /**
    * 账号 uid（`u_...`）。
    *
-   * 当前 native 产物**不保证回传**（Rust 侧没有这个字段），调用方必须回退到
-   * vault 里的账号记录；类型上保留可选，等 native 补上后再收紧。
+   * native 从 classic `0x810` 应答的 TLV `0x543`
+   * （`ThirdPartyLoginResponse.common_info.rsp_nt.uid`）回传；二维码登录会带，
+   * NT EasyLogin 正常不回传。取不到时调用方回退到 vault / 账号配置。
    */
   uid?: string;
   /**
@@ -341,8 +342,19 @@ export interface NativePort {
    *
    * 宿主 / TS 拿到路径后作为 `openSession` 的 `signer.wrapperPath` 传入；
    * native 的 SSO 层只消费路径，不做平台探测。
+   *
+   * native 的原始导出 `resolveQqWrapperPath` 是**同步**的；适配层统一包成
+   * Promise，调用方不需要关心。
    */
   resolveWrapperPath?(): Promise<string | null>;
+  /**
+   * QQ 本体是否在线（按 `nt_msg.db` 的文件锁持有进程判断）。
+   *
+   * mode 2 必须由调用方在 `openSession` 前检查：native 的 `openSession` 只查
+   * 自己进程内的 Owned 会话，不查 QQ 本体。`dbPath` 是账号的 `nt_msg.db`
+   * 绝对路径，由宿主 / 配置提供；native 不猜数据目录。
+   */
+  isQqLoggedIn?(dbPath: string): Promise<boolean>;
   warmupSigner?(wrapperPath: string): Promise<{ signCoreRva: number; vmRva: number }>;
   getBuildInfo?(): NativeBuildInfo;
 }
