@@ -12,6 +12,7 @@
  */
 
 import type { WeqBotError } from '@weqbot/common';
+import type { DecodedDress } from '@weqbot/protocol';
 import type { SessionState } from './state';
 
 /** 会话级事件（不针对具体消息）。 */
@@ -68,6 +69,13 @@ export interface InboundMessage {
    * `buildSendElems` 再发出去（转发 / 搬运），多一层映射就多一处漂移。
    */
   elements: Record<string, unknown>[];
+  /**
+   * 发送者装扮：气泡 / 字体 / 挂件 itemId（0 = 未设置）。
+   *
+   * 与 `elements` 同源（`@weqbot/protocol` 的 `DecodedMessage`），历史消息、
+   * 合并转发节点解出来的值一致，OneBot 适配层不需要再碰 wire。
+   */
+  dress?: DecodedDress;
   /** 原始 body（仅当 `SessionOptions.keepRaw` 打开时存在，诊断用）。 */
   raw?: Uint8Array;
 }
@@ -94,11 +102,21 @@ export type NoticeEvent =
       kind: 'message-recall';
       at: number;
       peer: PeerRef;
+      sender?: PeerRef;
       messageId: string;
       operator?: PeerRef;
     }
   | { type: 'notice'; kind: 'friend-add'; at: number; friend: PeerRef }
   | { type: 'notice'; kind: 'poke'; at: number; peer: PeerRef; sender: PeerRef; target?: PeerRef }
+  /** C2C 输入状态（`eventType` 1 = 输入中，3 = 讲话中）。 */
+  | {
+      type: 'notice';
+      kind: 'input-status';
+      at: number;
+      peer: PeerRef;
+      eventType: number;
+      text: string;
+    }
   | { type: 'notice'; kind: 'other'; at: number; name: string; detail?: string };
 
 export type RequestEvent =
@@ -129,4 +147,5 @@ export type BotEventMap = {
   offline: Extract<SessionEvent, { type: 'offline' }>;
   heartbeat: Extract<SessionEvent, { type: 'heartbeat' }>;
   message: InboundMessage;
+  notice: NoticeEvent;
 };

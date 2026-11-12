@@ -34,7 +34,8 @@ const TRANSITIONS: Record<SessionState, readonly SessionState[]> = {
   'logged-in': ['registering', 'degraded', 'closed'],
   registering: ['online', 'degraded', 'closed'],
   online: ['degraded', 'closed'],
-  degraded: ['logging-in', 'closed'],
+  // native 自己完成重连时（reconnected）不重走登录，直接回 online。
+  degraded: ['logging-in', 'online', 'closed'],
   closed: [],
 };
 

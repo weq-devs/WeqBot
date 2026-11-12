@@ -35,3 +35,9 @@ export type {
   CredentialVault,
   StoredAccount,
 } from './credentials';
+export { PushBridge, type PushBridgeOptions, type PushBridgeResult } from './push';
+export {
+  FileCredentialVault,
+  type FileVaultOptions,
+  type SecretStore,
+} from './vault';
