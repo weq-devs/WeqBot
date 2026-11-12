@@ -13,6 +13,8 @@
   "dependencies": {
     "@weqbot/bot": "workspace:*",
     "@weqbot/common": "workspace:*",
+    "@weqbot/control": "workspace:*",
+    "@weqbot/session": "workspace:*",
     "@weqbot/wire": "workspace:*"
   }
 }

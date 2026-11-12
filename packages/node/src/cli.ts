@@ -7,11 +7,20 @@
  * 见 `TODO.md`「阶段计划」。
  */
 
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { createLogger, notImplemented } from '@weqbot/common';
+import { createBot, describeBot } from '@weqbot/bot';
+import { createLogger } from '@weqbot/common';
+import { FileCredentialVault } from '@weqbot/session';
 import { adaptNativeBinding, inspectNative } from '@weqbot/wire';
-import { describeBot } from '@weqbot/bot';
 import { loadNative } from './loader';
+import { runSidecar } from './sidecar';
+
+/** 独立进程的默认凭据目录；`WEQBOT_VAULT_DIR` 可覆盖（测试 / 多实例）。 */
+function defaultVaultDir(): string {
+  return process.env.WEQBOT_VAULT_DIR ?? join(homedir(), '.weqbot', 'accounts');
+}
 
 const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
 
@@ -79,18 +88,58 @@ async function main(argv: string[]): Promise<number> {
 
   if (values.check) return 0;
 
+  const vault = new FileCredentialVault({ dir: defaultVaultDir() });
+
   if (values.sidecar) {
-    // P3 起：ControlLineDecoder(stdin) → login/shutdown 分派；事件写回 stdout。
-    // 凭据只从控制通道拿，不读自己的 vault（WeQ 场景由宿主持有）。
-    throw notImplemented('sidecar 控制通道');
+    // 凭据只从控制通道拿；事件写回 stdout，日志走 stderr（stdout 是协议流）。
+    runSidecar({
+      uin: values.account,
+      native,
+      vault,
+      stdin: process.stdin,
+      stdout: process.stdout,
+    });
+    log.info('sidecar 已就绪，等待控制通道指令', { uin: values.account });
+    return -1;
   }
 
-  // P3 起：CredentialVault → createBot → start() → OneBot adapter。
-  throw notImplemented('独立启动流程（vault / OneBot 适配）');
+  const bot = createBot({
+    config: { account: { uin: values.account } },
+    native,
+    vault,
+    logger: log,
+  });
+  bot.events.on('state', (change) => log.info('状态', change));
+  bot.events.on('message', (message) =>
+    log.info('消息', {
+      scene: message.scene,
+      peer: message.peer.id,
+      sender: message.sender.id,
+      elements: message.elements.length,
+      dress: message.dress,
+    }),
+  );
+  bot.events.on('notice', (notice) => log.info('通知', { kind: notice.kind }));
+  bot.events.on('event', (event) => {
+    if (event.type === 'error') log.error(event.error.message, { code: event.error.code });
+  });
+
+  const stop = (): void => {
+    void bot.stop('closed').finally(() => process.exit(0));
+  };
+  process.once('SIGINT', stop);
+  process.once('SIGTERM', stop);
+
+  await bot.start();
+  log.info('bot 已上线（OneBot 适配在 P4）', { uin: values.account });
+  return -1;
 }
 
 main(process.argv.slice(2)).then(
-  (code) => process.exit(code),
+  (code) => {
+    // -1 = 进程需要保持运行（sidecar / bot 主循环）。
+    if (code >= 0) process.exit(code);
+  },
   (error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exit(1);

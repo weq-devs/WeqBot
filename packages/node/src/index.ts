@@ -13,3 +13,4 @@ export {
   type LoadNativeOptions,
   type LoadedNative,
 } from './loader';
+export { runSidecar, type SidecarHandle, type SidecarOptions } from './sidecar';

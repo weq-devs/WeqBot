@@ -216,6 +216,12 @@ importers:
       '@weqbot/common':
         specifier: workspace:*
         version: link:../common
+      '@weqbot/control':
+        specifier: workspace:*
+        version: link:../control
+      '@weqbot/session':
+        specifier: workspace:*
+        version: link:../session
       '@weqbot/wire':
         specifier: workspace:*
         version: link:../wire
