@@ -8,6 +8,10 @@
  * 本层只和 `sessionId` 打交道，**不接触 pid**。这一层也**不 import 任何 `.node`**，
  * 不 import `@weqbot/node`：宿主把 native 端口递进来。WeQ 传
  * `adaptNativeBinding(platform.native.ntHelper)`；独立进程传 slim 加载器的产物。
+ *
+ * 推送 / 状态两条 sink 都在这里接：
+ *   - 推送帧 → `@weqbot/protocol/push` 解码 → `PushBridge` → `BotEvent`；
+ *   - 状态事件 → 状态机（`kicked` 终止；`closed` 按网络掉线走退避重登）。
  */
 
 import { bytesEqual, createLogger, TypedEventBus, WeqBotError, type Logger } from '@weqbot/common';
@@ -16,6 +20,7 @@ import {
   type DeviceProfile,
   type NativePort,
   type OpenedSession,
+  type SessionStatusEvent,
   type SsoSessionConfig,
 } from '@weqbot/wire';
 import type {
@@ -25,7 +30,7 @@ import type {
   SessionState,
   StoredAccount,
 } from '@weqbot/session';
-import { SessionStateMachine } from '@weqbot/session';
+import { PushBridge, SessionStateMachine } from '@weqbot/session';
 import type { ProtocolClient } from '@weqbot/protocol';
 import { createProtocolClient } from '@weqbot/protocol';
 import type { BotConfig } from './config';
@@ -44,6 +49,8 @@ export interface CreateBotOptions {
 export interface Bot {
   readonly uin: string;
   readonly state: SessionState;
+  /** 当前 native 会话句柄；未上线时为 undefined。 */
+  readonly sessionId: number | undefined;
   readonly events: TypedEventBus<BotEventMap>;
   /** 上线后可用的协议客户端；未上线时为 undefined。 */
   readonly protocol: ProtocolClient | undefined;
@@ -62,10 +69,15 @@ export function createBot(options: CreateBotOptions): Bot {
 
   let session: OpenedSession | undefined;
   let protocol: ProtocolClient | undefined;
+  let pushBridge: PushBridge | undefined;
   let offPush: (() => void) | undefined;
   let offStatus: (() => void) | undefined;
   let storedAccount: StoredAccount | undefined;
   let tokenTimer: ReturnType<typeof setTimeout> | undefined;
+  let reloginTimer: ReturnType<typeof setTimeout> | undefined;
+  let reloginAttempts = 0;
+  /** 主动 stop 期间忽略 native 的 `closed`，避免自己触发重登。 */
+  let stopping = false;
 
   machine.onChange((change) => {
     events.emit('state', { type: 'state', ...change });
@@ -137,26 +149,59 @@ export function createBot(options: CreateBotOptions): Bot {
     tokenTimer.unref?.();
   }
 
-  async function start(): Promise<void> {
-    if (machine.state !== 'idle') {
-      throw new WeqBotError('UNKNOWN', `bot 已经在 ${machine.state}，不能重复 start`);
+  /** 释放当前会话（sink / 句柄 / 定时器），不改状态机。 */
+  async function teardownSession(reason: string): Promise<void> {
+    if (tokenTimer) {
+      clearTimeout(tokenTimer);
+      tokenTimer = undefined;
     }
+    offPush?.();
+    offPush = undefined;
+    offStatus?.();
+    offStatus = undefined;
+    const current = session;
+    session = undefined;
+    protocol = undefined;
+    pushBridge = undefined;
+    if (current && native.closeSession) {
+      try {
+        await native.closeSession(current.sessionId, reason);
+      } catch (cause) {
+        log.warn('关闭会话失败（忽略）', { uin, cause });
+      }
+    }
+  }
 
-    machine.transition('preflight', '读取凭据');
-    const account = await vault.get(uin);
-    await preflight(account);
-    const stored = account as StoredAccount;
-    storedAccount = stored;
+  /** `logged-in` 之后的全部动作：openSession → sink → online。 */
+  async function bringOnline(stored: StoredAccount): Promise<void> {
+    // 登录命令同样要签名：wrapper 路径必须在 quickLogin 之前拿到。
+    const wrapperPath =
+      config.native?.wrapperPath ??
+      (native.resolveWrapperPath ? await native.resolveWrapperPath() : null);
+    if (!wrapperPath) {
+      throw new WeqBotError(
+        'SIGNER_REQUIRED',
+        '找不到 wrapper.node，mode 2 无法签名；请配置 config.native.wrapperPath',
+        { fields: { uin } },
+      );
+    }
+    const loginOs = NATIVE_OS[stored.device.os];
 
     machine.transition('logging-in', 'quickLogin(a1)');
     const login = await native.quickLogin!({
       uin,
       a1: stored.a1,
       guid: stored.guid,
+      uid: stored.uid || null,
       appId: stored.device.appId,
       subAppId: stored.device.subAppId,
+      wrapperPath,
+      os: loginOs.os,
+      platform: loginOs.platform,
       qua: stored.device.qua,
       clientVersion: stored.device.clientVersion,
+      deviceName: stored.device.deviceName ?? null,
+      kernelVersion: stored.device.kernelVersion ?? null,
     });
 
     // native 的 QuickLoginResult 不保证回传 uid；vault 里的账号记录是权威来源。
@@ -172,6 +217,7 @@ export function createBot(options: CreateBotOptions): Bot {
     if (login.a1 && login.a1.length > 0 && !bytesEqual(login.a1, stored.a1)) {
       try {
         await vault.put({ ...stored, a1: login.a1 });
+        storedAccount = { ...stored, a1: login.a1 };
         log.info('a1 已轮换并写回 vault', { uin });
       } catch (cause) {
         log.warn('a1 轮换写回 vault 失败', { uin, cause });
@@ -194,52 +240,59 @@ export function createBot(options: CreateBotOptions): Bot {
       secToken: makeSecToken(stored),
     };
 
-    // wrapper 路径由宿主配置，或由 native 的**进程层**探测接口给出；
-    // SSO 层只消费路径，不做平台探测。
-    const wrapperPath =
-      config.native?.wrapperPath ??
-      (native.resolveWrapperPath ? await native.resolveWrapperPath() : null);
-    if (!wrapperPath) {
-      throw new WeqBotError(
-        'SIGNER_REQUIRED',
-        '找不到 wrapper.node，mode 2 无法签名；请配置 config.native.wrapperPath',
-        { fields: { uin } },
-      );
-    }
-
     machine.transition('registering', 'openSession(mode=2)');
-    session = await native.openSession!({
+    const opened = await native.openSession!({
       session: sessionConfig,
       mode: 2,
       signer: { wrapperPath },
       device,
     });
 
-    if (!Number.isInteger(session.sessionId) || session.sessionId < 1) {
-      throw new WeqBotError('REGISTER_FAILED', `native 返回了非法会话 ID ${session.sessionId}`);
+    if (!Number.isInteger(opened.sessionId) || opened.sessionId < 1) {
+      throw new WeqBotError('REGISTER_FAILED', `native 返回了非法会话 ID ${opened.sessionId}`);
     }
-    if (!session.registered || !session.synced || session.state !== 'online') {
+    if (!opened.registered || !opened.synced || opened.state !== 'online') {
       throw new WeqBotError('REGISTER_FAILED', 'openSession 返回但尚未完成注册 / 首屏同步', {
         fields: {
-          sessionId: session.sessionId,
-          registered: session.registered,
-          synced: session.synced,
-          state: session.state,
+          sessionId: opened.sessionId,
+          registered: opened.registered,
+          synced: opened.synced,
+          state: opened.state,
         },
       });
     }
+    session = opened;
+    protocol = createProtocolClient({ native, sessionId: opened.sessionId });
+    pushBridge = new PushBridge({
+      selfUin: uin,
+      selfUid: uid,
+      keepRaw: config.keepRaw ?? false,
+    });
 
-    protocol = createProtocolClient({ native, sessionId: session.sessionId });
-
-    // TODO(P3)：推送帧 → protocol/push 解码 → BotEvent → events.emit。
     offPush = await native.attachPushSink!(
-      session.sessionId,
+      opened.sessionId,
       (frame) => {
-        log.debug('收到推送', {
-          command: frame.command,
-          seq: frame.seq,
-          bytes: frame.body.length,
-        });
+        try {
+          const result = pushBridge?.handle(frame);
+          if (!result) return;
+          if (result.unhandled.length > 0) {
+            log.debug('未建模的推送', {
+              command: frame.command,
+              kinds: result.unhandled.map((event) => event.kind),
+            });
+          }
+          for (const event of result.events) {
+            if (event.type === 'message') events.emit('message', event.message);
+            else if (event.type === 'notice') events.emit('notice', event);
+            events.emit('event', event);
+          }
+        } catch (cause) {
+          events.emit('event', {
+            type: 'error',
+            error: new WeqBotError('UNKNOWN', '推送解码失败', { cause }),
+            at: Date.now(),
+          });
+        }
       },
       (error) => {
         events.emit('event', {
@@ -253,38 +306,105 @@ export function createBot(options: CreateBotOptions): Bot {
     machine.transition('online', '已注册且首屏同步完成');
     events.emit('online', { type: 'online', uin, at: Date.now() });
 
-    // TODO(P3)：把状态事件接全 —— kicked → offline('kicked')；network →
-    // degraded → 退避后重走 logging-in。现在只转发心跳。
     if (native.attachStatusSink) {
-      offStatus = await native.attachStatusSink(session.sessionId, (event) => {
-        log.debug('会话状态', { kind: event.kind });
-        if (event.kind === 'heartbeat') {
-          events.emit('heartbeat', { type: 'heartbeat', at: event.ts, rttMs: event.rttMs });
-        }
+      offStatus = await native.attachStatusSink(opened.sessionId, (event) => {
+        handleStatus(event);
       });
     }
 
+    reloginAttempts = 0;
     scheduleTokenRotation();
+  }
+
+  function handleStatus(event: SessionStatusEvent): void {
+    log.debug('会话状态', { kind: event.kind });
+    switch (event.kind) {
+      case 'heartbeat':
+        events.emit('heartbeat', { type: 'heartbeat', at: event.ts, rttMs: event.rttMs });
+        break;
+      case 'reconnecting':
+        if (machine.state === 'online') {
+          machine.transition('degraded', `第 ${event.attempt} 次重连`);
+        }
+        break;
+      case 'reconnected':
+        if (machine.state === 'degraded') machine.transition('online', 'native 已重连');
+        break;
+      case 'kicked':
+        log.warn('被服务端踢下线', { uin, reason: event.reason });
+        void stop('kicked');
+        break;
+      case 'closed':
+        if (!stopping && !machine.isTerminal) {
+          log.warn('会话被 native 关闭，按网络掉线处理', { uin, reason: event.reason });
+          scheduleRelogin('network');
+        }
+        break;
+      case 'sink_overflow':
+        log.warn('推送队列溢出，native 丢帧', { uin, dropped: event.dropped });
+        break;
+      default:
+        break;
+    }
+  }
+
+  /** 网络掉线：退避后重走 `logging-in`；次数用尽才真正下线。 */
+  function scheduleRelogin(reason: OfflineReason): void {
+    const max = config.maxReloginAttempts ?? 5;
+    if (reason !== 'network' || reloginAttempts >= max) {
+      void stop(reason === 'network' ? 'relogin-failed' : reason);
+      return;
+    }
+
+    reloginAttempts += 1;
+    const delay = Math.min(1000 * 2 ** (reloginAttempts - 1), 16_000);
+    if (machine.state === 'online') machine.transition('degraded', `第 ${reloginAttempts} 次重登`);
+    log.info('准备重登', { uin, attempt: reloginAttempts, delayMs: delay });
+
+    reloginTimer = setTimeout(() => {
+      reloginTimer = undefined;
+      void (async () => {
+        if (stopping || machine.isTerminal || !storedAccount) return;
+        try {
+          await teardownSession('relogin');
+          await bringOnline(storedAccount);
+        } catch (cause) {
+          log.warn('重登失败', { uin, attempt: reloginAttempts, cause });
+          scheduleRelogin('network');
+        }
+      })();
+    }, delay);
+    reloginTimer.unref?.();
+  }
+
+  async function start(): Promise<void> {
+    if (machine.state !== 'idle') {
+      throw new WeqBotError('UNKNOWN', `bot 已经在 ${machine.state}，不能重复 start`);
+    }
+
+    machine.transition('preflight', '读取凭据');
+    const account = await vault.get(uin);
+    await preflight(account);
+    const stored = account as StoredAccount;
+    storedAccount = stored;
+
+    await bringOnline(stored);
   }
 
   async function stop(reason: OfflineReason = 'closed'): Promise<void> {
     if (machine.isTerminal) return;
-    if (tokenTimer) {
-      clearTimeout(tokenTimer);
-      tokenTimer = undefined;
+    stopping = true;
+    if (reloginTimer) {
+      clearTimeout(reloginTimer);
+      reloginTimer = undefined;
     }
-    offPush?.();
-    offPush = undefined;
-    offStatus?.();
-    offStatus = undefined;
     try {
-      if (session && native.closeSession) await native.closeSession(session.sessionId, reason);
+      await teardownSession(reason);
     } finally {
-      session = undefined;
-      protocol = undefined;
       machine.forceClose(reason);
       events.emit('offline', { type: 'offline', reason, at: Date.now() });
       events.clear();
+      stopping = false;
     }
   }
 
@@ -292,6 +412,9 @@ export function createBot(options: CreateBotOptions): Bot {
     uin,
     get state() {
       return machine.state;
+    },
+    get sessionId() {
+      return session?.sessionId;
     },
     events,
     get protocol() {
@@ -302,6 +425,13 @@ export function createBot(options: CreateBotOptions): Bot {
     refreshSecToken,
   };
 }
+
+/** `DeviceProfile.os` → native 的 `(os, NTLoginPlatform)` 常量。 */
+const NATIVE_OS: Record<DeviceProfile['os'], { os: string; platform: number }> = {
+  linux: { os: 'Linux', platform: 7 },
+  darwin: { os: 'Mac', platform: 5 },
+  win32: { os: 'Windows', platform: 4 },
+};
 
 /** 供 CLI / 测试使用的最小健康检查（不启动任何连接）。 */
 export function describeBot(options: Pick<CreateBotOptions, 'config' | 'native'>): string {

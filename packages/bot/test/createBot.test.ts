@@ -9,6 +9,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { createLogger } from '@weqbot/common';
+import { encode, MSG_PUSH_CMD, MSG_PUSH_ENVELOPE } from '@weqbot/protocol';
 import type { CredentialVault, StoredAccount } from '@weqbot/session';
 import type {
   DeviceProfile,
@@ -284,6 +285,65 @@ test('心跳状态事件转发到 BotEvent', async () => {
 
   assert.deepEqual(beats, [1234]);
   await bot.stop('closed');
+});
+
+test('推送帧解码成 message 事件（含装扮）', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative();
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+  const received: unknown[] = [];
+  bot.events.on('message', (message) => received.push(message));
+
+  await bot.start();
+  harness.emitPush({
+    sessionId: 7,
+    command: MSG_PUSH_CMD,
+    seq: 1,
+    ts: Date.now(),
+    body: encode(MSG_PUSH_ENVELOPE, {
+      messages: [
+        {
+          responseHead: {
+            fromUin: 20002,
+            fromUid: 'u_friend',
+            grp: { groupUin: 55555, groupName: '测试群' },
+          },
+          contentHead: { msgType: 82, msgId: 88, sequence: 1, timestamp: 1_700_000_000 },
+          body: {
+            richText: { elems: [{ text: { str: 'hi' } }, { bubble: { id: 12 } }] },
+          },
+        },
+      ],
+    }),
+  });
+
+  assert.equal(received.length, 1);
+  const message = received[0] as {
+    peer: { id: string };
+    elements: unknown[];
+    dress: { bubble: number };
+  };
+  assert.equal(message.peer.id, '55555');
+  assert.deepEqual(message.elements, [{ kind: 'text', textContent: 'hi' }]);
+  assert.equal(message.dress.bubble, 12);
+
+  await bot.stop('closed');
+});
+
+test('kicked 状态直接下线并报 kicked', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative();
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+  const offlines: string[] = [];
+  bot.events.on('offline', (event) => offlines.push(event.reason));
+
+  await bot.start();
+  harness.emitStatus({ kind: 'kicked', sessionId: 7, ts: Date.now(), reason: 'KickNT' });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(bot.state, 'closed');
+  assert.deepEqual(offlines, ['kicked']);
+  assert.equal(harness.calls.closeSession, 1);
 });
 
 test('refreshSecToken: 原地换 token，不重新 openSession', async () => {

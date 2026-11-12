@@ -143,8 +143,18 @@ export interface QuickLoginOptions {
   uin: string;
   a1: Uint8Array;
   guid: string;
+  /** 账号 uid；登录两步不需要，但 `0xcde_2` 与 SSO reserved tag 16 会带。 */
+  uid?: string | null;
   appId?: number;
   subAppId?: number;
+  /** 登录命令签名用的 `wrapper.node`；缺省时 `quickLogin` 会因未签名被拒。 */
+  wrapperPath?: string | null;
+  /**
+   * 设备类型串（`Linux` / `Mac` / `Windows`）与 `NTLoginPlatform`
+   * （7 / 5 / 4）。缺省由调用方按 `device.os` 推导；native 侧两者必填。
+   */
+  os?: string;
+  platform?: number;
   qua?: string | null;
   clientVersion?: string | null;
   deviceName?: string | null;
@@ -155,8 +165,13 @@ export interface QuickLoginOptions {
 
 export interface QuickLoginResult {
   uin: string;
-  /** 账号 uid（`u_...`）。`openSession` 的 `SsoSessionConfig.uid` 从这里来。 */
-  uid: string;
+  /**
+   * 账号 uid（`u_...`）。
+   *
+   * 当前 native 产物**不保证回传**（Rust 侧没有这个字段），调用方必须回退到
+   * vault 里的账号记录；类型上保留可选，等 native 补上后再收紧。
+   */
+  uid?: string;
   /**
    * 登录过程中服务端下发的新 a1（来自 `0x18` / `0x106` / EasyLogin）。
    * 没轮换时为 null / 省略；调用方拿到后应写回 vault。
