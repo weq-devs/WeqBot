@@ -137,6 +137,7 @@ export * from './oidb/flashtransfer';
 export * from './web/gift-mall';
 
 export * from './msg';
+export * from './push';
 export * from './file';
 
 export {

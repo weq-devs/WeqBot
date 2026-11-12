@@ -627,37 +627,49 @@ export interface DecodedMessage {
     clientSequence?: number;
     timestamp: number;
   };
-  sender: { uin: number; uid: string };
-  session: { uin: number; uid: string };
+  sender: { uin: number; uid: string; name?: string };
+  session: { uin: number; uid: string; name?: string };
   elements: Record<string, unknown>[];
   dress: DecodedDress;
 }
 
+/** 已解码的 `PUSH_MSG_BODY` 原样结构（push 解码器直接复用，避免二次编码）。 */
+export interface RawMessageBody {
+  responseHead?: {
+    fromUin?: number;
+    fromUid?: string;
+    toUin?: number;
+    toUid?: string;
+    forward?: { friendName?: string };
+    grp?: { groupUin?: number; memberName?: string; memberCard?: string; groupName?: string };
+  };
+  contentHead?: {
+    msgType?: number;
+    subType?: number;
+    c2cCmd?: number;
+    msgId?: number;
+    sequence?: number;
+    ntMsgSeq?: number;
+    timestamp?: number;
+  };
+  body?: {
+    richText?: { elems?: Record<string, unknown>[]; notOnlineFile?: Record<string, unknown> };
+    msgContent?: Uint8Array;
+  };
+}
+
 /** 把原始消息字节解码成简化 Message。 */
 export function decodeMessage(bytes: Uint8Array): DecodedMessage {
-  const raw = decode(PUSH_MSG_BODY, bytes) as {
-    responseHead?: {
-      fromUin?: number;
-      fromUid?: string;
-      toUin?: number;
-      toUid?: string;
-      grp?: { groupUin?: number };
-    };
-    contentHead?: {
-      msgType?: number;
-      subType?: number;
-      c2cCmd?: number;
-      msgId?: number;
-      sequence?: number;
-      ntMsgSeq?: number;
-      timestamp?: number;
-    };
-    body?: {
-      richText?: { elems?: Record<string, unknown>[]; notOnlineFile?: Record<string, unknown> };
-      msgContent?: Uint8Array;
-    };
-  };
+  return decodeMessageBody(decode(PUSH_MSG_BODY, bytes) as RawMessageBody);
+}
 
+/**
+ * 已解码的 `PUSH_MSG_BODY` → 简化 Message。
+ *
+ * 推送通道直接用它：`PUSH_MSG` 的 tag 1 可以出现多次，先按 repeated 解出
+ * 全部 body，再逐条走这里，比「切片后重新 encode」少一次往返。
+ */
+export function decodeMessageBody(raw: RawMessageBody): DecodedMessage {
   const head = raw.contentHead ?? {};
   const sender = raw.responseHead ?? {};
   const grp = raw.responseHead?.grp ?? {};
@@ -709,8 +721,19 @@ export function decodeMessage(bytes: Uint8Array): DecodedMessage {
       ...(!grp.groupUin && head.sequence ? { clientSequence: head.sequence } : {}),
       timestamp: head.timestamp ?? 0,
     },
-    sender: { uin: sender.fromUin ?? 0, uid: sender.fromUid ?? '' },
-    session: { uin: grp.groupUin ?? sender.toUin ?? 0, uid: sender.toUid ?? '' },
+    sender: {
+      uin: sender.fromUin ?? 0,
+      uid: sender.fromUid ?? '',
+      // 群名片优先，回退昵称；私聊只有 forward.friendName 可用。
+      ...(grp.memberCard || grp.memberName || sender.forward?.friendName
+        ? { name: grp.memberCard || grp.memberName || sender.forward?.friendName }
+        : {}),
+    },
+    session: {
+      uin: grp.groupUin ?? sender.toUin ?? 0,
+      uid: sender.toUid ?? '',
+      ...(grp.groupName ? { name: grp.groupName } : {}),
+    },
     elements,
     dress,
   };

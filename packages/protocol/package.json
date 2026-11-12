@@ -6,7 +6,6 @@
   "description": "QQ 协议层：protobuf 运行时 / OIDB + trpc 业务 spec / 消息编解码 / highway / 推送解码",
   "exports": {
     ".": "./src/index.ts",
-    "./oidb": "./src/oidb/index.ts",
     "./msg": "./src/msg/index.ts",
     "./push": "./src/push/index.ts",
     "./protobuf": "./src/protobuf.ts"
