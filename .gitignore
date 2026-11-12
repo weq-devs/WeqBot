@@ -1,0 +1,14 @@
+node_modules/
+dist/
+out/
+*.tsbuildinfo
+*.log
+logs/
+.DS_Store
+
+# 原生产物：由 nt_helper 的构建流水线产出，不进仓库
+*.node
+native/
+
+# 工作用 TODO（规划稿，刻意不入库）
+TODO.md

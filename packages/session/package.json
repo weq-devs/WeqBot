@@ -1,0 +1,19 @@
+{
+  "name": "@weqbot/session",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "登录与在线会话：a1 凭据 / mode2 上线 / 状态机 / 心跳与重连的 TS 侧视图 / 事件归一",
+  "exports": {
+    ".": "./src/index.ts",
+    "./events": "./src/events.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@weqbot/common": "workspace:*",
+    "@weqbot/protocol": "workspace:*",
+    "@weqbot/wire": "workspace:*"
+  }
+}

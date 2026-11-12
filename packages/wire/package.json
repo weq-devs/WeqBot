@@ -1,0 +1,16 @@
+{
+  "name": "@weqbot/wire",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "原生端口契约 + SSO 目标 + 签名策略表 + 组帧/发包包装（不含 protobuf 业务）",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@weqbot/common": "workspace:*"
+  }
+}
