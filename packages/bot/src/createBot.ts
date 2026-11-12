@@ -14,6 +14,7 @@
  *   - 状态事件 → 状态机（`kicked` 终止；`closed` 按网络掉线走退避重登）。
  */
 
+import { hostname, release } from 'node:os';
 import { bytesEqual, createLogger, TypedEventBus, WeqBotError, type Logger } from '@weqbot/common';
 import {
   inspectNative,
@@ -102,6 +103,39 @@ export function createBot(options: CreateBotOptions): Bot {
     log.info('预检通过', { uin, capabilities: capabilities.list() });
   }
 
+  /**
+   * 产品红线：QQ 本体在线时不允许 mode 2。
+   *
+   * native 的 `openSession` **不替我们检查** QQ 本体（只查自己进程内的 Owned
+   * 会话），所以必须在调用前自己查。`dbPath` 由宿主配置提供；没有配置时只能
+   * 告警继续 —— 独立部署应尽量配置。
+   */
+  async function assertQqOffline(): Promise<void> {
+    const dbPath = config.qq?.dbPath;
+    if (!dbPath) {
+      log.warn(
+        '未配置 config.qq.dbPath，跳过 isQqLoggedIn 预检（mode2 与 QQ 互踢风险由宿主保证）',
+        {
+          uin,
+        },
+      );
+      return;
+    }
+    if (!native.isQqLoggedIn) {
+      // 宿主既然配置了 dbPath，就说明要求执行这条红线；缺能力时失败而不是跳过。
+      throw new WeqBotError(
+        'NATIVE_MISSING_CAPABILITY',
+        '配置了 config.qq.dbPath，但 native 缺少 isQqLoggedIn，无法保证不与 QQ 互踢',
+        { fields: { uin, dbPath } },
+      );
+    }
+    if (await native.isQqLoggedIn(dbPath)) {
+      throw new WeqBotError('ALREADY_ONLINE', `QQ 本体在线，不能用 mode 2 上线 ${uin}`, {
+        fields: { uin, dbPath },
+      });
+    }
+  }
+
   function makeSecToken(account: StoredAccount): string {
     return (options.secToken ?? (() => generateSecToken()))(account);
   }
@@ -174,6 +208,8 @@ export function createBot(options: CreateBotOptions): Bot {
 
   /** `logged-in` 之后的全部动作：openSession → sink → online。 */
   async function bringOnline(stored: StoredAccount): Promise<void> {
+    // 每次（含重登）上线前都检查 QQ 本体：中途 QQ 登录回来时不能抢。
+    await assertQqOffline();
     // 登录命令同样要签名：wrapper 路径必须在 quickLogin 之前拿到。
     const wrapperPath =
       config.native?.wrapperPath ??
@@ -200,11 +236,12 @@ export function createBot(options: CreateBotOptions): Bot {
       platform: loginOs.platform,
       qua: stored.device.qua,
       clientVersion: stored.device.clientVersion,
-      deviceName: stored.device.deviceName ?? null,
-      kernelVersion: stored.device.kernelVersion ?? null,
+      // native 侧这两项可以是 None，但真机指纹需要稳定值：vault 没存就用本机。
+      deviceName: stored.device.deviceName ?? hostname(),
+      kernelVersion: stored.device.kernelVersion ?? release(),
     });
 
-    // native 的 QuickLoginResult 不保证回传 uid；vault 里的账号记录是权威来源。
+    // EasyLogin 不回传 uid（QR / classic 会）；vault / 宿主配置仍是权威来源。
     const uid = login.uid || stored.uid;
     if (!uid) {
       throw new WeqBotError('LOGIN_FAILED', `${uin} 既没有登录返回的 uid，也没有 vault 里的 uid`, {
@@ -335,10 +372,15 @@ export function createBot(options: CreateBotOptions): Bot {
         void stop('kicked');
         break;
       case 'closed':
-        if (!stopping && !machine.isTerminal) {
-          log.warn('会话被 native 关闭，按网络掉线处理', { uin, reason: event.reason });
-          scheduleRelogin('network');
+        if (stopping || machine.isTerminal) break;
+        if (event.reason === 'reconnect-failed') {
+          // native 已经用尽自己的 5 次退避重连；再让 TS 重登会叠成 25 次。
+          log.error('native 重连次数用尽，bot 下线', { uin });
+          void stop('relogin-failed');
+          break;
         }
+        log.warn('会话被 native 关闭，按网络掉线处理', { uin, reason: event.reason });
+        scheduleRelogin('network');
         break;
       case 'sink_overflow':
         log.warn('推送队列溢出，native 丢帧', { uin, dropped: event.dropped });

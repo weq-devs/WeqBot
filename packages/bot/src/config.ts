@@ -49,6 +49,14 @@ export interface BotConfig {
      */
     wrapperPath?: string;
   };
+  qq?: {
+    /**
+     * 账号 `nt_msg.db` 的绝对路径（进程层）。用于 `isQqLoggedIn` 预检：
+     * QQ 本体在线时不允许 mode 2。不传时跳过检查并打 warn —— 这是产品红线，
+     * 独立部署应尽量配置。
+     */
+    dbPath?: string;
+  };
   secToken?: {
     /**
      * 原地轮换 `SecToken` 的间隔（ms），默认 24h。

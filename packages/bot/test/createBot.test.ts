@@ -7,6 +7,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { hostname, release } from 'node:os';
 import test from 'node:test';
 import { createLogger } from '@weqbot/common';
 import { encode, MSG_PUSH_CMD, MSG_PUSH_ENVELOPE } from '@weqbot/protocol';
@@ -17,6 +18,7 @@ import type {
   OpenSessionOptions,
   OpenedSession,
   PushFrame,
+  QuickLoginOptions,
   QuickLoginResult,
   SessionInfo,
   SessionStatusEvent,
@@ -71,6 +73,7 @@ interface NativeHarness {
     statusSubscribed: number;
     statusUnsubscribed: number;
     lastOpen: OpenSessionOptions | undefined;
+    lastQuickLogin: QuickLoginOptions | undefined;
     setSecToken: Array<{ sessionId: number; token: string }>;
   };
   emitPush(frame: PushFrame): void;
@@ -88,6 +91,7 @@ function makeNative(overrides: Partial<NativePort> = {}): NativeHarness {
     statusSubscribed: 0,
     statusUnsubscribed: 0,
     lastOpen: undefined,
+    lastQuickLogin: undefined,
     setSecToken: [],
   };
 
@@ -117,8 +121,9 @@ function makeNative(overrides: Partial<NativePort> = {}): NativeHarness {
   const native: NativePort = {
     sendPacket: async () => new Uint8Array(),
     sendOidbPacket: async () => new Uint8Array(),
-    quickLogin: async () => {
+    quickLogin: async (options) => {
       calls.quickLogin += 1;
+      calls.lastQuickLogin = options;
       return loginResult;
     },
     openSession: async (options) => {
@@ -232,6 +237,57 @@ test('start: 登录与 vault 都没有 uid 时报 LOGIN_FAILED', async () => {
     return true;
   });
   assert.equal(harness.calls.openSession, 0);
+});
+
+test('start: QQ 本体在线时拒绝 mode 2', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative({ isQqLoggedIn: async () => true });
+  const config: BotConfig = { ...CONFIG, qq: { dbPath: '/tmp/nt_msg.db' } };
+  const bot = createBot({ config, native: harness.native, vault, logger: SILENT });
+
+  await assert.rejects(bot.start(), (error: unknown) => {
+    assert.equal((error as { code?: string }).code, 'ALREADY_ONLINE');
+    return true;
+  });
+  assert.equal(harness.calls.quickLogin, 0);
+  assert.equal(harness.calls.openSession, 0);
+});
+
+test('设备档案缺 deviceName/kernelVersion 时用本机值补齐', async () => {
+  const account: StoredAccount = {
+    ...ACCOUNT,
+    device: { ...DEVICE, deviceName: undefined, kernelVersion: undefined },
+  };
+  const { vault } = makeVault(account);
+  const harness = makeNative();
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+
+  await bot.start();
+
+  assert.equal(harness.calls.lastQuickLogin?.deviceName, hostname());
+  assert.equal(harness.calls.lastQuickLogin?.kernelVersion, release());
+  await bot.stop('closed');
+});
+
+test('native 重连耗尽：直接下线为 relogin-failed，不再叠加 TS 重登', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative();
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+  const offlines: string[] = [];
+  bot.events.on('offline', (event) => offlines.push(event.reason));
+
+  await bot.start();
+  harness.emitStatus({
+    kind: 'closed',
+    sessionId: 7,
+    ts: Date.now(),
+    reason: 'reconnect-failed',
+  });
+  await new Promise((resolve) => setTimeout(resolve, 10));
+
+  assert.equal(bot.state, 'closed');
+  assert.deepEqual(offlines, ['relogin-failed']);
+  assert.equal(harness.calls.closeSession, 1);
 });
 
 test('start: openSession 未完成首屏同步时拒绝上线', async () => {
