@@ -28,6 +28,8 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
   weqbot --account <uin>            启动 bot（P3 落地）
   weqbot --account <uin> --check    只做 native 自检，不连网
   weqbot --print-capabilities       打印原生组件能力
+  weqbot --print-capabilities --qq-pid <pid> --account <uin>
+                                    额外打印从 QQ 内存读到的 secToken 来源与 TTL
   weqbot --sidecar --account <uin>  desktop 托管模式：控制通道走 stdio（P3 落地）
 
 选项:
@@ -36,6 +38,8 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
   --qq-db <path>       账号 nt_msg.db 绝对路径（mode2 预检 isQqLoggedIn 用；
                        也可用 $WEQBOT_QQ_DB）
   --config <path>      配置文件（P3 落地）
+  --qq-pid <pid>       只与 --print-capabilities 连用：诊断 QQ 进程的会话物料
+                       （需要 root / CAP_SYS_PTRACE）
   --check              自检模式
   --sidecar            desktop 拉起的托管模式（NDJSON over stdio，见 @weqbot/control）
   --verbose            打开 debug 日志
@@ -49,6 +53,7 @@ async function main(argv: string[]): Promise<number> {
       account: { type: 'string' },
       'native-dir': { type: 'string' },
       'qq-db': { type: 'string' },
+      'qq-pid': { type: 'string' },
       config: { type: 'string' },
       check: { type: 'boolean', default: false },
       sidecar: { type: 'boolean', default: false },
@@ -76,6 +81,41 @@ async function main(argv: string[]): Promise<number> {
 
   if (values['print-capabilities']) {
     process.stdout.write(`${capabilities.list().join('\n')}\n`);
+    if (values['qq-pid']) {
+      // 只打印来源 / TTL，不打印 token 本身 —— 终端输出经常被贴进日志。
+      const pid = Number(values['qq-pid']);
+      if (!Number.isInteger(pid) || pid <= 0) {
+        process.stderr.write(`--qq-pid 不是合法 pid：${values['qq-pid']}\n`);
+        return 2;
+      }
+      if (!loaded.binding.scanSessionMaterial) {
+        process.stderr.write('该原生组件没有 scanSessionMaterial，无法诊断 secToken\n');
+        return 1;
+      }
+      try {
+        const material = await loaded.binding.scanSessionMaterial(
+          pid,
+          values.account ?? null,
+          null,
+        );
+        const ttl =
+          material.secTokenExpire === undefined
+            ? 'unknown'
+            : `${material.secTokenExpire - Math.floor(Date.now() / 1000)}s`;
+        process.stdout.write(
+          `${[
+            `secToken: ${material.secToken ? 'present' : 'missing'}`,
+            `secTokenSource: ${material.secTokenSource ?? 'unknown'}`,
+            `secTokenTtl: ${ttl}`,
+          ].join('\n')}\n`,
+        );
+      } catch (error) {
+        process.stderr.write(
+          `读取 QQ 内存失败：${error instanceof Error ? error.message : String(error)}\n`,
+        );
+        return 1;
+      }
+    }
     return 0;
   }
 

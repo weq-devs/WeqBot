@@ -95,6 +95,24 @@ export interface RawNativeBinding {
   resolveQqWrapperPath?(): string | null;
   /** 同步判断 QQ 本体是否在线（按 `nt_msg.db` 的文件锁持有进程）。 */
   isQqLoggedIn?(dbPath: string): boolean;
+  /**
+   * 从 QQ 进程内存读一次会话物料（进程层诊断能力）。
+   *
+   * 不进 `NativePort`：mode 2 自己登录，不需要借别人的会话；只有 `--print-capabilities`
+   * 这类诊断会直接调它，看 `secTokenSource` / TTL。
+   */
+  scanSessionMaterial?(
+    pid: number,
+    uin?: string | null,
+    uid?: string | null,
+  ): Promise<{
+    a2?: string;
+    d2?: string;
+    d2Key?: string;
+    secToken?: string;
+    secTokenExpire?: number;
+    secTokenSource?: string;
+  }>;
   warmupSigner?(wrapperPath: string): Promise<{ signCoreRva: number; vmRva: number }>;
   getBuildInfo?(): NativeBuildInfo;
 }
