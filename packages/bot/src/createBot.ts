@@ -32,9 +32,11 @@ import type {
   StoredAccount,
 } from '@weqbot/session';
 import { PushBridge, SessionStateMachine } from '@weqbot/session';
+import { createOneBotAdapter, type OneBotAdapter } from '@weqbot/onebot';
 import type { ProtocolClient } from '@weqbot/protocol';
 import { createProtocolClient } from '@weqbot/protocol';
 import type { BotConfig } from './config';
+import { createProtocolBackend } from './onebot-backend';
 import { generateSecToken } from './sec-token';
 
 export interface CreateBotOptions {
@@ -55,6 +57,8 @@ export interface Bot {
   readonly events: TypedEventBus<BotEventMap>;
   /** 上线后可用的协议客户端；未上线时为 undefined。 */
   readonly protocol: ProtocolClient | undefined;
+  /** OneBot 适配器；未配置 `config.onebot` 时为 undefined。 */
+  readonly onebot: OneBotAdapter | undefined;
   start(): Promise<void>;
   stop(reason?: OfflineReason): Promise<void>;
   /** 立即原地轮换 `SecToken`（不重连、不重新登录）。 */
@@ -74,6 +78,9 @@ export function createBot(options: CreateBotOptions): Bot {
   let offPush: (() => void) | undefined;
   let offStatus: (() => void) | undefined;
   let storedAccount: StoredAccount | undefined;
+  let onebot: OneBotAdapter | undefined;
+  /** 当前账号 uid（登录后才有）。 */
+  let selfUid: string | undefined;
   let tokenTimer: ReturnType<typeof setTimeout> | undefined;
   let reloginTimer: ReturnType<typeof setTimeout> | undefined;
   let reloginAttempts = 0;
@@ -185,6 +192,7 @@ export function createBot(options: CreateBotOptions): Bot {
 
   /** 释放当前会话（sink / 句柄 / 定时器），不改状态机。 */
   async function teardownSession(reason: string): Promise<void> {
+    await stopOneBot();
     if (tokenTimer) {
       clearTimeout(tokenTimer);
       tokenTimer = undefined;
@@ -249,6 +257,7 @@ export function createBot(options: CreateBotOptions): Bot {
       });
     }
     log.info('换票成功', { uin, uid });
+    selfUid = uid;
 
     // 服务端可能在登录过程中轮换 a1；拿到就写回，避免下次还用旧值。
     if (login.a1 && login.a1.length > 0 && !bytesEqual(login.a1, stored.a1)) {
@@ -351,6 +360,56 @@ export function createBot(options: CreateBotOptions): Bot {
 
     reloginAttempts = 0;
     scheduleTokenRotation();
+    await startOneBot();
+  }
+
+  /** 起 OneBot（若已配置）。失败只记日志：OneBot 挂了不该把会话一起拖下水。 */
+  async function startOneBot(): Promise<void> {
+    if (!config.onebot || onebot) return;
+    if (!protocol) return;
+
+    try {
+      const backend = createProtocolBackend({
+        protocol,
+        selfUin: uin,
+        ...(selfUid ? { selfUid: selfUid } : {}),
+        logger: log,
+        ...(pushBridge
+          ? {
+              resolveUidUin: {
+                uinByUid: (targetUid: string) => pushBridge?.resolveUin(targetUid),
+                uidByUin: () => undefined,
+              },
+            }
+          : {}),
+      });
+      const adapter = createOneBotAdapter({
+        config: config.onebot,
+        backend,
+        selfId: Number(uin),
+        events: {
+          on: ((event: 'event' | 'message' | 'notice', listener: never) =>
+            events.on(event, listener as never)) as never,
+        },
+        logger: log,
+      });
+      await adapter.start();
+      onebot = adapter;
+      log.info('OneBot 已启动', { port: adapter.port, actions: adapter.actions().length });
+    } catch (cause) {
+      log.error('OneBot 启动失败（会话继续）', { uin, cause });
+    }
+  }
+
+  async function stopOneBot(): Promise<void> {
+    const adapter = onebot;
+    onebot = undefined;
+    if (!adapter) return;
+    try {
+      await adapter.stop();
+    } catch (cause) {
+      log.warn('OneBot 停止失败', { uin, cause });
+    }
   }
 
   function handleStatus(event: SessionStatusEvent): void {
@@ -461,6 +520,9 @@ export function createBot(options: CreateBotOptions): Bot {
     events,
     get protocol() {
       return protocol;
+    },
+    get onebot() {
+      return onebot;
     },
     start,
     stop,

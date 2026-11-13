@@ -239,6 +239,28 @@ test('start: 登录与 vault 都没有 uid 时报 LOGIN_FAILED', async () => {
   assert.equal(harness.calls.openSession, 0);
 });
 
+test('配置了 onebot 时会启动适配器，stop 时一起关掉', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative();
+  const config: BotConfig = {
+    ...CONFIG,
+    onebot: {
+      networks: { httpServers: [], httpClients: [], wsClients: [], wsServers: [] },
+    },
+  };
+  const bot = createBot({ config, native: harness.native, vault, logger: SILENT });
+
+  await bot.start();
+  assert.ok(bot.onebot, 'onebot 适配器应已创建');
+  // 没配任何网络时没有监听端口。
+  assert.equal(bot.onebot?.port, undefined);
+  // 后端只实现了协议覆盖的能力：发送 + 登录信息。
+  assert.ok(bot.onebot?.actions().includes('send_group_msg'));
+
+  await bot.stop('closed');
+  assert.equal(bot.onebot, undefined);
+});
+
 test('start: QQ 本体在线时拒绝 mode 2', async () => {
   const { vault } = makeVault();
   const harness = makeNative({ isQqLoggedIn: async () => true });

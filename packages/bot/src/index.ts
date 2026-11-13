@@ -9,10 +9,5 @@
 
 export { createBot, describeBot, type Bot, type CreateBotOptions } from './createBot';
 export { generateSecToken } from './sec-token';
-export type {
-  BotConfig,
-  OneBotConfig,
-  OneBotHttpConfig,
-  OneBotWsClientConfig,
-  OneBotWsServerConfig,
-} from './config';
+export type { BotConfig, BotOneBotConfig } from './config';
+export { createProtocolBackend, type ProtocolBackendOptions } from './onebot-backend';

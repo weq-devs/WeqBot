@@ -13,6 +13,10 @@
   "dependencies": {
     "@weqbot/common": "workspace:*",
     "@weqbot/protocol": "workspace:*",
-    "@weqbot/session": "workspace:*"
+    "@weqbot/session": "workspace:*",
+    "ws": "^8.18.3"
+  },
+  "devDependencies": {
+    "@types/ws": "^8.18.1"
   }
 }

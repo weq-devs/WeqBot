@@ -38,6 +38,7 @@ function fakeBot(): Bot {
     sessionId: 7,
     events: new TypedEventBus<BotEventMap>(),
     protocol: undefined,
+    onebot: undefined,
     start: async () => {},
     stop: async () => {},
     refreshSecToken: async () => {},

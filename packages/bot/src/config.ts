@@ -6,36 +6,10 @@
  */
 
 import type { LogLevel } from '@weqbot/common';
+import type { OneBotConfig } from '@weqbot/onebot';
 
-export interface OneBotWsServerConfig {
-  /** 监听端口（正向 WS：OneBot 客户端连进来）。 */
-  port: number;
-  host?: string;
-  accessToken?: string;
-  /** 事件上报格式，默认 array（v11 推荐）。 */
-  messageFormat?: 'array' | 'string';
-}
-
-export interface OneBotWsClientConfig {
-  /** 反向 WS：连到 OneBot 实现方。 */
-  url: string;
-  accessToken?: string;
-  reconnect?: boolean;
-}
-
-export interface OneBotHttpConfig {
-  port: number;
-  host?: string;
-  accessToken?: string;
-}
-
-export interface OneBotConfig {
-  wsServer?: OneBotWsServerConfig;
-  wsClient?: OneBotWsClientConfig[];
-  http?: OneBotHttpConfig;
-  /** 心跳间隔（ms），0 = 关。仅影响 OneBot `meta_event`，与 SSO 心跳无关。 */
-  heartbeatMs?: number;
-}
+/** OneBot 配置的别名，避免与 `config.onebot` 字段名混淆。 */
+export type BotOneBotConfig = OneBotConfig;
 
 export interface BotConfig {
   account: {
@@ -65,7 +39,11 @@ export interface BotConfig {
      */
     rotateMs?: number;
   };
-  onebot?: OneBotConfig;
+  /**
+   * OneBot v11 适配配置。**多服务**：每类网络都是数组（正向 WS / 反向 WS /
+   * HTTP 服务端 / HTTP 上报可同时存在）。不传则不启动 OneBot。
+   */
+  onebot?: BotOneBotConfig;
   log?: {
     level?: LogLevel;
   };
