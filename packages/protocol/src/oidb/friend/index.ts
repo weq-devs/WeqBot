@@ -13,6 +13,12 @@
 
 import { message } from '../../protobuf';
 import { invokeOidb, type OidbSpec } from '../invoke';
+
+export {
+  GetUnidirectionalFriendList,
+  type GetUnidirectionalFriendListParams,
+  type UnidirectionalFriendEntry,
+} from './unidirectional';
 import { toInt } from '../shared';
 import type { OidbNative } from '../../transport';
 

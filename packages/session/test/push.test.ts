@@ -1,6 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { encode, INPUT_STATUS_NOTIFY, MSG_PUSH_CMD, MSG_PUSH_ENVELOPE } from '@weqbot/protocol';
+import {
+  encode,
+  INPUT_STATUS_NOTIFY,
+  message,
+  MSG_PUSH_CMD,
+  MSG_PUSH_ENVELOPE,
+} from '@weqbot/protocol';
 import { PushBridge } from '../src/push';
 
 function frame(body: Uint8Array) {
@@ -70,6 +76,84 @@ test('输入状态在观测到 uid→uin 后补全 peer', () => {
   assert.ok(event && event.type === 'notice' && event.kind === 'input-status');
   assert.equal(event.peer.id, '10001');
   assert.equal(event.text, '对方正在输入...');
+});
+
+const GROUP_CHANGE = message([
+  { name: 'groupUin', tag: 1, type: 'uint32' },
+  { name: 'flag', tag: 2, type: 'uint32' },
+  { name: 'memberUid', tag: 3, type: 'string' },
+  { name: 'decreaseType', tag: 4, type: 'uint32' },
+  { name: 'operatorBytes', tag: 5, type: 'bytes' },
+]);
+
+test('33 入群 → group-member-increase，uid 用观测缓存补 uin', () => {
+  const bridge = new PushBridge({ selfUin: '2863253201', selfUid: 'u_self' });
+  bridge.handle(frame(encode(MSG_PUSH_ENVELOPE, { messages: [groupMessage('hi', 0)] })));
+
+  const result = bridge.handle(
+    frame(
+      encode(MSG_PUSH_ENVELOPE, {
+        messages: [
+          {
+            responseHead: { fromUin: 55555, fromUid: 'u_group', grp: { groupUin: 55555 } },
+            contentHead: { msgType: 33, subType: 0, msgId: 1, sequence: 2, timestamp: 1_700_000_200 },
+            body: {
+              msgContent: encode(GROUP_CHANGE, {
+                groupUin: 55555,
+                memberUid: 'u_sender',
+                decreaseType: 3,
+                operatorBytes: new TextEncoder().encode('u_op'),
+              }),
+            },
+          },
+        ],
+      }),
+    ),
+  );
+
+  const event = result.events[0];
+  assert.ok(event && event.type === 'notice');
+  assert.equal(event.kind, 'group-member-increase');
+  if (event.kind !== 'group-member-increase') return;
+  assert.equal(event.group.id, '55555');
+  assert.equal(event.member.id, '10001');
+  assert.equal(event.operator?.id, 'u_op');
+});
+
+test('好友申请 → request / friend，事件总线可收到 request', () => {
+  const bridge = new PushBridge({ selfUin: '2863253201', selfUid: 'u_self' });
+  const content = encode(
+    message([
+      {
+        name: 'info',
+        tag: 1,
+        type: message([
+          { name: 'sourceUid', tag: 2, type: 'string' },
+          { name: 'message', tag: 10, type: 'string' },
+        ]),
+      },
+    ]),
+    { info: { sourceUid: 'u_req', message: '加个好友' } },
+  );
+  const result = bridge.handle(
+    frame(
+      encode(MSG_PUSH_ENVELOPE, {
+        messages: [
+          {
+            responseHead: { fromUin: 0, fromUid: 'u_req' },
+            contentHead: { msgType: 528, subType: 35, timestamp: 1_700_000_300 },
+            body: { msgContent: content },
+          },
+        ],
+      }),
+    ),
+  );
+  const event = result.events[0];
+  assert.ok(event && event.type === 'request');
+  assert.equal(event.kind, 'friend');
+  assert.equal(event.from.uid, 'u_req');
+  assert.equal(event.comment, '加个好友');
+  assert.equal(event.flag, 'u_req');
 });
 
 test('未建模的推送进入 unhandled，不丢帧', () => {

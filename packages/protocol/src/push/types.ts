@@ -55,11 +55,117 @@ export interface PushGroupRecallEvent {
   sequence: number;
 }
 
+/** 群成员变动（33 入群 / 34 退群 / 85 自己入群）。 */
+export interface PushGroupMemberEvent {
+  kind: 'group-member';
+  time: number;
+  groupUin: number;
+  memberUid: string;
+  operatorUid: string;
+  action: 'join' | 'leave' | 'disband' | 'self-join';
+  /** 入群方式（approve / invite）；退群事件为 undefined。 */
+  joinType?: 'approve' | 'invite';
+  /** 退群原因。 */
+  leaveType?: 'leave' | 'kick' | 'disband';
+}
+
+/** 群管理员变更（44）。 */
+export interface PushGroupAdminEvent {
+  kind: 'group-admin';
+  time: number;
+  groupUin: number;
+  memberUid: string;
+  set: boolean;
+}
+
+/** 入群申请 / 邀请（84 / 525 / 87）。`flag` 回填 `set_group_add_request`。 */
+export interface PushGroupRequestEvent {
+  kind: 'group-request';
+  time: number;
+  groupUin: number;
+  fromUid: string;
+  invitedUid?: string;
+  subType: 'add' | 'invite';
+  message: string;
+  flag: string;
+}
+
+/** 好友申请（0x210/35）。 */
+export interface PushFriendRequestEvent {
+  kind: 'friend-request';
+  time: number;
+  fromUid: string;
+  targetUid: string;
+  message: string;
+  flag: string;
+}
+
+/** 新好友（0x210/179、226）。 */
+export interface PushFriendAddEvent {
+  kind: 'friend-add';
+  time: number;
+  uid: string;
+  toUid: string;
+  nickname: string;
+}
+
+/** 戳一戳（0x210/290 私聊、0x2dc/20 群聊）。 */
+export interface PushPokeEvent {
+  kind: 'poke';
+  time: number;
+  fromUid: string;
+  toUid: string;
+  groupUin?: number;
+  action?: string;
+  suffix?: string;
+}
+
+/** 群禁言（0x2dc/12）；`duration = 0` 是解除禁言。 */
+export interface PushGroupMuteEvent {
+  kind: 'group-mute';
+  time: number;
+  groupUin: number;
+  targetUid: string;
+  operatorUid: string;
+  duration: number;
+}
+
+/** 群表情回应（0x2dc/16，field13=35）。 */
+export interface PushGroupReactionEvent {
+  kind: 'group-reaction';
+  time: number;
+  groupUin: number;
+  sequence: number;
+  code: string;
+  count: number;
+  operatorUid: string;
+  added: boolean;
+}
+
+/** 群精华（0x2dc/21）。 */
+export interface PushGroupEssenceEvent {
+  kind: 'group-essence';
+  time: number;
+  groupUin: number;
+  sequence: number;
+  operatorUid: string;
+  memberUin: number;
+  set: boolean;
+}
+
+/** 客户端消息回执（`ClientMessageReceipt` 命令）：服务端确认了本机发出的私聊消息。 */
+export interface PushClientReceiptEvent {
+  kind: 'client-receipt';
+  time: number;
+  peerUid: string;
+  clientSequence: number;
+  sequence: number;
+}
+
 /**
  * 未建模的系统推送：保留 msgType / subType / 原始 content。
  *
- * 群成员变动、加群请求、戳一戳、群名片变更等都先落这里，P4 做 OneBot 映射时
- * 再逐类提升成具体事件 —— 不猜 schema，也不丢字节。
+ * 群名片变更、灰条、在线设备快照等都先落这里；不猜 schema，也不丢字节。
  */
 export interface PushSystemEvent {
   kind: 'system';
@@ -86,5 +192,15 @@ export type PushEvent =
   | PushInputStatusEvent
   | PushFriendRecallEvent
   | PushGroupRecallEvent
+  | PushGroupMemberEvent
+  | PushGroupAdminEvent
+  | PushGroupRequestEvent
+  | PushFriendRequestEvent
+  | PushFriendAddEvent
+  | PushPokeEvent
+  | PushGroupMuteEvent
+  | PushGroupReactionEvent
+  | PushGroupEssenceEvent
+  | PushClientReceiptEvent
   | PushSystemEvent
   | PushOtherEvent;

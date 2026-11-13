@@ -15,6 +15,7 @@ import type { PushEvent } from '@weqbot/protocol';
 import { decodePushFrame } from '@weqbot/protocol';
 import type { PushFrame } from '@weqbot/wire';
 import type { BotEvent, InboundMessage, NoticeEvent, PeerRef } from './events';
+import { IdentityCache } from './identity';
 
 export interface PushBridgeOptions {
   /** 本账号 uin（十进制串）。 */
@@ -23,6 +24,11 @@ export interface PushBridgeOptions {
   selfUid?: string;
   /** 保留入站原始 `PUSH_MSG_BODY`（诊断用，默认关）。 */
   keepRaw?: boolean;
+  /**
+   * 与 backend 共用的 uid ↔ uin 缓存。不传时自己建一个（单测便利），
+   * 但生产上必须传：同一个 uid 在消息里观测到、在撤回通知里才用得上。
+   */
+  identity?: IdentityCache;
 }
 
 export interface PushBridgeResult {
@@ -34,18 +40,19 @@ export interface PushBridgeResult {
 export class PushBridge {
   readonly selfUin: string;
   readonly selfUid: string | undefined;
+  readonly identity: IdentityCache;
   private readonly keepRaw: boolean;
-  private readonly uinByUid = new Map<string, string>();
 
   constructor(options: PushBridgeOptions) {
     this.selfUin = options.selfUin;
     this.selfUid = options.selfUid;
     this.keepRaw = options.keepRaw ?? false;
+    this.identity = options.identity ?? new IdentityCache();
   }
 
   /** uid → uin。未观测到时返回 undefined。 */
   resolveUin(uid: string): string | undefined {
-    return uid ? this.uinByUid.get(uid) : undefined;
+    return this.identity.uinOf(uid);
   }
 
   /** 翻译一帧 native 推送。 */
@@ -93,6 +100,89 @@ export class PushBridge {
             ...(event.operatorUid ? { operator: this.peerOfUid(event.operatorUid) } : {}),
           } satisfies NoticeEvent);
           break;
+        case 'group-member':
+          out.push({
+            type: 'notice',
+            kind:
+              event.action === 'join' || event.action === 'self-join'
+                ? 'group-member-increase'
+                : 'group-member-decrease',
+            at: event.time * 1000,
+            group: { id: String(event.groupUin) },
+            member:
+              event.action === 'self-join'
+                ? { id: this.selfUin, ...(this.selfUid ? { uid: this.selfUid } : {}) }
+                : this.peerOfUid(event.memberUid),
+            ...(event.operatorUid ? { operator: this.peerOfUid(event.operatorUid) } : {}),
+          } satisfies NoticeEvent);
+          break;
+        case 'group-admin':
+          out.push({
+            type: 'notice',
+            kind: 'group-admin',
+            at: event.time * 1000,
+            group: { id: String(event.groupUin) },
+            member: this.peerOfUid(event.memberUid),
+            detail: event.set ? 'set' : 'unset',
+          } satisfies NoticeEvent);
+          break;
+        case 'group-request':
+          out.push({
+            type: 'request',
+            kind: 'group',
+            at: event.time * 1000,
+            group: { id: String(event.groupUin) },
+            from: this.peerOfUid(event.fromUid),
+            ...(event.message ? { comment: event.message } : {}),
+            flag: event.flag,
+            invite: event.subType === 'invite',
+          });
+          break;
+        case 'friend-request':
+          out.push({
+            type: 'request',
+            kind: 'friend',
+            at: event.time * 1000,
+            from: this.peerOfUid(event.fromUid),
+            ...(event.message ? { comment: event.message } : {}),
+            flag: event.flag,
+          });
+          break;
+        case 'friend-add':
+          out.push({
+            type: 'notice',
+            kind: 'friend-add',
+            at: event.time * 1000,
+            friend: {
+              ...this.peerOfUid(event.uid),
+              ...(event.nickname ? { name: event.nickname } : {}),
+            },
+          } satisfies NoticeEvent);
+          break;
+        case 'poke':
+          out.push({
+            type: 'notice',
+            kind: 'poke',
+            at: event.time * 1000,
+            peer: event.groupUin
+              ? { id: String(event.groupUin) }
+              : this.peerOfUid(event.fromUid),
+            sender: this.peerOfUid(event.fromUid),
+            ...(event.toUid ? { target: this.peerOfUid(event.toUid) } : {}),
+          } satisfies NoticeEvent);
+          break;
+        case 'group-mute':
+        case 'group-reaction':
+        case 'group-essence':
+        case 'client-receipt':
+          out.push({
+            type: 'notice',
+            kind: 'other',
+            at: event.time * 1000,
+            name: event.kind,
+            detail: describePushEvent(event),
+          } satisfies NoticeEvent);
+          break;
         default:
           unhandled.push(event);
       }
@@ -128,6 +218,10 @@ export class PushBridge {
       messageId: String(message.head.msgId),
       seq: message.head.sequence,
       time: message.head.timestamp,
+      ...(message.head.clientSequence !== undefined
+        ? { clientSequence: message.head.clientSequence }
+        : {}),
+      ...(message.head.ntMsgSeq !== undefined ? { ntMsgSeq: message.head.ntMsgSeq } : {}),
       scene,
       peer,
       sender,
@@ -146,7 +240,22 @@ export class PushBridge {
   }
 
   private observe(uid: string, uin: number): void {
-    if (!uid || !Number.isSafeInteger(uin) || uin <= 0) return;
-    this.uinByUid.set(uid, String(uin));
+    this.identity.observe(uid, uin);
+  }
+}
+
+/** 没有专门 `NoticeEvent.kind` 的推送：给诊断日志一段可读的摘要。 */
+function describePushEvent(
+  event: Extract<PushEvent, { kind: 'group-mute' | 'group-reaction' | 'group-essence' | 'client-receipt' }>,
+): string {
+  switch (event.kind) {
+    case 'group-mute':
+      return `group=${event.groupUin} target=${event.targetUid} duration=${event.duration}`;
+    case 'group-reaction':
+      return `group=${event.groupUin} seq=${event.sequence} code=${event.code} count=${event.count}`;
+    case 'group-essence':
+      return `group=${event.groupUin} seq=${event.sequence} set=${event.set}`;
+    case 'client-receipt':
+      return `peer=${event.peerUid} clientSeq=${event.clientSequence} seq=${event.sequence}`;
   }
 }

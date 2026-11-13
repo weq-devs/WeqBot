@@ -35,6 +35,7 @@ export type {
   CredentialVault,
   StoredAccount,
 } from './credentials';
+export { IdentityCache } from './identity';
 export { PushBridge, type PushBridgeOptions, type PushBridgeResult } from './push';
 export {
   FileCredentialVault,

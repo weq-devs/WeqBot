@@ -4,35 +4,42 @@
  * 分工：
  *   - native：剥 SSO 头、解密、交出 `(command, body)`；
  *   - 本文件：`PUSH_MSG` 包壳 → 逐条 `PUSH_MSG_BODY` → 语义事件；
- *   - `msg/decode.ts`：元素 + 装扮（bubble/font/widget）的具体解析。
+ *   - `msg/decode.ts`：元素 + 装扮（bubble/font/widget）的具体解析；
+ *   - `push/registry.ts`：按 `msgType` 分派系统通知。
  *
- * 不在这里做的事：消息去重、自身消息过滤、OneBot 映射。那些需要会话上下文
- * 或协议之外的约定，放在 `@weqbot/session` / `@weqbot/onebot`。
+ * 不在这里做的事：uin ↔ uid 映射、消息去重（跨帧状态）、自身消息过滤、
+ * OneBot 映射。前两者由 `@weqbot/session` 承担（`IdentityCache` / `SysMsgDedup`）。
  */
 
 import { decode } from '../protobuf';
 import { decodeMessageBody, type RawMessageBody } from '../msg/decode';
-import {
-  MSG_PUSH_ENVELOPE,
-  FRIEND_RECALL,
-  GROUP_NOTIFY_BODY,
-  INPUT_STATUS_NOTIFY,
-} from './schemas';
+import type { SysMsgDedup } from './dedup';
+import { createMsgPushRegistry, type MsgPushRegistry } from './registry';
+import { MSG_PUSH_ENVELOPE, SEND_MESSAGE_RESPONSE } from './schemas';
 import type {
+  PushClientReceiptEvent,
   PushEvent,
-  PushFriendRecallEvent,
-  PushGroupRecallEvent,
-  PushInputStatusEvent,
   PushMessageEvent,
   PushScene,
-  PushSystemEvent,
 } from './types';
 
 /** OlPush 的 SSO 命令名。 */
 export const MSG_PUSH_CMD = 'trpc.msg.olpush.OlPushService.MsgPush';
 
-/** 客户端消息回执（已发送消息被服务端确认），不在 `MsgPush` 通道上。 */
+/** 客户端消息回执（本机发出的私聊消息被服务端确认），不在 `MsgPush` 通道上。 */
 export const CLIENT_MESSAGE_RECEIPT_CMD = 'trpc.msg.olpush.OlPushService.ClientMessageReceipt';
+
+/** 群/私聊聊天消息的 `msgType`（含历史漫游、文件、转发）。 */
+const MESSAGE_TYPES = new Set([82, 141, 166, 9, 208, 529]);
+
+/**
+ * QQ NT 把这几类 C2C push 当控制信号走 `OnRecvSysMsg`，不进聊天列表。
+ * 照 SnowLuma 的 `blank-filter`：`(msgType, c2cCmd)` 同时命中才丢。
+ */
+const C2C_CONTROL_TYPES = new Set([141, 166, 167]);
+const C2C_CONTROL_CMDS = new Set([1, 73, 75, 129, 131, 133, 135, 192]);
+
+const DEFAULT_REGISTRY = createMsgPushRegistry();
 
 /** `MsgPush` 顶层：tag 1 可重复，所以先收集全部 body 再分发。 */
 export interface DecodedPushEnvelope {
@@ -43,6 +50,10 @@ export interface DecodedPushEnvelope {
 export interface DecodePushOptions {
   /** 保留每条消息的原始 `PUSH_MSG_BODY` 字节（诊断用，默认关）。 */
   keepRaw?: boolean;
+  /** 自定义分派表（测试 / 协议扩展用）。 */
+  registry?: MsgPushRegistry;
+  /** 跨帧系统消息去重；不传则不去重。 */
+  dedup?: SysMsgDedup;
 }
 
 /** 只解包壳，不做业务分类。历史 / 合并转发抓到的也是这份结构。 */
@@ -65,10 +76,12 @@ export function decodePushEnvelope(body: Uint8Array): DecodedPushEnvelope {
 export function decodePushBody(body: Uint8Array, options: DecodePushOptions = {}): PushEvent[] {
   const { messages } = decodePushEnvelope(body);
   const out: PushEvent[] = [];
+  const registry = options.registry ?? DEFAULT_REGISTRY;
 
   for (const raw of messages) {
     const msgType = raw.contentHead?.msgType ?? 0;
     const subType = raw.contentHead?.subType ?? 0;
+    const c2cCmd = raw.contentHead?.c2cCmd ?? 0;
     const time = raw.contentHead?.timestamp ?? 0;
     const fromUin = raw.responseHead?.fromUin ?? 0;
     const fromUid = raw.responseHead?.fromUid ?? '';
@@ -76,79 +89,93 @@ export function decodePushBody(body: Uint8Array, options: DecodePushOptions = {}
     const groupUin = raw.responseHead?.grp?.groupUin ?? 0;
     const content = raw.body?.msgContent ?? new Uint8Array(0);
 
-    switch (msgType) {
-      case 82:
-      case 141:
-      case 166:
-      case 9:
-      case 208:
-      case 529:
-        out.push(messageEvent(raw, options));
-        break;
+    // 控制类 C2C push：QQ 自己不渲染，解码出来只会是脏元素。
+    if (C2C_CONTROL_TYPES.has(msgType) && C2C_CONTROL_CMDS.has(c2cCmd)) continue;
 
-      case 528: {
-        const specific = decode0x210(subType, time, content);
-        out.push(
-          specific ?? {
-            kind: 'system',
-            msgType,
-            subType,
-            time,
-            fromUin,
-            fromUid,
-            toUin,
-            groupUin,
-            content,
-          },
-        );
-        break;
-      }
-
-      case 732: {
-        const specific = decode0x2DC(subType, time, groupUin, content);
-        out.push(
-          specific ?? {
-            kind: 'system',
-            msgType,
-            subType,
-            time,
-            fromUin,
-            fromUid,
-            toUin,
-            groupUin,
-            content,
-          },
-        );
-        break;
-      }
-
-      default:
-        out.push({
-          kind: 'system',
-          msgType,
-          subType,
-          time,
-          fromUin,
-          fromUid,
-          toUin,
-          groupUin,
-          content,
-        } satisfies PushSystemEvent);
+    if (MESSAGE_TYPES.has(msgType)) {
+      const event = messageEvent(raw, options);
+      if (!event) continue; // 空消息（[空消息] 幽灵推送）
+      if (options.dedup?.seenDuplicate(raw)) continue;
+      out.push(event);
+      continue;
     }
+
+    if (options.dedup?.seenDuplicate(raw)) continue;
+
+    out.push(
+      registry.decode(raw) ?? {
+        kind: 'system',
+        msgType,
+        subType,
+        time,
+        fromUin,
+        fromUid,
+        toUin,
+        groupUin,
+        content,
+      },
+    );
   }
 
   return out;
 }
 
-/** 完整一帧：`MsgPush` 走业务解码，其余命令原样交给上层（KickNT 等）。 */
+/** 完整一帧：`MsgPush` 走业务解码，回执单独解，其余原样交给上层（KickNT 等）。 */
 export function decodePushFrame(
   frame: { command: string; body: Uint8Array; seq: number },
   options: DecodePushOptions = {},
 ): PushEvent[] {
-  if (frame.command !== MSG_PUSH_CMD) {
-    return [{ kind: 'other', command: frame.command, body: frame.body, seq: frame.seq }];
+  if (frame.command === MSG_PUSH_CMD) return decodePushBody(frame.body, options);
+  if (frame.command === CLIENT_MESSAGE_RECEIPT_CMD) {
+    const receipt = decodeClientMessageReceipt(frame.body);
+    if (receipt) return [receipt];
   }
-  return decodePushBody(frame.body, options);
+  return [{ kind: 'other', command: frame.command, body: frame.body, seq: frame.seq }];
+}
+
+/**
+ * 客户端消息回执。
+ *
+ * 信封（照 SnowLuma 实测）：`{1: 1}`、`{2: u16le = 0}`、`{4: u32le clientSeq}`、
+ * `{8..: peerUid}`（长度在 `[1]`），尾部是 `SendMessageResponse`。只解出
+ * 「哪个会话、哪条客户端序号被确认」，不在这里回查历史。
+ */
+export function decodeClientMessageReceipt(body: Uint8Array): PushClientReceiptEvent | null {
+  if (body.length < 12) return null;
+  const peerLength = body[1]!;
+  const ackOffset = 8 + peerLength;
+  if (
+    body[0] !== 1 ||
+    (body[2]! | (body[3]! << 8)) !== 0 ||
+    peerLength < 3 ||
+    peerLength > 128 ||
+    ackOffset >= body.length
+  ) {
+    return null;
+  }
+  const peerUid = new TextDecoder().decode(body.subarray(8, ackOffset));
+  const clientSequence = body[4]! | (body[5]! << 8) | (body[6]! << 16) | (body[7]! << 24);
+  if (!/^u_[A-Za-z0-9_-]+$/.test(peerUid) || clientSequence === 0) return null;
+
+  const ack = decode(SEND_MESSAGE_RESPONSE, body.subarray(ackOffset)) as {
+    result?: number;
+    reviewResult?: number;
+    serverResult?: { code?: number };
+    privateSequence?: number;
+    groupSequence?: number;
+    timestamp1?: number;
+  };
+  if ((ack.result ?? 0) !== 0 || (ack.reviewResult ?? 0) !== 0) return null;
+  if ((ack.serverResult?.code ?? 0) !== 0) return null;
+  if (!ack.privateSequence || (ack.groupSequence ?? 0) !== 0) return null;
+
+  return {
+    kind: 'client-receipt',
+    time: ack.timestamp1 ?? Math.floor(Date.now() / 1000),
+    peerUid,
+    clientSequence,
+    sequence: ack.privateSequence,
+  };
 }
 
 /**
@@ -161,11 +188,20 @@ export function decodeMessageBodies(
   bodies: readonly RawMessageBody[],
   options: DecodePushOptions = {},
 ): PushMessageEvent[] {
-  return bodies.map((raw) => messageEvent(raw, options));
+  return bodies
+    .map((raw) => messageEvent(raw, options))
+    .filter((event): event is PushMessageEvent => event !== null);
 }
 
-function messageEvent(raw: RawMessageBody, options: DecodePushOptions): PushMessageEvent {
+function messageEvent(
+  raw: RawMessageBody,
+  options: DecodePushOptions,
+): PushMessageEvent | null {
   const message = decodeMessageBody(raw);
+  // 空消息（无元素、无 msgContent）是 QQ 的「[空消息]」幽灵推送。
+  if (message.elements.length === 0 && (raw.body?.msgContent?.length ?? 0) === 0) {
+    return null;
+  }
   const scene: PushScene = raw.responseHead?.grp?.groupUin
     ? 'group'
     : message.head.msgType === 141
@@ -178,99 +214,4 @@ function messageEvent(raw: RawMessageBody, options: DecodePushOptions): PushMess
     message,
     ...(bytes ? { raw: bytes } : {}),
   };
-}
-
-function decode0x210(
-  subType: number,
-  time: number,
-  content: Uint8Array,
-): PushInputStatusEvent | PushFriendRecallEvent | null {
-  if (subType === 277) {
-    try {
-      const notify = decode(INPUT_STATUS_NOTIFY, content) as {
-        fromUid?: string;
-        toUid?: string;
-        notifyItem?: { eventType?: number; statusText?: string };
-      };
-      if (!notify.fromUid) return null;
-      const eventType = notify.notifyItem?.eventType ?? 1;
-      return {
-        kind: 'input-status',
-        time,
-        fromUid: notify.fromUid,
-        toUid: notify.toUid ?? '',
-        eventType,
-        text:
-          notify.notifyItem?.statusText ??
-          (eventType === 3 ? '对方正在讲话...' : '对方正在输入...'),
-      };
-    } catch {
-      return null;
-    }
-  }
-
-  if (subType === 138 || subType === 139) {
-    try {
-      const recall = decode(FRIEND_RECALL, content) as {
-        info?: { fromUid?: string; toUid?: string; clientSequence?: number; time?: number };
-      };
-      if (!recall.info) return null;
-      const recalledBySelf = subType === 139;
-      return {
-        kind: 'friend-recall',
-        time: recall.info.time ?? time,
-        fromUid: recall.info.fromUid ?? '',
-        toUid: recall.info.toUid ?? '',
-        clientSequence: recall.info.clientSequence ?? 0,
-        recalledBySelf,
-      } satisfies PushFriendRecallEvent;
-    } catch {
-      return null;
-    }
-  }
-
-  return null;
-}
-
-function decode0x2DC(
-  subType: number,
-  time: number,
-  groupUin: number,
-  content: Uint8Array,
-): PushGroupRecallEvent | null {
-  if (subType !== 17) return null;
-  const payload = unwrapGroupNotify(content);
-  if (!payload) return null;
-  try {
-    const notify = decode(GROUP_NOTIFY_BODY, payload) as {
-      groupUin?: number;
-      operatorUid?: string;
-      recall?: {
-        operatorUid?: string;
-        recallMessages?: { sequence?: number; time?: number; authorUid?: string }[];
-      };
-    };
-    const recalled = notify.recall?.recallMessages?.[0];
-    if (!recalled) return null;
-    return {
-      kind: 'group-recall',
-      time: recalled.time ?? time,
-      groupUin: notify.groupUin ?? groupUin,
-      operatorUid: notify.recall?.operatorUid || notify.operatorUid || '',
-      authorUid: recalled.authorUid ?? '',
-      sequence: recalled.sequence ?? 0,
-    };
-  } catch {
-    return null;
-  }
-}
-
-/** 0x2dc 的 content 前 7 字节是壳，长度字段可能是 BE 也可能是 LE（照 SnowLuma）。 */
-function unwrapGroupNotify(content: Uint8Array): Uint8Array | null {
-  if (content.length <= 7) return null;
-  const lenBe = (content[5]! << 8) | content[6]!;
-  const lenLe = content[5]! | (content[6]! << 8);
-  if (7 + lenBe <= content.length) return content.subarray(7, 7 + lenBe);
-  if (7 + lenLe <= content.length) return content.subarray(7, 7 + lenLe);
-  return content.subarray(7);
 }

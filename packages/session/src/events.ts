@@ -54,6 +54,13 @@ export interface InboundMessage {
   messageId: string;
   /** 会话内序号。 */
   seq: number;
+  /**
+   * 发送方客户端序号（C2C 才有）。`delete_msg` / 引用要拿它定位原消息，
+   * 但 QQ 只在私聊 push 的 contentHead 里给，群聊用 `seq`。
+   */
+  clientSequence?: number;
+  /** NT 会话序号（跨双方递增）；群聊没有这个字段。 */
+  ntMsgSeq?: number;
   /** 秒级时间戳。 */
   time: number;
   scene: MessageScene;
@@ -148,4 +155,5 @@ export type BotEventMap = {
   heartbeat: Extract<SessionEvent, { type: 'heartbeat' }>;
   message: InboundMessage;
   notice: NoticeEvent;
+  request: RequestEvent;
 };

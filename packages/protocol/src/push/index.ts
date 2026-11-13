@@ -9,6 +9,7 @@
 
 export {
   CLIENT_MESSAGE_RECEIPT_CMD,
+  decodeClientMessageReceipt,
   decodeMessageBodies,
   decodePushBody,
   decodePushEnvelope,
@@ -17,6 +18,8 @@ export {
   type DecodedPushEnvelope,
   type DecodePushOptions,
 } from './decode';
+export { SysMsgDedup } from './dedup';
+export { createMsgPushRegistry, MsgPushRegistry, type PushDecoder } from './registry';
 export {
   FRIEND_RECALL,
   GROUP_NOTIFY_BODY,
@@ -24,12 +27,22 @@ export {
   MSG_PUSH_ENVELOPE,
 } from './schemas';
 export type {
+  PushClientReceiptEvent,
   PushEvent,
+  PushFriendAddEvent,
   PushFriendRecallEvent,
+  PushFriendRequestEvent,
+  PushGroupAdminEvent,
+  PushGroupEssenceEvent,
+  PushGroupMemberEvent,
+  PushGroupMuteEvent,
+  PushGroupReactionEvent,
   PushGroupRecallEvent,
+  PushGroupRequestEvent,
   PushInputStatusEvent,
   PushMessageEvent,
   PushOtherEvent,
+  PushPokeEvent,
   PushScene,
   PushSystemEvent,
 } from './types';
