@@ -31,6 +31,8 @@ import { WsServerAdapter } from './network/ws-server';
 interface NetworkAdapter {
   broadcast(event: JsonObject): void;
   stop(): Promise<void>;
+  /** `report_self_message`：false 时不推自己发出的消息。 */
+  readonly reportSelfMessage: boolean;
 }
 
 export interface ActionDispatchOptions {
@@ -155,7 +157,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
               sequence: message.seq,
               sequenceAuthoritative: true,
               eventName: message.scene,
-              clientSequence: 0,
+              clientSequence: message.clientSequence ?? 0,
               random: 0,
               timestamp: message.time,
             },
@@ -167,7 +169,12 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
       event,
     );
     if (!converted) return;
-    for (const network of networks) network.broadcast(converted);
+    // 自己发出的消息保留 `message_sent` 语义；只有声明要收的连接才推。
+    const selfMessage = converted.post_type === 'message_sent';
+    for (const network of networks) {
+      if (selfMessage && !network.reportSelfMessage) continue;
+      network.broadcast(converted);
+    }
     // 消息事件补存完整快照（`get_msg` 用）。
     if (event.type === 'message') {
       const id = messageIds.intern({
@@ -183,7 +190,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
           sequence: event.message.seq,
           sequenceAuthoritative: true,
           eventName: event.message.scene,
-          clientSequence: 0,
+          clientSequence: event.message.clientSequence ?? 0,
           random: 0,
           timestamp: event.message.time,
         },

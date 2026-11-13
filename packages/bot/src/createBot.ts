@@ -31,7 +31,7 @@ import type {
   SessionState,
   StoredAccount,
 } from '@weqbot/session';
-import { PushBridge, SessionStateMachine } from '@weqbot/session';
+import { IdentityCache, PushBridge, SessionStateMachine } from '@weqbot/session';
 import { createOneBotAdapter, type OneBotAdapter } from '@weqbot/onebot';
 import type { ProtocolClient } from '@weqbot/protocol';
 import { createProtocolClient } from '@weqbot/protocol';
@@ -71,6 +71,12 @@ export function createBot(options: CreateBotOptions): Bot {
   const events = new TypedEventBus<BotEventMap>();
   const machine = new SessionStateMachine();
   const uin = config.account.uin;
+  /**
+   * uid ↔ uin 观测缓存。推送层与 OneBot 后端共用同一份：消息里看到的 uid，
+   * 撤回 / `@` / 群管理动作马上就能反查到 uin，否则这些 action 只能报
+   * 「未观测到 uid」。重登不清空（同一批联系人仍然有效）。
+   */
+  const identity = new IdentityCache();
 
   let session: OpenedSession | undefined;
   let protocol: ProtocolClient | undefined;
@@ -145,6 +151,31 @@ export function createBot(options: CreateBotOptions): Bot {
 
   function makeSecToken(account: StoredAccount): string {
     return (options.secToken ?? (() => generateSecToken()))(account);
+  }
+
+  /**
+   * 等首屏同步到位。
+   *
+   * native 的 `openSession` 最多等 15s；慢账号在这之后才收敛。这里按
+   * `config.session.syncGraceMs`（默认 15s）轮询 `getSession`，拿到 `synced`
+   * 就继续上线。没有 `getSession` 能力时直接返回 false —— 不能靠猜。
+   */
+  async function waitForSynced(sessionId: number): Promise<boolean> {
+    if (!native.getSession) return false;
+    const graceMs = config.session?.syncGraceMs ?? 15_000;
+    if (graceMs <= 0) return false;
+    const deadline = Date.now() + graceMs;
+    while (Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 500));
+      try {
+        const info = await native.getSession(sessionId);
+        if (info?.state === 'closed') return false;
+        if (info?.synced) return true;
+      } catch (cause) {
+        log.warn('查询首屏同步状态失败（继续等）', { uin, cause });
+      }
+    }
+    return false;
   }
 
   /**
@@ -258,6 +289,7 @@ export function createBot(options: CreateBotOptions): Bot {
     }
     log.info('换票成功', { uin, uid });
     selfUid = uid;
+    identity.observe(uid, uin);
 
     // 服务端可能在登录过程中轮换 a1；拿到就写回，避免下次还用旧值。
     if (login.a1 && login.a1.length > 0 && !bytesEqual(login.a1, stored.a1)) {
@@ -297,15 +329,24 @@ export function createBot(options: CreateBotOptions): Bot {
     if (!Number.isInteger(opened.sessionId) || opened.sessionId < 1) {
       throw new WeqBotError('REGISTER_FAILED', `native 返回了非法会话 ID ${opened.sessionId}`);
     }
-    if (!opened.registered || !opened.synced || opened.state !== 'online') {
-      throw new WeqBotError('REGISTER_FAILED', 'openSession 返回但尚未完成注册 / 首屏同步', {
-        fields: {
-          sessionId: opened.sessionId,
-          registered: opened.registered,
-          synced: opened.synced,
-          state: opened.state,
-        },
+    if (!opened.registered) {
+      throw new WeqBotError('REGISTER_FAILED', 'openSession 返回但注册未成功', {
+        fields: { sessionId: opened.sessionId, state: opened.state },
       });
+    }
+    if (!opened.synced) {
+      // 慢账号：native 的 15s 到了但首屏还没收敛。再等一段，仍不到才失败。
+      const synced = await waitForSynced(opened.sessionId);
+      if (!synced) {
+        if (native.closeSession) {
+          await native.closeSession(opened.sessionId, 'sync-timeout').catch(() => undefined);
+        }
+        throw new WeqBotError('REGISTER_FAILED', '首屏同步超时，未上线（已关闭会话）', {
+          fields: { sessionId: opened.sessionId },
+        });
+      }
+      opened.synced = true;
+      opened.state = 'online';
     }
     session = opened;
     protocol = createProtocolClient({ native, sessionId: opened.sessionId });
@@ -313,6 +354,7 @@ export function createBot(options: CreateBotOptions): Bot {
       selfUin: uin,
       selfUid: uid,
       keepRaw: config.keepRaw ?? false,
+      identity,
     });
 
     offPush = await native.attachPushSink!(
@@ -330,6 +372,7 @@ export function createBot(options: CreateBotOptions): Bot {
           for (const event of result.events) {
             if (event.type === 'message') events.emit('message', event.message);
             else if (event.type === 'notice') events.emit('notice', event);
+            else if (event.type === 'request') events.emit('request', event);
             events.emit('event', event);
           }
         } catch (cause) {
@@ -374,14 +417,10 @@ export function createBot(options: CreateBotOptions): Bot {
         selfUin: uin,
         ...(selfUid ? { selfUid: selfUid } : {}),
         logger: log,
-        ...(pushBridge
-          ? {
-              resolveUidUin: {
-                uinByUid: (targetUid: string) => pushBridge?.resolveUin(targetUid),
-                uidByUin: () => undefined,
-              },
-            }
-          : {}),
+        resolveUidUin: {
+          uinByUid: (targetUid: string) => identity.uinOf(targetUid),
+          uidByUin: (targetUin: string) => identity.uidOf(targetUin),
+        },
       });
       const adapter = createOneBotAdapter({
         config: config.onebot,

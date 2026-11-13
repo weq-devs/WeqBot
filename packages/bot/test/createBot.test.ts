@@ -44,7 +44,8 @@ const ACCOUNT: StoredAccount = {
   device: DEVICE,
 };
 
-const CONFIG: BotConfig = { account: { uin: ACCOUNT.uin } };
+// `syncGraceMs: 0`：测试断言的是「未同步就不上线」，不需要额外等 15s。
+const CONFIG: BotConfig = { account: { uin: ACCOUNT.uin }, session: { syncGraceMs: 0 } };
 
 /** 测试里不需要日志噪声；错误级别保留，失败时还能看到原因。 */
 const SILENT = createLogger('test', { level: 'error' });
@@ -332,6 +333,46 @@ test('start: openSession 未完成首屏同步时拒绝上线', async () => {
     return true;
   });
   assert.notEqual(bot.state, 'online');
+});
+
+test('慢账号：首屏同步在宽限期内到达就继续上线', async () => {
+  const { vault } = makeVault();
+  let polls = 0;
+  const harness = makeNative({
+    openSession: async () => ({
+      sessionId: 9,
+      uin: ACCOUNT.uin,
+      uid: ACCOUNT.uid,
+      mode: 2,
+      state: 'open',
+      registered: true,
+      synced: false,
+    }),
+    getSession: async () => {
+      polls += 1;
+      const synced = polls >= 2;
+      return {
+        sessionId: 9,
+        uin: ACCOUNT.uin,
+        uid: ACCOUNT.uid,
+        mode: 2,
+        state: synced ? 'online' : 'open',
+        registered: true,
+        synced,
+        lastEventAt: null,
+      };
+    },
+  });
+  const bot = createBot({
+    config: { account: { uin: ACCOUNT.uin }, session: { syncGraceMs: 3000 } },
+    native: harness.native,
+    vault,
+    logger: SILENT,
+  });
+
+  await bot.start();
+  assert.equal(bot.state, 'online');
+  assert.ok(polls >= 2);
 });
 
 test('推送通道错误会变成 error 事件，不打断会话', async () => {

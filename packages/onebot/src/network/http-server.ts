@@ -35,6 +35,11 @@ export class HttpServerAdapter {
     return (this.options.path ?? '/').replace(/\/$/, '') || '';
   }
 
+  /** `report_self_message`：为 false 的连接不推 `message_sent`。 */
+  get reportSelfMessage(): boolean {
+    return this.options.reportSelfMessage ?? true;
+  }
+
   async start(): Promise<number> {
     const server = createServer((request, response) => {
       void this.handle(request, response);

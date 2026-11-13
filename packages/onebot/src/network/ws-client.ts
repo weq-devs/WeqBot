@@ -41,6 +41,11 @@ export class WsClientAdapter {
     return this.options.role ?? 'Universal';
   }
 
+  /** `report_self_message`：为 false 的连接不推 `message_sent`。 */
+  get reportSelfMessage(): boolean {
+    return this.options.reportSelfMessage ?? true;
+  }
+
   start(): void {
     this.stopped = false;
     this.connect();

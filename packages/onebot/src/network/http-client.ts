@@ -40,5 +40,10 @@ export class HttpClientAdapter {
     }
   }
 
+  /** `report_self_message`：为 false 的连接不推 `message_sent`。 */
+  get reportSelfMessage(): boolean {
+    return this.options.reportSelfMessage ?? true;
+  }
+
   async stop(): Promise<void> {}
 }

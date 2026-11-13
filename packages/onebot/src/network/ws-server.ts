@@ -53,6 +53,11 @@ export class WsServerAdapter {
     return this.options.role ?? 'Universal';
   }
 
+  /** `report_self_message`：为 false 的连接不推 `message_sent`。 */
+  get reportSelfMessage(): boolean {
+    return this.options.reportSelfMessage ?? true;
+  }
+
   private get path(): string {
     return this.options.path ?? '/';
   }

@@ -31,6 +31,16 @@ export interface BotConfig {
      */
     dbPath?: string;
   };
+  session?: {
+    /**
+     * 首屏同步的额外等待（ms），默认 15s。
+     *
+     * native 的 `openSession` 自己等 15s；慢账号的 `InfoSyncPush` 可能更晚到。
+     * 这里再等一段（轮询 `getSession`），拿到了就正常上线，不把「稍慢」
+     * 当成注册失败去反复重登。等不到仍然报 `REGISTER_FAILED`，**不会假装在线**。
+     */
+    syncGraceMs?: number;
+  };
   secToken?: {
     /**
      * 原地轮换 `SecToken` 的间隔（ms），默认 24h。
