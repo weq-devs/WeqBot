@@ -18,7 +18,8 @@
     "check": "biome check .",
     "check:pure-ts": "node scripts/check-pure-ts.mjs",
     "test": "node --import tsx --test \"packages/*/test/*.test.ts\"",
-    "verify": "pnpm run check:pure-ts && pnpm run typecheck && pnpm run test"
+    "verify": "pnpm run check:pure-ts && pnpm run typecheck && pnpm run test",
+    "sign:audit": "tsx scripts/sign-audit.mjs"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.7",

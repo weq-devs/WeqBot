@@ -35,6 +35,12 @@ export { sendOidb, sendPacket } from './transport';
  * 表里逐条登记，禁止取并集。
  */
 export type { PacketNative, OidbNative, TrpcNative, OidbRequest } from './transport';
+export {
+  auditSignRules,
+  formatSignAudit,
+  MEASURED_COMMANDS,
+  type SignAuditEntry,
+} from './sign-audit';
 export { oidbCommand, resolveSign, SIGN_RULES, UNCONFIRMED_SIGN_COMMANDS } from './sign-policy';
 export type { ResolvedSign, SignMode, SignRule } from './sign-policy';
 
