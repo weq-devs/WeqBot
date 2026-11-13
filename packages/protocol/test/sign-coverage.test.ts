@@ -42,9 +42,11 @@ function collectSpecCommands(root: string): SpecCommand[] {
 
     const command = /export const command = (0x[0-9a-fA-F]+)/.exec(source);
     if (!command) continue;
+    // 动态子命令（0x9082 / 0xf90）由 resolveSubCommand 决定，静态 `subCommand`
+    // 要么不存在、要么属于同文件里的另一个 namespace（0xf90 与 0x9474 同文件，
+    // 拼出来会得到从未存在的 `0xf90_0`）。这类命令各自按 sub 显式登记，跳过。
+    if (source.includes('export const resolveSubCommand')) continue;
     const subCommand = /export const subCommand = (\d+)/.exec(source);
-    // 动态子命令（0x9082 / 0xf90）由 resolveSubCommand 决定；它们各自有显式登记，
-    // 这里用占位 0 跳过，避免误报。
     if (!subCommand) continue;
 
     found.push({

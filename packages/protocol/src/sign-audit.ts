@@ -20,9 +20,9 @@ export type Platform = NodeJS.Platform;
 /**
  * 每条规则的证据等级。
  *
- * 目前只有 Linux 有系统性的真机观测（`scripts/probe-sign.ts`，2026-11-13）。
- * Windows / macOS 的结论绝大多数是从 Linux 或彼此推断出来的 —— 这不是
- * 「没测过所以不能用」，而是「用之前要在本平台验一遍」。
+ * Linux 有系统性真机观测（`scripts/probe-sign.ts`，2026-11-13）；Windows /
+ * macOS 于 2026-11-14 补测了此前未登记的那批命令，但**绝大部分已登记规则
+ * 仍是推断结论** —— 这不是「没测过所以不能用」，而是「用之前要在本平台验一遍」。
  */
 export interface SignEvidence {
   linux: 'measured' | 'inferred' | 'none';
@@ -38,6 +38,8 @@ export interface SignEvidence {
  */
 export const MEASURED_COMMANDS: Readonly<Record<string, ReadonlyArray<keyof SignEvidence>>> = {
   // 2026-11-13 Linux（QQ 3.2.35-54395），probe-sign 真机观测。
+  // 同一命令若后来又补测了别的平台，把该平台追加进同一个数组（见文件末尾
+  // 的 2026-11-14 块），不要重复建 key。
   'OidbSvcTrpcTcp.0xfd4_1': ['linux'],
   'OidbSvcTrpcTcp.0xfe5_2': ['linux'],
   'OidbSvcTrpcTcp.0xfe7_3': ['linux'],
@@ -71,7 +73,6 @@ export const MEASURED_COMMANDS: Readonly<Record<string, ReadonlyArray<keyof Sign
   'OidbSvcTrpcTcp.0x967d_0': ['linux'],
   'OidbSvcTrpcTcp.0x967e_0': ['linux'],
   'OidbSvcTrpcTcp.0x1097_1': ['linux'],
-  'OidbSvcTrpcTcp.0xf16_1': ['linux'],
   'OidbSvcTrpcTcp.0x6d6_2': ['linux'],
   'OidbSvcTrpcTcp.0x6d6_3': ['linux'],
   'OidbSvcTrpcTcp.0x6d8_1': ['linux'],
@@ -86,7 +87,6 @@ export const MEASURED_COMMANDS: Readonly<Record<string, ReadonlyArray<keyof Sign
   'OidbSvcTrpcTcp.0xe07_0': ['linux'],
   'OidbSvcTrpcTcp.0xdc2_34': ['linux'],
   'OidbSvcTrpcTcp.0x112a_2': ['linux'],
-  'OidbSvcTrpcTcp.0x1255_0': ['linux'],
   'OidbSvcTrpcTcp.0x1124_1': ['linux'],
   'OidbSvcTrpcTcp.0x1125_1': ['linux'],
   'OidbSvcTrpcTcp.0x1126_1': ['linux'],
@@ -99,6 +99,31 @@ export const MEASURED_COMMANDS: Readonly<Record<string, ReadonlyArray<keyof Sign
   'OidbSvcTrpcTcp.0x9084_1': ['linux'],
   'OidbSvcTrpcTcp.0xed3_1': ['linux'],
   'OidbSvcTrpcTcp.0xeb7_1': ['linux'],
+
+  // 2026-11-14 Windows（QQ 9.9.35）/ macOS 双端 probe-sign 真机观测，全部不签名。
+  // 这批原先只在 UNCONFIRMED_SIGN_COMMANDS 里挂着「未实测」，运行时静默按不签名
+  // 发包；实测确认后才敢写成 SIGN_RULES 的 sign: 'none'。
+  'MQUpdateSvc_com_qq_ti.web.OidbSvc.0xeb1_1': ['win32', 'darwin'],
+  'OidbSvc.0x4ff_9_IMCore': ['win32', 'darwin'],
+  'OidbSvc.0xcf4': ['win32', 'darwin'],
+  'OidbSvcTrpcTcp.0x10eb_1': ['win32', 'darwin'],
+  'OidbSvcTrpcTcp.0x1290_0': ['win32', 'darwin'],
+  'OidbSvcTrpcTcp.0x1291_0': ['win32', 'darwin'],
+  'OidbSvcTrpcTcp.0x1292_0': ['win32', 'darwin'],
+  'OidbSvcTrpcTcp.0x5d6_1': ['win32', 'darwin'],
+  'OidbSvcTrpcTcp.0x5d6_18': ['win32', 'darwin'],
+  'OidbSvcTrpcTcp.0x6d6_0': ['win32', 'darwin'],
+  'OidbSvcTrpcTcp.0xf90_1': ['win32', 'darwin'],
+  'OidbSvcTrpcTcp.0xf90_2': ['win32', 'darwin'],
+  'OidbSvcTrpcTcp.0xf90_3': ['win32', 'darwin'],
+  'pttTrans.TransC2CPttReq': ['win32', 'darwin'],
+  'pttTrans.TransGroupPttReq': ['win32', 'darwin'],
+  'trpc.qqrtc.av_appsvr.AvAppsvr.SsoAcceptInvite': ['win32', 'darwin'],
+  'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoDeleteUser': ['win32', 'darwin'],
+  'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoEnterRoom': ['win32', 'darwin'],
+  // 这两条 Linux 侧早前已实测（见上），三端证据齐全。
+  'OidbSvcTrpcTcp.0x1255_0': ['linux', 'win32', 'darwin'],
+  'OidbSvcTrpcTcp.0xf16_1': ['linux', 'win32', 'darwin'],
 };
 
 export interface SignAuditEntry {

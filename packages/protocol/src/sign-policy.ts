@@ -176,7 +176,8 @@ export const SIGN_RULES = {
   // ─── 2026-11-13 Linux 真机实测（probe-sign，QQ 3.2.35-54395）────────────────
   // 这批是从 SnowLuma 搬入的新命令。全部实测**不签名**（reserved 完整解析、
   // 无 tag 24）；其中 0xfd4_1 / 0xfe5_2 用真实业务正文复测过，不是占位正文。
-  // Windows / macOS 未测：先按 Linux 结论登记，等三端实测后按需改成逐端声明。
+  // Windows / macOS 当时未测，先按 Linux 结论登记；其中 0xf16_1 已于
+  // 2026-11-14 在两端补测，同样不签（见下方那批），其余待测。
   'OidbSvcTrpcTcp.0x126b_0': { sign: 'none' }, // 删好友
   'OidbSvcTrpcTcp.0x912e_0': { sign: 'none' }, // 设好友备注（2026-11-13 Linux 实测）
   'OidbSvcTrpcTcp.0x912f_0': { sign: 'none' }, // 清好友备注（同族，Linux 实测不签）
@@ -210,6 +211,30 @@ export const SIGN_RULES = {
   'QunAlbum.trpc.qzone.webapp_qun_operation.FeedsWriter.DoQunLike': { sign: 'none' },
   'QunAlbum.trpc.qzone.webapp_qun_feeds.FeedsReader.GetQunFeedDetail': { sign: 'none' },
   'QunAlbum.trpc.qzone.webapp_qun_operation.FeedsWriter.DoQunComment': { sign: 'none' },
+  // ─── 2026-11-14 Windows / macOS 真机实测（probe-sign）──────────────────────
+  // 这批此前只有「未实测」的记录，运行时静默按不签名发包。2026-11-14 在
+  // Windows（QQ 9.9.35）与 macOS 分别实测，20 条**全部不签名**（reserved
+  // 完整解析、无 tag 24，命令正常发出）。Linux 未单独复测，按两端结论推断。
+  'MQUpdateSvc_com_qq_ti.web.OidbSvc.0xeb1_1': { sign: 'none' }, // 好友线索
+  'OidbSvc.0x4ff_9_IMCore': { sign: 'none' }, // 旧资料写入
+  'OidbSvc.0xcf4': { sign: 'none' }, // 共同群查询
+  'OidbSvcTrpcTcp.0x10eb_1': { sign: 'none' }, // 好友跨分组移动
+  'OidbSvcTrpcTcp.0x1255_0': { sign: 'none' }, // 好友分组设置
+  'OidbSvcTrpcTcp.0x1290_0': { sign: 'none' }, // 已废弃的群通话 OIDB 旧模型
+  'OidbSvcTrpcTcp.0x1291_0': { sign: 'none' }, // 同上
+  'OidbSvcTrpcTcp.0x1292_0': { sign: 'none' }, // 同上
+  'OidbSvcTrpcTcp.0x5d6_1': { sign: 'none' }, // 群置顶
+  'OidbSvcTrpcTcp.0x5d6_18': { sign: 'none' }, // 好友置顶
+  'OidbSvcTrpcTcp.0x6d6_0': { sign: 'none' }, // 群文件上传申请
+  'OidbSvcTrpcTcp.0xf16_1': { sign: 'none' }, // 群备注
+  'OidbSvcTrpcTcp.0xf90_1': { sign: 'none' }, // 设置群待办
+  'OidbSvcTrpcTcp.0xf90_2': { sign: 'none' }, // 完成群待办
+  'OidbSvcTrpcTcp.0xf90_3': { sign: 'none' }, // 取消群待办
+  'pttTrans.TransC2CPttReq': { sign: 'none' }, // 私聊语音转写
+  'pttTrans.TransGroupPttReq': { sign: 'none' }, // 群语音转写
+  'trpc.qqrtc.av_appsvr.AvAppsvr.SsoAcceptInvite': { sign: 'none' },
+  'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoDeleteUser': { sign: 'none' },
+  'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoEnterRoom': { sign: 'none' },
   'Faceroam.OpReq': { sign: 'none' },
   'ImgStore.BDHExpressionRoam': { sign: 'none' },
   'scupdate.handle': { sign: 'none' },
@@ -229,28 +254,14 @@ export const SIGN_RULES = {
   'trpc.qqva.gift_midground_panel.GiftMidgroundPanel.SsoGetSceneItem': { sign: 'none' },
 } as const satisfies Record<string, SignRule>;
 
-/** 无逐命令签名依据的现有入口；不把默认 false 登记成已确认的不签名策略。 */
+/**
+ * 无逐命令签名依据的现有入口；不把默认 false 登记成已确认的不签名策略。
+ *
+ * 2026-11-14 起原先 20 条「未实测」命令在 Windows / macOS 实测后全部转入
+ * `SIGN_RULES` 的 `sign: 'none'`；仅剩单向好友仍缺三端实测依据。
+ * 新增入口若缺依据，仍登记到这里。
+ */
 export const UNCONFIRMED_SIGN_COMMANDS: Readonly<Record<string, string>> = {
-  'OidbSvcTrpcTcp.0x5d6_1': '群置顶：动态子命令未找到逐项签名记录',
-  'OidbSvcTrpcTcp.0x5d6_18': '好友置顶：动态子命令未找到逐项签名记录',
-  'OidbSvcTrpcTcp.0x6d6_0': '群文件上传申请：现有请求说明未给出签名结论',
-  'OidbSvcTrpcTcp.0xf16_1': '群备注：现有入口未给出签名结论',
-  'OidbSvcTrpcTcp.0xf90_1': '设置群待办：源码明确记载动态子命令未逐个实测',
-  'OidbSvcTrpcTcp.0xf90_2': '完成群待办：源码明确记载动态子命令未逐个实测',
-  'OidbSvcTrpcTcp.0xf90_3': '取消群待办：源码明确记载动态子命令未逐个实测',
-  'OidbSvcTrpcTcp.0x10eb_1': '好友跨分组移动：现有入口未给出签名结论',
-  'OidbSvcTrpcTcp.0x1255_0': '好友分组设置：现有入口未给出签名结论',
-  'OidbSvcTrpcTcp.0x1290_0': '已废弃的群通话 OIDB 旧模型，不是现行群通话命令',
-  'OidbSvcTrpcTcp.0x1291_0': '已废弃的群通话 OIDB 旧模型，不是现行群通话命令',
-  'OidbSvcTrpcTcp.0x1292_0': '已废弃的群通话 OIDB 旧模型，不是现行群通话命令',
-  'OidbSvc.0x4ff_9_IMCore': '旧资料写入：现有入口未给出签名结论',
-  'OidbSvc.0xcf4': '共同群查询：现有入口未给出签名结论',
-  'pttTrans.TransGroupPttReq': '群语音转写：包体样本不能代替 SecInfo 签名证据',
-  'pttTrans.TransC2CPttReq': '私聊语音转写：包体样本不能代替 SecInfo 签名证据',
-  'trpc.qqrtc.av_appsvr.AvAppsvr.SsoAcceptInvite': '仅命令常量，现有三条私聊信令实测声明未覆盖它',
-  'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoEnterRoom': '旧群通话常量，当前群信令抓包记录未覆盖',
-  'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoDeleteUser': '旧群通话常量，当前群信令抓包记录未覆盖',
-  'MQUpdateSvc_com_qq_ti.web.OidbSvc.0xeb1_1': '好友线索：研究文档明确记载签名要求未实测',
   'MQUpdateSvc_com_qq_ti.web.OidbSvc.0xe17_0': '单向好友：JSON 自定义传输，三端签名未实测',
 };
 

@@ -1,17 +1,17 @@
 /**
  * 签名审计的契约测试。
  *
- * 锁两件事：
- *   1. Linux 已实测的命令**不会**出现在 Linux 的待测清单里；
- *   2. Windows / macOS 因为证据都是推断的，清单非空 —— 这正是要给三端
- *      实测窗口的输入。
+ * 锁三件事：
+ *   1. 任一平台已实测的命令**不会**再出现在该平台的待测清单里；
+ *   2. 每个平台都还有推断结论待实测 —— 三端实测尚未完成，清单非空是预期；
+ *   3. 2026-11-14 补测的那批 Windows / macOS 命令已从清单里消失。
  */
 
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { auditSignRules, MEASURED_COMMANDS } from '../src/sign-audit';
 
-test('Linux：已实测的命令不再出现在待测清单', () => {
+test('已实测的命令不再出现在对应平台的待测清单', () => {
   const measuredOnLinux = Object.entries(MEASURED_COMMANDS)
     .filter(([, platforms]) => platforms.includes('linux'))
     .map(([command]) => command);
@@ -23,15 +23,31 @@ test('Linux：已实测的命令不再出现在待测清单', () => {
   }
 });
 
-test('Windows / macOS：仍有大量推断结论待实测', () => {
-  for (const platform of ['win32', 'darwin'] as const) {
+test('每个平台都仍有推断结论待实测', () => {
+  for (const platform of ['linux', 'win32', 'darwin'] as const) {
     const entries = auditSignRules({ platform });
     assert.ok(entries.length > 20, `${platform} 待测清单异常地短（${entries.length}）`);
 
-    // 三端实测还没做：要么是「完全未登记」（missing），要么是「从别的平台
-    // 推断」（inferred）。两者都必须在本平台实测，所以清单非空是预期行为。
+    // 三端实测都还没做全：清单里要么是「完全未登记」（missing），要么是
+    // 「从别的平台推断」（inferred）。两者都必须在本平台实测。
     const inferred = entries.filter((entry) => entry.priority === 'inferred');
     assert.ok(inferred.length > 20, `${platform} 的推断结论应该很多（实测尚未覆盖）`);
+  }
+});
+
+test('2026-11-14 补测的 Windows / macOS 命令已移出待测清单', () => {
+  const measuredOnWindows = Object.entries(MEASURED_COMMANDS)
+    .filter(([, platforms]) => platforms.includes('win32'))
+    .map(([command]) => command);
+  assert.ok(measuredOnWindows.length >= 20, 'Windows 实测记录少于 20 条，检查 MEASURED_COMMANDS');
+
+  for (const platform of ['win32', 'darwin'] as const) {
+    const pending = new Set(auditSignRules({ platform }).map((entry) => entry.command));
+    for (const command of measuredOnWindows) {
+      // 只对确实在该平台测过的命令断言。
+      if (!MEASURED_COMMANDS[command]!.includes(platform)) continue;
+      assert.ok(!pending.has(command), `${command} 已在 ${platform} 实测，不该再出现在清单里`);
+    }
   }
 });
 
