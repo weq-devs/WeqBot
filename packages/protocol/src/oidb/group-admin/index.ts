@@ -47,3 +47,28 @@ export type {
   GroupMemberListPage,
   FetchGroupMemberListParams,
 } from './group-settings';
+
+export { FetchGroupExtInfo, ModifyGroupExtInfo } from './group-ext';
+export type {
+  FetchGroupExtInfoParams,
+  GroupExtRobotOption,
+  ModifyGroupExtInfoParams,
+} from './group-ext';
+
+export {
+  GetAdminPermissions,
+  SetAdminPermissions,
+  KICK_MEMBER_PER_DAY_CHOICES,
+} from './admin-permissions';
+export type {
+  AdminPermissionsSnapshot,
+  GetAdminPermissionsParams,
+  GroupAdminPermissionPatch,
+  SetAdminPermissionsParams,
+} from './admin-permissions';
+
+export { GetAdminReceiveVerify, SetAdminReceiveVerify } from './receive-verify';
+export type {
+  GetAdminReceiveVerifyParams,
+  SetAdminReceiveVerifyParams,
+} from './receive-verify';

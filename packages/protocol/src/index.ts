@@ -63,6 +63,10 @@ export * from './oidb/interaction';
 export * from './oidb/request';
 export * from './oidb/profile';
 export * from './oidb/misc';
+export * from './oidb/contacts';
+export * from './oidb/friend';
+export * from './oidb/sys-faces';
+export * from './oidb/robot';
 // 桌面端写接口继续使用带账号复核和图片校验的头像上传路径。
 export {
   setSelfAvatar,

@@ -12,6 +12,7 @@
 //   - 0xfe7_3 → Linux 不签、Windows 签（macOS 实测前跟 Windows）
 
 import { decode, message } from '../../protobuf';
+import { decodeGroupMemberCard } from '../contacts/group-member-card';
 import { invokeOidb, type OidbSpec } from '../invoke';
 import { toInt } from '../shared';
 import type { OidbNative } from '../../transport';
@@ -344,7 +345,9 @@ const MEMBER_LIST_UIN = message([
   { name: 'uid', tag: 2, type: 'string' },
   { name: 'uin', tag: 4, type: 'uint32' },
 ]);
-const MEMBER_LIST_CARD = message([{ name: 'memberCard', tag: 2, type: 'string' }]);
+// 群名片是 **bytes**，不是 string：纯文本名片与结构化 RichGroupCard 共用这个
+// 字段，按 string 解会把结构化名片整个丢掉（见 `oidb/contacts/group-member-card`）。
+const MEMBER_LIST_CARD = message([{ name: 'memberCard', tag: 2, type: 'bytes' }]);
 const MEMBER_LIST_LEVEL = message([
   { name: 'infos', tag: 1, type: 'uint32', repeated: true },
   { name: 'level', tag: 2, type: 'uint32' },
@@ -398,6 +401,16 @@ const MEMBER_LIST_REQ = message([
   { name: 'body', tag: 4, type: MEMBER_LIST_BODY },
   { name: 'token', tag: 15, type: 'string' },
 ]);
+
+/** 群名片解码失败不影响成员本身：名片只是展示字段，坏了解成空串。 */
+function decodeGroupMemberCardQuietly(value: unknown): string {
+  if (!(value instanceof Uint8Array) || value.length === 0) return '';
+  try {
+    return decodeGroupMemberCard(value);
+  } catch {
+    return '';
+  }
+}
 
 export interface GroupMemberListItem {
   uin: number;
@@ -481,7 +494,7 @@ export namespace FetchGroupMemberListPage {
         uin: toInt(uin.uin),
         uid: typeof uin.uid === 'string' ? uin.uid : '',
         nickname: typeof raw.memberName === 'string' ? raw.memberName : '',
-        card: typeof card.memberCard === 'string' ? card.memberCard : '',
+        card: decodeGroupMemberCardQuietly(card.memberCard),
         permission: toInt(raw.permission),
         level: toInt(level.level),
         specialTitle: typeof raw.specialTitle === 'string' ? raw.specialTitle : '',

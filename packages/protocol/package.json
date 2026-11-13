@@ -8,7 +8,8 @@
     ".": "./src/index.ts",
     "./msg": "./src/msg/index.ts",
     "./push": "./src/push/index.ts",
-    "./protobuf": "./src/protobuf.ts"
+    "./protobuf": "./src/protobuf.ts",
+    "./contacts": "./src/oidb/contacts/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

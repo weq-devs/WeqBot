@@ -46,3 +46,15 @@ export {
 } from './file-id';
 export { fileTypeCode } from './file-type';
 export type { FlashFileTypeCode } from './file-type';
+
+export {
+  DeleteFlashFile,
+  ListFilesets,
+  RenameFlashFile,
+} from './extended';
+export type {
+  DeleteFlashFileParams,
+  FlashFileEntry,
+  ListFilesetsParams,
+  RenameFlashFileParams,
+} from './extended';
