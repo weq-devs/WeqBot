@@ -173,6 +173,26 @@ export const SIGN_RULES = {
   'OidbSvcTrpcTcp.0x93d1_1': { sign: 'none' },
   'OidbSvcTrpcTcp.0x93d3_1': { sign: 'none' },
   'OidbSvcTrpcTcp.0x93db_1': { sign: 'none' },
+  // ─── 2026-11-13 Linux 真机实测（probe-sign，QQ 3.2.35-54395）────────────────
+  // 这批是从 SnowLuma 搬入的新命令。全部实测**不签名**（reserved 完整解析、
+  // 无 tag 24）；其中 0xfd4_1 / 0xfe5_2 用真实业务正文复测过，不是占位正文。
+  // Windows / macOS 未测：先按 Linux 结论登记，等三端实测后按需改成逐端声明。
+  'OidbSvcTrpcTcp.0x126b_0': { sign: 'none' }, // 删好友
+  'OidbSvcTrpcTcp.0x912e_0': { sign: 'none' }, // 设好友备注（2026-11-13 Linux 实测）
+  'OidbSvcTrpcTcp.0x912f_0': { sign: 'none' }, // 清好友备注（同族，Linux 实测不签）
+  'OidbSvcTrpcTcp.0x9154_1': { sign: 'none' }, // 系统表情目录
+  'OidbSvcTrpcTcp.0x9155_1': { sign: 'none' }, // 单个系统表情
+  'OidbSvcTrpcTcp.0x496_0': { sign: 'none' }, // 机器人号段
+  'OidbSvcTrpcTcp.0x990_2': { sign: 'none' }, // 英译中
+  'OidbSvcTrpcTcp.0x93d2_1': { sign: 'none' }, // 闪传列表
+  'OidbSvcTrpcTcp.0x9407_1': { sign: 'none' }, // 删闪传文件
+  'OidbSvcTrpcTcp.0x9427_0': { sign: 'none' }, // 重命名闪传文件（sub=0 + uinForm）
+  'OidbSvcTrpcTcp.0x9164_2': { sign: 'none' }, // 读管理员权限
+  'OidbSvcTrpcTcp.0x9c1c_2': { sign: 'none' }, // 写管理员权限
+  'OidbSvcTrpcTcp.0x904_1': { sign: 'none' }, // 写管理员接收验证
+  'OidbSvcTrpcTcp.0xfe7_4': { sign: 'none' }, // 读管理员接收验证
+  'OidbSvcTrpcTcp.0xef0_1': { sign: 'none' }, // 读群扩展信息
+  'OidbSvcTrpcTcp.0xf00_3': { sign: 'none' }, // 写群扩展信息
   'OidbSvcTrpcTcp.0x9436_0': { sign: 'none' },
   'OidbSvcTrpcTcp.0x9437_0': { sign: 'none' },
   'OidbSvcTrpcTcp.0x9474_0': { sign: 'none' }, // 群待办列表
@@ -223,8 +243,6 @@ export const UNCONFIRMED_SIGN_COMMANDS: Readonly<Record<string, string>> = {
   'OidbSvcTrpcTcp.0x1290_0': '已废弃的群通话 OIDB 旧模型，不是现行群通话命令',
   'OidbSvcTrpcTcp.0x1291_0': '已废弃的群通话 OIDB 旧模型，不是现行群通话命令',
   'OidbSvcTrpcTcp.0x1292_0': '已废弃的群通话 OIDB 旧模型，不是现行群通话命令',
-  'OidbSvcTrpcTcp.0x912e_0': '设置好友备注：现有入口未给出签名结论',
-  'OidbSvcTrpcTcp.0x912f_0': '清除好友备注：现有入口未给出签名结论',
   'OidbSvc.0x4ff_9_IMCore': '旧资料写入：现有入口未给出签名结论',
   'OidbSvc.0xcf4': '共同群查询：现有入口未给出签名结论',
   'pttTrans.TransGroupPttReq': '群语音转写：包体样本不能代替 SecInfo 签名证据',
