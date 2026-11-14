@@ -14,6 +14,7 @@ import { createBot, describeBot } from '@weqbot/bot';
 import { createLogger } from '@weqbot/common';
 import { FileCredentialVault } from '@weqbot/session';
 import { adaptNativeBinding, inspectNative } from '@weqbot/wire';
+import { ConfigError, loadConfigFile, mergeConfig } from './config';
 import { loadNative } from './loader';
 import { runSidecar } from './sidecar';
 
@@ -37,7 +38,8 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
   --native-dir <dir>   原生组件目录（默认 $WEQBOT_NATIVE_DIR 或 ./native/<platform>-<arch>）
   --qq-db <path>       账号 nt_msg.db 绝对路径（mode2 预检 isQqLoggedIn 用；
                        也可用 $WEQBOT_QQ_DB）
-  --config <path>      配置文件（P3 落地）
+  --config <path>      JSON 配置：native / qq / session / secToken / onebot / log
+                       （不含凭据；字段见 docs/config.example.json）
   --qq-pid <pid>       只与 --print-capabilities 连用：诊断 QQ 进程的会话物料
                        （需要 root / CAP_SYS_PTRACE）
   --check              自检模式
@@ -66,6 +68,21 @@ async function main(argv: string[]): Promise<number> {
   if (values.help) {
     process.stdout.write(USAGE);
     return 0;
+  }
+
+  // 配置先读再加载 native：native.wrapperPath 可能就写在配置文件里，
+  // 而且配置错时不该先去碰一个可能不存在的 `.node`。
+  let fileConfig: Awaited<ReturnType<typeof loadConfigFile>> | undefined;
+  if (values.config) {
+    try {
+      fileConfig = await loadConfigFile(values.config);
+    } catch (cause) {
+      if (cause instanceof ConfigError) {
+        process.stderr.write(`${cause.message}\n`);
+        return 2;
+      }
+      throw cause;
+    }
   }
 
   const log = createLogger('cli', { level: values.verbose ? 'debug' : 'info' });
@@ -141,6 +158,9 @@ async function main(argv: string[]): Promise<number> {
       vault,
       stdin: process.stdin,
       stdout: process.stdout,
+      // sidecar 的 OneBot 配置来自启动参数，不走控制通道：一个 sidecar 一个账号，
+      // 端口拓扑属于部署形态，不该由每次 login 决定。
+      ...(fileConfig ? { config: fileConfig } : {}),
     });
     log.info('sidecar 已就绪，等待控制通道指令', { uin: values.account });
     return -1;
@@ -148,10 +168,11 @@ async function main(argv: string[]): Promise<number> {
 
   const qqDbPath = values['qq-db'] ?? process.env.WEQBOT_QQ_DB;
   const bot = createBot({
-    config: {
-      account: { uin: values.account },
-      ...(qqDbPath ? { qq: { dbPath: qqDbPath } } : {}),
-    },
+    config: mergeConfig({
+      ...(fileConfig ? { file: fileConfig } : {}),
+      uin: values.account,
+      ...(qqDbPath ? { qqDbPath } : {}),
+    }),
     native,
     vault,
     logger: log,
@@ -178,7 +199,10 @@ async function main(argv: string[]): Promise<number> {
   process.once('SIGTERM', stop);
 
   await bot.start();
-  log.info('bot 已上线（OneBot 适配在 P4）', { uin: values.account });
+  log.info('bot 已上线', {
+    uin: values.account,
+    onebot: bot.onebot ? { port: bot.onebot.port, actions: bot.onebot.actions().length } : 'off',
+  });
   return -1;
 }
 

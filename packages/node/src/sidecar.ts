@@ -33,6 +33,13 @@ export interface SidecarOptions {
   stdin: NodeJS.ReadableStream;
   stdout: NodeJS.WritableStream;
   logger?: Logger;
+  /**
+   * 启动期就确定的配置（`--config` 读出来的）。
+   *
+   * 与 `login` 里按请求组装的字段合并；这里**不接受凭据**，a1 仍然只从控制通道来。
+   * `onebot` 尤其要走这条路：端口拓扑是部署形态，不该每次 login 重定。
+   */
+  config?: Omit<BotConfig, 'account'>;
   /** 注入点：测试用假 Bot，生产用 createBot。 */
   botFactory?: (options: Parameters<typeof createBot>[0]) => Bot;
   /** 退出回调（默认 `process.exit(0)`）；测试里替换掉。 */
@@ -138,12 +145,15 @@ export function runSidecar(options: SidecarOptions): SidecarHandle {
     };
     await options.vault.put(account);
 
-    const qqDbPath = params.qqDbPath ?? process.env.WEQBOT_QQ_DB;
+    const qqDbPath = params.qqDbPath ?? process.env.WEQBOT_QQ_DB ?? options.config?.qq?.dbPath;
     const config: BotConfig = {
+      // 启动参数打底（onebot / session / secToken / native.wrapperPath），
+      // 再被本次 login 的 qqDbPath 覆盖 —— 凭据永远不在这里。
+      ...options.config,
       account: { uin: options.uin },
-      native: {},
-      ...(qqDbPath ? { qq: { dbPath: qqDbPath } } : {}),
-      log: { level: 'info' },
+      native: { ...options.config?.native },
+      ...(qqDbPath ? { qq: { ...options.config?.qq, dbPath: qqDbPath } } : {}),
+      log: options.config?.log ?? { level: 'info' },
     };
 
     starting = (async () => {

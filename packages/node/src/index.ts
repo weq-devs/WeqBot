@@ -14,3 +14,9 @@ export {
   type LoadedNative,
 } from './loader';
 export { runSidecar, type SidecarHandle, type SidecarOptions } from './sidecar';
+export {
+  ConfigError,
+  loadConfigFile,
+  mergeConfig,
+  type LoadedConfig,
+} from './config';

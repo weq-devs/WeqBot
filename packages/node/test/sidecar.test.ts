@@ -45,7 +45,7 @@ function fakeBot(): Bot {
   };
 }
 
-function harness() {
+function harness(options: Partial<Parameters<typeof runSidecar>[0]> = {}) {
   const stdin = new PassThrough();
   const stdout = new PassThrough();
   const decoded: ControlEnvelope[] = [];
@@ -53,6 +53,8 @@ function harness() {
   stdout.on('data', (chunk: Uint8Array) => decoded.push(...decoder.push(chunk)));
   const exits: number[] = [];
   const vault = memoryVault();
+  /** 捕获 sidecar 最终交给 createBot 的配置。 */
+  const seen: Parameters<NonNullable<Parameters<typeof runSidecar>[0]['botFactory']>>[0][] = [];
 
   const handle = runSidecar({
     uin: '2863253201',
@@ -60,11 +62,15 @@ function harness() {
     vault,
     stdin,
     stdout,
-    botFactory: () => fakeBot(),
+    botFactory: (request) => {
+      seen.push(request);
+      return fakeBot();
+    },
     onExit: (code) => exits.push(code),
+    ...options,
   });
 
-  return { stdin, decoded, exits, vault, handle };
+  return { stdin, decoded, exits, vault, handle, seen };
 }
 
 async function waitFor(predicate: () => boolean): Promise<void> {
@@ -135,4 +141,54 @@ test('login 缺少 device 时明确报错，不猜设备档案', async () => {
   assert.ok(response && response.kind === 'response');
   assert.equal(response.ok, false);
   assert.equal(response.error?.code, 'LOGIN_FAILED');
+});
+
+test('启动期配置（--config）透传进 BotConfig，凭据仍只来自 login', async () => {
+  const onebot = {
+    networks: { httpServers: [], httpClients: [], wsServers: [], wsClients: [] },
+  };
+  const h = harness({
+    config: {
+      onebot,
+      session: { syncGraceMs: 30_000 },
+      qq: { dbPath: '/from/config.db' },
+    } as never,
+  });
+
+  h.stdin.write(
+    `${JSON.stringify(
+      controlRequest(1, 'login', {
+        a1: Buffer.from([9, 8, 7]).toString('base64'),
+        guid: '0123456789abcdef0123456789abcdef',
+        device: DEVICE,
+      }),
+    )}\n`,
+  );
+  await waitFor(() => h.seen.length >= 1);
+
+  const config = h.seen[0]!.config;
+  // OneBot 拓扑来自启动参数：一个 sidecar 一个账号，端口不该每次 login 重定。
+  assert.deepEqual(config.onebot, onebot);
+  assert.equal(config.session?.syncGraceMs, 30_000);
+  // login 没给 qqDbPath 时回落到配置文件的。
+  assert.equal(config.qq?.dbPath, '/from/config.db');
+  assert.equal(config.account.uin, '2863253201');
+  // 凭据不出现在配置里。
+  assert.deepEqual([...h.vault.accounts.get('2863253201')!.a1], [9, 8, 7]);
+});
+
+test('login 的 qqDbPath 覆盖配置文件的值', async () => {
+  const h = harness({ config: { qq: { dbPath: '/from/config.db' } } as never });
+  h.stdin.write(
+    `${JSON.stringify(
+      controlRequest(1, 'login', {
+        a1: Buffer.from([1]).toString('base64'),
+        guid: '0123456789abcdef0123456789abcdef',
+        device: DEVICE,
+        qqDbPath: '/from/login.db',
+      }),
+    )}\n`,
+  );
+  await waitFor(() => h.seen.length >= 1);
+  assert.equal(h.seen[0]!.config.qq?.dbPath, '/from/login.db');
 });
