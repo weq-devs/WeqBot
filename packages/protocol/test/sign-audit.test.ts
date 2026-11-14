@@ -60,10 +60,10 @@ test('未登记命令优先于推断结论', () => {
   }
 });
 
-test('--commands 输出可喂给 probe-sign 的 cmd 形态', () => {
+test('--commands 输出的 OIDB 命令能转成裸 cmd 形态', () => {
   const entries = auditSignRules({ platform: 'win32' });
   const oidb = entries.find((entry) => entry.command.startsWith('OidbSvcTrpcTcp.'));
   assert.ok(oidb);
   const bare = /^OidbSvcTrpcTcp\.(0x[0-9a-f]+_\d+)$/.exec(oidb.command);
-  assert.ok(bare, `${oidb.command} 应能转成 probe-sign 的 --cmd 形态`);
+  assert.ok(bare, `${oidb.command} 应能转成裸 cmd 形态`);
 });

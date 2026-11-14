@@ -160,3 +160,70 @@ test('适配器：敏感 action 即使后端实现也不出现', async () => {
   assert.ok(!adapter.actions().some((name) => name.includes('redbag')));
   await adapter.stop();
 });
+
+test('适配器：入站图片 / 语音的 url 由 resolver 补齐（带场景）', async () => {
+  const events = new TypedEventBus<BotEventMap>();
+  const seen: Array<{ kind: string; isGroup: boolean }> = [];
+  const adapter = createOneBotAdapter({
+    config: config(0),
+    backend: backend(),
+    selfId: 10001,
+    events: {
+      on: (event: string, listener: (value: never) => void) =>
+        events.on(event as keyof BotEventMap, listener as never),
+    } as never,
+    imageUrlResolver: (element, isGroup) => {
+      seen.push({ kind: String(element.kind), isGroup });
+      return `https://cdn/img?token=${String(element.fileToken)}`;
+    },
+    mediaUrlResolver: (element, isGroup) => {
+      seen.push({ kind: String(element.kind), isGroup });
+      return `https://cdn/audio?token=${String(element.fileToken)}`;
+    },
+    logger: { info() {}, warn() {}, error() {}, debug() {} } as never,
+  });
+
+  await adapter.start();
+  const { socket } = await connect(`ws://127.0.0.1:${adapter.port!}/`);
+  const messages: Array<Record<string, unknown>> = [];
+  socket.on('message', (raw) => messages.push(JSON.parse(raw.toString())));
+
+  const received = once<Record<string, unknown>>((resolve) => {
+    const timer = setInterval(() => {
+      const index = messages.findIndex((message) => message.post_type === 'message');
+      if (index >= 0) {
+        clearInterval(timer);
+        resolve(messages[index]!);
+      }
+    }, 5);
+    timer.unref?.();
+  });
+  events.emit('message', {
+    messageId: '99',
+    seq: 2,
+    time: 1_700_000_000,
+    scene: 'group',
+    peer: { id: '55555' },
+    sender: { id: '20002', name: '群友' },
+    self: { uin: '10001' },
+    elements: [
+      { kind: 'pic', fileToken: 'IMG', fileName: 'a.png' },
+      { kind: 'ptt', fileToken: 'VOICE', fileName: 'b.amr' },
+    ],
+  });
+  const post = await received;
+
+  const segments = post.message as Array<{ type: string; data: { url: string } }>;
+  assert.equal(segments[0]?.type, 'image');
+  assert.equal(segments[0]?.data.url, 'https://cdn/img?token=IMG');
+  assert.equal(segments[1]?.type, 'record');
+  assert.equal(segments[1]?.data.url, 'https://cdn/audio?token=VOICE');
+  // 场景要透传：rkey 的 type 与 appid 都按群 / 私聊分叉。
+  assert.deepEqual(seen, [
+    { kind: 'pic', isGroup: true },
+    { kind: 'ptt', isGroup: true },
+  ]);
+
+  socket.terminate();
+  await adapter.stop();
+});

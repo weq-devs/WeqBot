@@ -441,10 +441,13 @@ test('推送帧解码成 message 事件（含装扮）', async () => {
     peer: { id: string };
     elements: unknown[];
     dress: { bubble: number };
+    random?: number;
   };
   assert.equal(message.peer.id, '55555');
   assert.deepEqual(message.elements, [{ kind: 'text', textContent: 'hi' }]);
   assert.equal(message.dress.bubble, 12);
+  // contentHead.msgId 就是私聊撤回要的 random，不能丢在解码层。
+  assert.equal(message.random, 88);
 
   await bot.stop('closed');
 });

@@ -36,6 +36,7 @@ import { createOneBotAdapter, type OneBotAdapter } from '@weqbot/onebot';
 import type { ProtocolClient } from '@weqbot/protocol';
 import { createProtocolClient } from '@weqbot/protocol';
 import type { BotConfig } from './config';
+import { createMediaUrlResolver } from './media-url';
 import { createProtocolBackend } from './onebot-backend';
 import { generateSecToken } from './sec-token';
 
@@ -422,6 +423,8 @@ export function createBot(options: CreateBotOptions): Bot {
           uidByUin: (targetUin: string) => identity.uidOf(targetUin),
         },
       });
+      // 入站媒体：pic/ptt/video 只有 fileToken，URL 要靠 rkey 现拼（带缓存）。
+      const media = createMediaUrlResolver({ protocol, logger: log });
       const adapter = createOneBotAdapter({
         config: config.onebot,
         backend,
@@ -430,6 +433,8 @@ export function createBot(options: CreateBotOptions): Bot {
           on: ((event: 'event' | 'message' | 'notice', listener: never) =>
             events.on(event, listener as never)) as never,
         },
+        imageUrlResolver: (element, isGroup) => media.imageUrl(element, isGroup),
+        mediaUrlResolver: (element, isGroup) => media.mediaUrl(element, isGroup),
         logger: log,
       });
       await adapter.start();

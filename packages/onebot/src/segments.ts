@@ -32,12 +32,18 @@ export interface OutboundElement {
 }
 
 export interface ToSegmentContext {
+  /**
+   * **本条消息**是否来自群聊。
+   *
+   * 只拿元素判断不出场景，而 rkey 的 type、appid 都按场景分叉，所以 resolver
+   * 必须能拿到它。resolver 自己声明了 `isGroup` 形参时以此为准。
+   */
   isGroup: boolean;
   selfId: number;
   /** 图片下载 URL（入站 `pic` 只有 fileToken，需要换 rkey 才能拼）。 */
-  imageUrlResolver?: (element: InboundElement) => Promise<string> | string;
+  imageUrlResolver?: (element: InboundElement, isGroup: boolean) => Promise<string> | string;
   /** 语音 / 视频 / 文件的下载 URL。 */
-  mediaUrlResolver?: (element: InboundElement) => Promise<string> | string;
+  mediaUrlResolver?: (element: InboundElement, isGroup: boolean) => Promise<string> | string;
 }
 
 export interface FromSegmentContext {
@@ -217,7 +223,7 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
   // ─── 图片 ───────────────────────────────────────────────────────────────
   pic: {
     toSegment: async (element, ctx) => {
-      const url = ctx.imageUrlResolver ? await ctx.imageUrlResolver(element) : '';
+      const url = ctx.imageUrlResolver ? await ctx.imageUrlResolver(element, ctx.isGroup) : '';
       const md5 =
         element.md5Bytes instanceof Uint8Array ? Buffer.from(element.md5Bytes).toString('hex') : '';
       return {
@@ -252,7 +258,7 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
   // ─── 语音 ───────────────────────────────────────────────────────────────
   ptt: {
     toSegment: async (element, ctx) => {
-      const url = ctx.mediaUrlResolver ? await ctx.mediaUrlResolver(element) : '';
+      const url = ctx.mediaUrlResolver ? await ctx.mediaUrlResolver(element, ctx.isGroup) : '';
       return {
         type: 'record',
         data: { file: str(element.fileName), url },
@@ -269,7 +275,7 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
   // ─── 视频 ───────────────────────────────────────────────────────────────
   video: {
     toSegment: async (element, ctx) => {
-      const url = ctx.mediaUrlResolver ? await ctx.mediaUrlResolver(element) : '';
+      const url = ctx.mediaUrlResolver ? await ctx.mediaUrlResolver(element, ctx.isGroup) : '';
       return {
         type: 'video',
         data: { file: str(element.fileName), url },
@@ -321,7 +327,7 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
   // ─── 文件 / 合并转发 ────────────────────────────────────────────────────
   file: {
     toSegment: async (element, ctx) => {
-      const url = ctx.mediaUrlResolver ? await ctx.mediaUrlResolver(element) : '';
+      const url = ctx.mediaUrlResolver ? await ctx.mediaUrlResolver(element, ctx.isGroup) : '';
       return {
         type: 'file',
         data: {

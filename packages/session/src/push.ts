@@ -164,9 +164,7 @@ export class PushBridge {
             type: 'notice',
             kind: 'poke',
             at: event.time * 1000,
-            peer: event.groupUin
-              ? { id: String(event.groupUin) }
-              : this.peerOfUid(event.fromUid),
+            peer: event.groupUin ? { id: String(event.groupUin) } : this.peerOfUid(event.fromUid),
             sender: this.peerOfUid(event.fromUid),
             ...(event.toUid ? { target: this.peerOfUid(event.toUid) } : {}),
           } satisfies NoticeEvent);
@@ -222,6 +220,7 @@ export class PushBridge {
         ? { clientSequence: message.head.clientSequence }
         : {}),
       ...(message.head.ntMsgSeq !== undefined ? { ntMsgSeq: message.head.ntMsgSeq } : {}),
+      ...(message.head.msgId ? { random: message.head.msgId } : {}),
       scene,
       peer,
       sender,
@@ -246,7 +245,10 @@ export class PushBridge {
 
 /** 没有专门 `NoticeEvent.kind` 的推送：给诊断日志一段可读的摘要。 */
 function describePushEvent(
-  event: Extract<PushEvent, { kind: 'group-mute' | 'group-reaction' | 'group-essence' | 'client-receipt' }>,
+  event: Extract<
+    PushEvent,
+    { kind: 'group-mute' | 'group-reaction' | 'group-essence' | 'client-receipt' }
+  >,
 ): string {
   switch (event.kind) {
     case 'group-mute':

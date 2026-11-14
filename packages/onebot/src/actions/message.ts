@@ -181,6 +181,34 @@ export const canSendRecord: ActionDefinition<Record<string, never>, { yes: boole
   }),
 };
 
+export const getStatus: ActionDefinition<
+  Record<string, never>,
+  { online: boolean; good: boolean; time: number }
+> = {
+  name: 'get_status',
+  summary: '运行状态',
+  run: async (_params, ctx) => {
+    // 后端不实现时按「在线但未确认健康」回答：适配器已经在跑，说明会话是 up 的。
+    const status = ctx.backend.getStatus
+      ? await ctx.backend.getStatus()
+      : { online: true, good: false };
+    return { ...status, time: Math.max(0, Math.floor((Date.now() - ctx.startedAt) / 1000)) };
+  },
+};
+
+export const getVersionInfo: ActionDefinition<
+  Record<string, never>,
+  { app_name: string; app_version: string; protocol_version: string }
+> = {
+  name: 'get_version_info',
+  summary: '实现与协议版本',
+  run: async () => ({
+    app_name: 'WeqBot',
+    app_version: '0.0.0',
+    protocol_version: 'v11',
+  }),
+};
+
 /** 消息类 action。每条声明它需要哪些后端方法。 */
 export const MESSAGE_ACTIONS: Array<{
   definition: ActionDefinition<never, never>;
@@ -199,4 +227,6 @@ export const MESSAGE_ACTIONS: Array<{
   { definition: getMsg as ActionDefinition<never, never>, requires: [] },
   { definition: canSendImage as ActionDefinition<never, never>, requires: [] },
   { definition: canSendRecord as ActionDefinition<never, never>, requires: [] },
+  { definition: getStatus as ActionDefinition<never, never>, requires: [] },
+  { definition: getVersionInfo as ActionDefinition<never, never>, requires: [] },
 ];

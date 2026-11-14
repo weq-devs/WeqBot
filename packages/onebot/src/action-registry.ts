@@ -25,6 +25,8 @@ export interface ActionContext {
   selfId: number;
   backend: OneBotBackend;
   messageFormat: MessageFormat;
+  /** 适配器启动时刻（ms）；`get_status.time` 用它算运行秒数。 */
+  startedAt: number;
   /** 分配给一条新发出消息的 OneBot message_id。 */
   internSentMessageId(params: {
     isGroup: boolean;
@@ -140,34 +142,51 @@ export class ActionRegistry {
     }));
   }
 
-  /** 分发一次调用；所有错误都收敛成 OneBot 响应，不向外抛。 */
+  /**
+   * 分发一次调用；所有错误都收敛成 OneBot 响应，不向外抛。
+   *
+   * `echo` 必须原样回传：OneBot v11 客户端靠它把响应和请求配对（v11 规范里
+   * 它是响应信封的必选字段）。之前这里没有这个参数，`ws-server` 传进来的
+   * echo 被静默丢弃 —— 严格按 echo 过滤的客户端会一直等，表现为「所有 action
+   * 都超时」，但事件推送照常，非常难查。
+   */
   async call(
     name: string,
     params: JsonObject | undefined,
     ctx: ActionContext,
+    echo?: JsonValue,
   ): Promise<ApiResponse> {
     const definition = this.actions.get(name);
-    if (!definition) return failedResponse(RETCODE.UNKNOWN_ACTION, `不支持的 action：${name}`);
+    if (!definition) {
+      return withEcho(failedResponse(RETCODE.UNKNOWN_ACTION, `不支持的 action：${name}`), echo);
+    }
 
     let parsed: unknown;
     try {
       parsed = definition.parse ? definition.parse((params ?? {}) as JsonObject) : (params ?? {});
     } catch (cause) {
-      if (cause instanceof ParamError) return failedResponse(RETCODE.BAD_REQUEST, cause.message);
+      if (cause instanceof ParamError) {
+        return withEcho(failedResponse(RETCODE.BAD_REQUEST, cause.message), echo);
+      }
       throw cause;
     }
 
     try {
       const data = await definition.run(parsed as never, ctx);
-      return okResponse((data ?? null) as JsonValue);
+      return withEcho(okResponse((data ?? null) as JsonValue), echo);
     } catch (cause) {
       if (cause instanceof NotImplementedError) {
-        return failedResponse(RETCODE.UNKNOWN_ACTION, cause.message);
+        return withEcho(failedResponse(RETCODE.UNKNOWN_ACTION, cause.message), echo);
       }
       const message = cause instanceof Error ? cause.message : String(cause);
-      return failedResponse(RETCODE.ACTION_FAILED, message);
+      return withEcho(failedResponse(RETCODE.ACTION_FAILED, message), echo);
     }
   }
+}
+
+/** echo 未传时不要凭空造一个 `undefined` 键 —— 序列化后客户端会看到 `"echo":null`。 */
+function withEcho(response: ApiResponse, echo: JsonValue | undefined): ApiResponse {
+  return echo === undefined ? response : { ...response, echo };
 }
 
 /**

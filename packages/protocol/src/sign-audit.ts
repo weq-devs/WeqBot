@@ -20,9 +20,10 @@ export type Platform = NodeJS.Platform;
 /**
  * 每条规则的证据等级。
  *
- * Linux 有系统性真机观测（`scripts/probe-sign.ts`，2026-11-13）；Windows /
- * macOS 于 2026-11-14 补测了此前未登记的那批命令，但**绝大部分已登记规则
- * 仍是推断结论** —— 这不是「没测过所以不能用」，而是「用之前要在本平台验一遍」。
+ * Linux 于 2026-11-13、Windows / macOS 于 2026-11-14 各有一批真机观测，
+ * 但**绝大部分已登记规则仍是推断结论**。签名自验（P4.0）已取消，所以
+ * `inferred` 不是待办，只是「这个结论来自别的平台」的事实标注；`missing`
+ * 仍然是问题（运行时静默不签），新命令必须补登记。
  */
 export interface SignEvidence {
   linux: 'measured' | 'inferred' | 'none';

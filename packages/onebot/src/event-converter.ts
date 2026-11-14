@@ -20,9 +20,15 @@ export interface ConverterContext {
   reportSelfMessage: boolean;
   /** `message_id` 分配（`MessageIdMap.intern`）。 */
   internMessageId(message: InboundMessage): number;
-  /** 入站图片的下载 URL（可选；没有就留空串）。 */
-  imageUrlResolver?: (element: Record<string, unknown>) => Promise<string> | string;
-  mediaUrlResolver?: (element: Record<string, unknown>) => Promise<string> | string;
+  /** 入站图片的下载 URL（可选；没有就留空串）。第二参是「本条消息是否来自群」。 */
+  imageUrlResolver?: (
+    element: Record<string, unknown>,
+    isGroup: boolean,
+  ) => Promise<string> | string;
+  mediaUrlResolver?: (
+    element: Record<string, unknown>,
+    isGroup: boolean,
+  ) => Promise<string> | string;
 }
 
 function uidToUin(context: ConverterContext, peer: PeerRef): number {

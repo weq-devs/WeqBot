@@ -22,6 +22,8 @@ import { segmentsToElements } from '@weqbot/onebot';
 import type { ProtocolClient } from '@weqbot/protocol';
 import {
   FetchGroupList,
+  FetchUserProfile,
+  HandleFriendRequest,
   KickGroupMember,
   LeaveGroup,
   MuteGroupAll,
@@ -36,6 +38,7 @@ import {
   SetGroupAdmin,
   SetGroupMemberCard,
   SetGroupName,
+  SetGroupSpecialTitle,
   type GroupMemberListItem,
   type SendElement,
 } from '@weqbot/protocol';
@@ -74,6 +77,27 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
     return elements as unknown as SendElement[];
   }
 
+  /**
+   * 发送侧的媒体上传上下文。
+   *
+   * 不带它时，元素里只要有 image / record / video / flashPhoto，协议层会在
+   * `resolveMediaContext` 直接抛错（「需要 params.media」）。带上是无害的：
+   * 纯文本消息用不到这些字段。
+   *
+   * `pid` 形参传的是 **sessionId** —— 协议层沿用了搬运时的命名，实际语义就是
+   * 会话句柄（见 TODO §13-8 的技术债）。
+   */
+  function mediaParams() {
+    return {
+      media: {
+        nt,
+        pid: sessionId,
+        uin: selfUin,
+        ...(selfUid ? { selfUid } : {}),
+      },
+    };
+  }
+
   return {
     async getLoginInfo(): Promise<LoginInfo> {
       return {
@@ -85,7 +109,7 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
 
     async sendGroupMessage(groupId: number, message: Segment[]): Promise<SendResult> {
       const elements = await toElements(message);
-      const receipt = await sendGroupMessage(nt, sessionId, groupId, elements);
+      const receipt = await sendGroupMessage(nt, sessionId, groupId, elements, mediaParams());
       if (!receipt.ok) {
         throw new Error(`发送群消息失败：result=${receipt.result} ${receipt.errMsg}`);
       }
@@ -108,9 +132,11 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
         ? await sendMessage(nt, sessionId, {
             groupTemp: { groupUin: tempGroupId, toUid: uid ?? '' },
             elements,
+            ...mediaParams(),
           })
         : await sendC2cMessage(nt, sessionId, userId, elements, {
             ...(uid ? { userUid: uid } : {}),
+            ...mediaParams(),
           });
       if (!receipt.ok) {
         throw new Error(`发送私聊消息失败：result=${receipt.result} ${receipt.errMsg}`);
@@ -186,6 +212,29 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       return mapMember(groupId, member);
     },
 
+    async getStrangerInfo(userId: number): Promise<{
+      userId: number;
+      nickname: string;
+      sex: 'male' | 'female' | 'unknown';
+      age: number;
+    }> {
+      const info = await FetchUserProfile.invoke(nt, sessionId, { uin: userId });
+      return { userId: info.uin, nickname: info.nickname, sex: info.sex, age: info.age };
+    },
+
+    async setFriendAddRequest(flag: string, approve: boolean, _remark: string): Promise<void> {
+      // 好友申请的 flag 就是申请方 uid（见 `push/registry.ts` 的 `flag: fromUid`）。
+      const uid = flag.trim();
+      if (!uid) throw new Error('好友申请 flag 为空');
+      await HandleFriendRequest.invoke(nt, sessionId, { targetUid: uid, approve });
+    },
+
+    async getStatus(): Promise<{ online: boolean; good: boolean }> {
+      // 后端能被调到，本身就说明 session 是 online 的；`good` 留给「链路健康」
+      // 这类信息（目前没有独立探针，不假装知道）。
+      return { online: true, good: true };
+    },
+
     async sendLike(userId: number, times: number): Promise<void> {
       const uid = options.resolveUidUin?.uidByUin(String(userId));
       if (!uid) throw new Error(`点赞需要对方 uid（${userId} 未观测到）`);
@@ -235,6 +284,22 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
     async setGroupLeave(groupId: number, _dissolve: boolean): Promise<void> {
       // 解散群是另一条命令（0x1097 只处理退出），这里先只做退出。
       await LeaveGroup.invoke(nt, sessionId, { groupId });
+    },
+
+    async setGroupSpecialTitle(
+      groupId: number,
+      userId: number,
+      title: string,
+      duration?: number,
+    ): Promise<void> {
+      const uid = options.resolveUidUin?.uidByUin(String(userId));
+      if (!uid) throw new Error(`设群头衔需要对方 uid（${userId} 未观测到）`);
+      await SetGroupSpecialTitle.invoke(nt, sessionId, {
+        groupId,
+        targetUid: uid,
+        title,
+        ...(duration !== undefined ? { expireTime: Math.floor(Date.now() / 1000) + duration } : {}),
+      });
     },
   };
 }

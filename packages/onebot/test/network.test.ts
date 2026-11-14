@@ -13,10 +13,17 @@ import type { ActionDispatcher } from '../src/adapter';
 import type { JsonObject } from '../src/types';
 
 function dispatcher(seen: JsonObject[] = []): ActionDispatcher {
-  return async (action, params) => {
+  return async (action, params, options) => {
     seen.push(params);
-    if (action === 'echo_params') return { status: 'ok', retcode: 0, data: params };
-    return { status: 'failed', retcode: 1404, data: null, wording: 'unknown' };
+    // 桩这里也回传 echo：模拟 ActionRegistry.call 的正确行为，顺带守住
+    // 「WS 层确实把 echo 交给了 dispatcher」。
+    const echo = options?.echo as JsonObject | undefined;
+    const envelope = (base: { status: string; retcode: number; data: unknown }) =>
+      echo === undefined ? base : { ...base, echo };
+    if (action === 'echo_params') {
+      return envelope({ status: 'ok', retcode: 0, data: params });
+    }
+    return envelope({ status: 'failed', retcode: 1404, data: null, wording: 'unknown' });
   };
 }
 
@@ -54,12 +61,15 @@ test('正向 WS：action 往返 + access token', async () => {
   const socket = new WebSocket(`ws://127.0.0.1:${port}/?access_token=secret`);
   await once<void>((resolve) => socket.on('open', () => resolve()));
 
-  const reply = await once<{ status: string; data: unknown }>((resolve) => {
+  const reply = await once<{ status: string; data: unknown; echo?: unknown }>((resolve) => {
     socket.once('message', (raw) => resolve(JSON.parse(raw.toString())));
     socket.send(JSON.stringify({ action: 'echo_params', params: { a: 1 }, echo: 'e1' }));
   });
   assert.equal(reply.status, 'ok');
   assert.deepEqual(reply.data, { a: 1 });
+  // v11 客户端靠 echo 配对请求与响应；不回传的话，严格按 echo 过滤的客户端
+  // 会一直等（真机上表现为「所有 action 都超时，但事件推送正常」）。
+  assert.equal(reply.echo, 'e1');
 
   socket.terminate();
   await server.stop();

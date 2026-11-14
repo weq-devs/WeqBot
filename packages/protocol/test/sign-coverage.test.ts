@@ -6,9 +6,8 @@
  * 所以这里扫一遍所有 spec 的 `command/subCommand`，要求每条都已登记
  * （`SIGN_RULES` 或 `UNCONFIRMED_SIGN_COMMANDS`）。
  *
- * 发现新命令没登记时：先用 `scripts/probe-sign.ts` 真机实测，再决定
- * 写 `{ sign: ... }` 还是进 `UNCONFIRMED_SIGN_COMMANDS`。**不要**为了
- * 让测试变绿随便填 `none`。
+ * 发现新命令没登记时：能真机验证就补实测，否则先进 `UNCONFIRMED_SIGN_COMMANDS`
+ * 并写明原因。**不要**为了让测试变绿随便填 `none`。
  */
 
 import assert from 'node:assert/strict';
@@ -69,7 +68,7 @@ test('所有 OIDB spec 的签名都已登记', () => {
   assert.deepEqual(
     missing,
     [],
-    `以下命令既不在 SIGN_RULES 也不在 UNCONFIRMED_SIGN_COMMANDS，请先用 probe-sign 实测：\n${missing
+    `以下命令既不在 SIGN_RULES 也不在 UNCONFIRMED_SIGN_COMMANDS，请补登记：\n${missing
       .map((entry) => `  ${entry.wire} (${entry.file})`)
       .join('\n')}`,
   );

@@ -21,7 +21,7 @@ import { describeBackend, type OneBotBackend, type RecallTarget } from './backen
 import { convertEvent, heartbeatMetaEvent, lifecycleMetaEvent } from './event-converter';
 import { MessageIdMap } from './message-id';
 import { MessageStore } from './message-store';
-import type { JsonObject, MessageFormat, OneBotConfig } from './types';
+import type { JsonObject, JsonValue, MessageFormat, OneBotConfig } from './types';
 import { HttpClientAdapter } from './network/http-client';
 import { HttpServerAdapter } from './network/http-server';
 import { WsClientAdapter } from './network/ws-client';
@@ -66,6 +66,22 @@ export interface CreateOneBotAdapterOptions {
   messageIds?: MessageIdMap;
   /** 覆盖消息缓存（测试用）。 */
   store?: MessageStore;
+  /**
+   * 入站图片 / 表情的下载 URL 解析（可选）。
+   *
+   * 不解码 wire 这里只拿得到 `fileToken` / `storeId`，`pic` segment 的 `url`
+   * 会退化成空串。宿主（`@weqbot/bot`）用 `FetchDownloadRkeys` + CDN 拼接补上。
+   * 抛错不影响事件本身：只要返回值不是字符串就当没解析出来。
+   */
+  imageUrlResolver?: (
+    element: Record<string, unknown>,
+    isGroup: boolean,
+  ) => Promise<string> | string;
+  /** 入站语音 / 视频 / 文件的下载 URL 解析（可选），语义同 {@link imageUrlResolver}。 */
+  mediaUrlResolver?: (
+    element: Record<string, unknown>,
+    isGroup: boolean,
+  ) => Promise<string> | string;
 }
 
 export interface OneBotAdapter {
@@ -87,6 +103,8 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
   let starting: Promise<void> | undefined;
   let messageIdSeed = 1_000_000;
   let started = false;
+  /** 适配器启动时刻；`get_status.time` 是「运行秒数」。 */
+  let startedAt = Date.now();
   let stopHeartbeat: (() => void) | undefined;
   let unsubscribers: Array<() => void> = [];
   let registered: string[] = [];
@@ -124,15 +142,17 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
       selfId: options.selfId,
       backend: options.backend,
       messageFormat: 'array',
+      startedAt,
       internSentMessageId,
       resolveMessageMeta: (messageId): RecallTarget | null => store.meta(messageId) ?? null,
       resolveMessageEvent: (messageId) => store.get(messageId)?.event ?? null,
     };
   }
 
-  const dispatch: ActionDispatcher = async (action, params) => {
+  const dispatch: ActionDispatcher = async (action, params, options) => {
     // 每个网络有自己的 messageFormat，ack 时用默认 array；事件已经各自处理。
-    return registry.call(action, params, context());
+    // echo 必须原样回传：客户端靠它把响应和请求配对。
+    return registry.call(action, params, context(), options?.echo as JsonValue | undefined);
   };
 
   /** 一个事件 → 所有连接（各连接自己决定格式）。 */
@@ -142,6 +162,8 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
         selfId: options.selfId,
         messageFormat: 'array',
         reportSelfMessage: true,
+        ...(options.imageUrlResolver ? { imageUrlResolver: options.imageUrlResolver } : {}),
+        ...(options.mediaUrlResolver ? { mediaUrlResolver: options.mediaUrlResolver } : {}),
         internMessageId: (message) => {
           const id = messageIds.intern({
             wireId: message.messageId,
@@ -158,7 +180,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
               sequenceAuthoritative: true,
               eventName: message.scene,
               clientSequence: message.clientSequence ?? 0,
-              random: 0,
+              random: message.random ?? 0,
               timestamp: message.time,
             },
             event: {},
@@ -191,7 +213,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
           sequenceAuthoritative: true,
           eventName: event.message.scene,
           clientSequence: event.message.clientSequence ?? 0,
-          random: 0,
+          random: event.message.random ?? 0,
           timestamp: event.message.time,
         },
         event: converted,
@@ -289,6 +311,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
       if (started) throw new Error('OneBot 适配器已经启动');
       if (starting) return starting;
       started = true;
+      startedAt = Date.now();
       starting = (async () => {
         const result = registerActions(registry, options.backend);
         registered = result.registered;

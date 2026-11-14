@@ -25,7 +25,8 @@ export class IdentityCache {
   /** 记录一条观测；uid / uin 任一不合法就忽略。 */
   observe(uid: string | null | undefined, uin: number | string | null | undefined): void {
     if (!uid?.startsWith('u_')) return;
-    const value = typeof uin === 'string' ? uin.trim() : uin === null || uin === undefined ? '' : String(uin);
+    const value =
+      typeof uin === 'string' ? uin.trim() : uin === null || uin === undefined ? '' : String(uin);
     if (!/^\d{4,}$/.test(value)) return;
 
     // 同一个 uid 换了 uin：先把旧的反向映射删掉，不能留一条指向自己的驴头。

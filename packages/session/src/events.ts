@@ -61,6 +61,13 @@ export interface InboundMessage {
   clientSequence?: number;
   /** NT 会话序号（跨双方递增）；群聊没有这个字段。 */
   ntMsgSeq?: number;
+  /**
+   * wire 上的 `random`（= contentHead 的 `msgId`）。
+   *
+   * 私聊撤回的定位三元组是 `(clientSequence, messageSequence, random, timestamp)`，
+   * 少了它 `delete_msg` 只能用 0 去碰运气。群聊撤回只用 `seq`，但一并带上不碍事。
+   */
+  random?: number;
   /** 秒级时间戳。 */
   time: number;
   scene: MessageScene;

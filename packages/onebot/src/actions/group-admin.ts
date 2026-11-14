@@ -8,6 +8,7 @@
 
 import {
   optionalBool,
+  ParamError,
   requiredInt,
   requiredPositiveInt,
   requiredString,
@@ -16,6 +17,19 @@ import {
 import type { OneBotBackend } from '../backend';
 
 type Requires = Array<keyof OneBotBackend>;
+
+/**
+ * `duration` 是「剩余秒数」，允许 `-1`（永久）。
+ *
+ * 不能复用 `optionalPositiveInt`：它把负数当非法值，而这里 -1 是合法语义。
+ */
+function parseDuration(raw: unknown): number | undefined {
+  if (raw === undefined || raw === null || raw === '') return undefined;
+  const value = typeof raw === 'number' ? raw : Number(raw);
+  if (!Number.isSafeInteger(value) || value < -1)
+    throw new ParamError('duration 必须 >= -1 的整数');
+  return value < 0 ? undefined : value;
+}
 
 function define<P, R>(
   definition: ActionDefinition<P, R>,
@@ -140,6 +154,25 @@ const setGroupLeave = define(
   ['setGroupLeave'],
 );
 
+const setGroupSpecialTitle = define(
+  {
+    name: 'set_group_special_title',
+    summary: '设置群头衔',
+    parse: (raw) => ({
+      groupId: requiredPositiveInt(raw, 'group_id'),
+      userId: requiredPositiveInt(raw, 'user_id'),
+      title: typeof raw.special_title === 'string' ? raw.special_title : '',
+      // OneBot 的 `duration` 是秒，`-1`（缺省）在协议层表示永久。
+      duration: parseDuration(raw.duration),
+    }),
+    run: async ({ groupId, userId, title, duration }, ctx) => {
+      await ctx.backend.setGroupSpecialTitle!(groupId, userId, title, duration);
+      return null;
+    },
+  },
+  ['setGroupSpecialTitle'],
+);
+
 export const GROUP_ADMIN_ACTIONS = [
   setGroupCard,
   setGroupBan,
@@ -148,4 +181,5 @@ export const GROUP_ADMIN_ACTIONS = [
   setGroupName,
   setGroupKick,
   setGroupLeave,
+  setGroupSpecialTitle,
 ];

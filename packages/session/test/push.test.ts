@@ -45,6 +45,8 @@ test('聊天消息 → InboundMessage，装扮与 peer 都保留', () => {
   assert.equal(event.message.sender.name, '群名片');
   assert.deepEqual(event.message.dress, { bubble: 9, font: 0, widget: 0 });
   assert.deepEqual(event.message.elements, [{ kind: 'text', textContent: 'hi' }]);
+  // contentHead.msgId 要透出成 `random`：私聊撤回靠它定位原消息。
+  assert.equal(event.message.random, 42);
   assert.equal(bridge.resolveUin('u_sender'), '10001');
 });
 
@@ -96,7 +98,13 @@ test('33 入群 → group-member-increase，uid 用观测缓存补 uin', () => {
         messages: [
           {
             responseHead: { fromUin: 55555, fromUid: 'u_group', grp: { groupUin: 55555 } },
-            contentHead: { msgType: 33, subType: 0, msgId: 1, sequence: 2, timestamp: 1_700_000_200 },
+            contentHead: {
+              msgType: 33,
+              subType: 0,
+              msgId: 1,
+              sequence: 2,
+              timestamp: 1_700_000_200,
+            },
             body: {
               msgContent: encode(GROUP_CHANGE, {
                 groupUin: 55555,

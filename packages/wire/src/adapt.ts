@@ -10,6 +10,7 @@
  * 不补桩，这样探测看到的是真实情况。
  */
 
+import { createLogger } from '@weqbot/common';
 import type {
   DeviceProfile,
   NativeBuildInfo,
@@ -88,7 +89,14 @@ export interface RawNativeBinding {
     sink: (error: Error | null, frame: PushFrame) => void,
   ): Promise<void>;
   detachPushSink?(sessionId: number): Promise<boolean>;
-  attachStatusSink?(sessionId: number, sink: (event: SessionStatusEvent) => void): Promise<void>;
+  /**
+   * 注意 sink 的形状：native 侧是 `ThreadsafeFunction<T>`，**按 Node 约定以
+   * `(err, value)` 调用**。声明成单参数会写出一段编译通过、真机必崩的代码。
+   */
+  attachStatusSink?(
+    sessionId: number,
+    sink: (error: Error | null, event: SessionStatusEvent) => void,
+  ): Promise<void>;
   detachStatusSink?(sessionId: number): Promise<boolean>;
 
   /** napi 导出名是 `resolveQqWrapperPath`，且是**同步**函数；适配层包成 Promise。 */
@@ -119,6 +127,7 @@ export interface RawNativeBinding {
 
 export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
   const adapted: Partial<NativePort> = {};
+  const log = createLogger('wire');
 
   if (raw.sendPacket) {
     const call = raw.sendPacket.bind(raw);
@@ -205,7 +214,18 @@ export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
     const call = raw.attachStatusSink.bind(raw);
     const detach = raw.detachStatusSink?.bind(raw);
     adapted.attachStatusSink = async (sessionId, sink) => {
-      await call(sessionId, sink);
+      // **必须包一层。** native 的 `ThreadsafeFunction<T>` 按 Node 约定调用
+      // `(err, value)`，直接把 `sink` 传下去会让回调收到 `(null, event)` ——
+      // 第一个参数恒为 null，`event.kind` 立刻抛 TypeError，而且是在 native
+      // 的 TSFN 里抛的，会把整个进程带下去。`attachPushSink` 一直是包着的，
+      // 这里当初漏了（P2 起就存在，真机一挂 status sink 就崩）。
+      await call(sessionId, (error: Error | null, event: SessionStatusEvent) => {
+        if (error) {
+          log.warn('状态通道报错', { sessionId, cause: error });
+          return;
+        }
+        if (event) sink(event);
+      });
       return () => {
         void detach?.(sessionId);
       };

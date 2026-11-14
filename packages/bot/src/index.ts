@@ -11,3 +11,8 @@ export { createBot, describeBot, type Bot, type CreateBotOptions } from './creat
 export { generateSecToken } from './sec-token';
 export type { BotConfig, BotOneBotConfig } from './config';
 export { createProtocolBackend, type ProtocolBackendOptions } from './onebot-backend';
+export {
+  createMediaUrlResolver,
+  type MediaUrlResolver,
+  type MediaUrlResolverOptions,
+} from './media-url';

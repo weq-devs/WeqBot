@@ -129,6 +129,13 @@ export interface OneBotBackend {
   setGroupName?(groupId: number, name: string): Promise<void>;
   setGroupKick?(groupId: number, userId: number, reject: boolean): Promise<void>;
   setGroupLeave?(groupId: number, dissolve: boolean): Promise<void>;
+  /** `set_group_special_title`；`duration` 为 `undefined` 表示永久。 */
+  setGroupSpecialTitle?(
+    groupId: number,
+    userId: number,
+    title: string,
+    duration?: number,
+  ): Promise<void>;
 
   sendLike?(userId: number, times: number): Promise<void>;
   sendPoke?(target: { groupId?: number; userId: number }): Promise<void>;
@@ -141,6 +148,16 @@ export interface OneBotBackend {
   /** `can_send_image` / `can_send_record`。 */
   canSendImage?(): Promise<boolean>;
   canSendRecord?(): Promise<boolean>;
+
+  /** `get_status`：`time` 是适配器启动至今的秒数，由适配层补。 */
+  getStatus?(): Promise<{ online: boolean; good: boolean }>;
+}
+
+/** `get_version_info` 的返回形状。`app_version` 取本仓库的占位版本。 */
+export interface VersionInfo {
+  app_name: string;
+  app_version: string;
+  protocol_version: string;
 }
 
 /** 后端实现了哪些能力的摘要，用于诊断与 `--print-capabilities`。 */
@@ -163,6 +180,7 @@ export function describeBackend(backend: OneBotBackend): string[] {
     'setGroupName',
     'setGroupKick',
     'setGroupLeave',
+    'setGroupSpecialTitle',
     'sendLike',
     'sendPoke',
     'setFriendAddRequest',
@@ -170,6 +188,7 @@ export function describeBackend(backend: OneBotBackend): string[] {
     'getMessage',
     'canSendImage',
     'canSendRecord',
+    'getStatus',
   ];
   return names.filter((name) => typeof backend[name] === 'function');
 }
