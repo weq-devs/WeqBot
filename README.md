@@ -48,6 +48,16 @@ pnpm check:pure-ts   # 只跑架构护栏
 pnpm dev:cli --help  # CLI（源码直接跑，靠 tsx；P6 再出打包产物）
 ```
 
+真机相关：
+
+```bash
+pnpm dev:cli --account <uin> --config docs/config.example.json   # 起 bot（含 OneBot）
+pnpm smoke:onebot --url ws://127.0.0.1:6700 --self <uin>         # 只读冒烟
+pnpm smoke:onebot --url ws://127.0.0.1:6700 --self <uin> --send  # 含真实发消息
+```
+
+配置样例见 `docs/config.example.json`，完整验证流程见 `docs/real-device-checklist.md`。
+
 ## 约束（由 `scripts/check-pure-ts.mjs` 强制）
 
 1. 除 `packages/node` 外，任何代码不得出现 `.node` / `process.dlopen` / `createRequire`。
