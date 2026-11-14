@@ -1,0 +1,55 @@
+.theme-toggle {
+  display: inline-flex;
+  min-width: 0;
+  margin: 0;
+  gap: 2px;
+  padding: 3px;
+  border-radius: var(--radius-full);
+  background: var(--chrome-glass);
+  border: 1px solid var(--border);
+  box-shadow: var(--shadow-sm);
+  backdrop-filter: blur(14px) saturate(1.3);
+}
+
+/* 用 fieldset 是为了真实的分组语义；外观上不要它的默认边框与内边距。 */
+.theme-toggle > legend {
+  float: left;
+}
+
+.theme-toggle-option {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--duration-base) var(--ease-out);
+}
+
+.theme-toggle-option:hover,
+.theme-toggle-option[aria-pressed="true"] {
+  color: var(--text);
+}
+
+.theme-toggle-option:focus-visible {
+  outline-offset: 1px;
+}
+
+.theme-toggle-pill {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--bg-elevated);
+  box-shadow:
+    var(--shadow-sm),
+    inset 0 0 0 1px var(--border);
+}
+
+.theme-toggle-icon {
+  position: relative;
+}

@@ -1,0 +1,67 @@
+.backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  pointer-events: none;
+  background: var(--bg);
+}
+
+.backdrop-glow {
+  position: absolute;
+  inset: 0;
+  background:
+    radial-gradient(ellipse 58% 40% at 50% -4%, var(--glow-strong), transparent 70%),
+    radial-gradient(ellipse 95% 60% at 50% -12%, var(--glow-soft), transparent 75%);
+}
+
+/* 两团光只动 transform，交给合成层，不触发重绘。 */
+.backdrop-orb {
+  position: absolute;
+  width: 54vmax;
+  aspect-ratio: 1;
+  border-radius: 50%;
+  will-change: transform;
+}
+
+.backdrop-orb-a {
+  top: -36vmax;
+  left: calc(50% - 50vmax);
+  background: radial-gradient(circle, var(--orb-a), transparent 62%);
+  animation: backdrop-drift-a 28s var(--ease-in-out) infinite alternate;
+}
+
+.backdrop-orb-b {
+  top: -32vmax;
+  left: calc(50% - 4vmax);
+  background: radial-gradient(circle, var(--orb-b), transparent 62%);
+  animation: backdrop-drift-b 34s var(--ease-in-out) infinite alternate;
+}
+
+@keyframes backdrop-drift-a {
+  to {
+    transform: translate3d(10vmax, 6vmax, 0) scale(1.08);
+  }
+}
+
+@keyframes backdrop-drift-b {
+  to {
+    transform: translate3d(-9vmax, 8vmax, 0) scale(0.92);
+  }
+}
+
+.backdrop-grid {
+  position: absolute;
+  inset: 0;
+  background-image: radial-gradient(circle at center, var(--grid-dot) 1px, transparent 1.6px);
+  background-size: 24px 24px;
+  background-position: center top;
+  mask-image: radial-gradient(ellipse 62% 52% at 50% 24%, #000 20%, transparent 76%);
+}
+
+.backdrop-noise {
+  position: absolute;
+  inset: 0;
+  opacity: var(--noise-opacity);
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='180' height='180'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.8' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}

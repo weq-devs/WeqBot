@@ -1,0 +1,112 @@
+.btn {
+  position: relative;
+  isolation: isolate;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  height: 36px;
+  padding: 0 14px;
+  overflow: hidden;
+  border: 1px solid transparent;
+  border-radius: var(--radius-md);
+  font-size: var(--text-md);
+  font-weight: 500;
+  line-height: 1;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  transition:
+    background-color var(--duration-base) var(--ease-out),
+    border-color var(--duration-base) var(--ease-out),
+    color var(--duration-base) var(--ease-out),
+    box-shadow var(--duration-slow) var(--ease-out),
+    opacity var(--duration-base) var(--ease-out),
+    transform var(--duration-fast) var(--ease-out);
+}
+
+.btn[data-size="lg"] {
+  height: 44px;
+  padding: 0 20px;
+}
+
+.btn[data-block] {
+  display: flex;
+  width: 100%;
+}
+
+.btn:active:not(:disabled) {
+  transform: scale(0.985);
+}
+
+.btn:disabled {
+  cursor: not-allowed;
+}
+
+/* ── primary：品牌蓝竖向微渐变 + 内高光 + 同色辉光 ───────────────────── */
+.btn[data-variant="primary"] {
+  color: var(--on-accent);
+  background: linear-gradient(180deg, var(--accent-fill-top), var(--accent-fill-bottom));
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.24),
+    inset 0 -1px 0 oklch(0.2 0.1 262 / 0.25),
+    0 1px 2px oklch(0.3 0.12 262 / 0.3),
+    0 8px 20px -8px var(--accent-glow);
+  text-shadow: 0 1px 0 oklch(0.3 0.12 262 / 0.25);
+}
+
+/* 悬停时扫过一道光：画在背景之上、文字之下。 */
+.btn[data-variant="primary"]::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background: linear-gradient(105deg, transparent 30%, oklch(1 0 0 / 0.24) 50%, transparent 70%);
+  transform: translateX(-110%);
+}
+
+.btn[data-variant="primary"]:hover:not(:disabled)::before {
+  transform: translateX(110%);
+  transition: transform 0.85s var(--ease-out);
+}
+
+.btn[data-variant="primary"]:hover:not(:disabled) {
+  box-shadow:
+    inset 0 1px 0 oklch(1 0 0 / 0.28),
+    inset 0 -1px 0 oklch(0.2 0.1 262 / 0.25),
+    0 1px 2px oklch(0.3 0.12 262 / 0.3),
+    0 12px 28px -10px var(--accent-glow);
+}
+
+.btn[data-variant="primary"]:disabled {
+  opacity: 0.6;
+  box-shadow: inset 0 1px 0 oklch(1 0 0 / 0.18);
+}
+
+/* ── secondary：实底卡片按钮 ─────────────────────────────────────────── */
+.btn[data-variant="secondary"] {
+  color: var(--text);
+  background: var(--bg-elevated);
+  border-color: var(--border-strong);
+  box-shadow: var(--shadow-sm), var(--highlight);
+}
+
+.btn[data-variant="secondary"]:hover:not(:disabled) {
+  background: linear-gradient(var(--bg-hover), var(--bg-hover)), var(--bg-elevated);
+}
+
+/* ── ghost：只在悬停时出现底色 ──────────────────────────────────────── */
+.btn[data-variant="ghost"] {
+  color: var(--text-secondary);
+  background: transparent;
+}
+
+.btn[data-variant="ghost"]:hover:not(:disabled) {
+  color: var(--text);
+  background: var(--bg-hover);
+}
+
+.btn:not([data-variant="primary"]):disabled {
+  opacity: 0.5;
+}

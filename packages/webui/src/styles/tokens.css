@@ -1,0 +1,222 @@
+/*
+ * WeqBot WebUI 设计令牌：颜色 / 字体 / 圆角 / 阴影 / 动效都从这里取，组件里不写裸色值。
+ *
+ * 配色纪律（改颜色前先读这段）：
+ *
+ * 1. 只有一个主题色：品牌蓝。一条色阶，浅阶偏 azure、深阶偏 royal（hue 236 → 264），
+ *    与 WeQ logo 的渐变同向。交互态、选中态、强调、图表全部从这条色阶取。
+ * 2. 中性色是「带一点蓝的灰」（chroma ≤ 0.02），不用纯灰 —— 纯灰配蓝色强调会发脏。
+ * 3. 状态色（good / warning / critical）是保留色：只用于状态点、徽标、错误提示这类小面积
+ *    元素，并且永远配图标 + 文字；不做大面积填充，也不拿来区分图表系列。
+ * 4. 图表只用蓝色单色阶：量级 = 同一个蓝的明暗；名义类别每根柱子同一个蓝，靠标签区分。
+ * 5. 深色不是浅色取反：每个语义令牌在两种模式下分别取值、分别校验对比度
+ *    （正文 / 次要文字 ≥ 4.5:1，占位与禁用 ≥ 3:1，主按钮白字 ≥ 4.5:1）。
+ */
+
+:root {
+  /* ── 字体：拉丁 / 数字用 Geist，中文落到各平台的系统黑体 ─────────────── */
+  --font-sans:
+    "Geist Variable", -apple-system, BlinkMacSystemFont, "Segoe UI Variable Text", "Segoe UI",
+    "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei UI", "Microsoft YaHei", "Noto Sans SC",
+    "Noto Sans CJK SC", sans-serif;
+  --font-mono:
+    "Geist Mono Variable", ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo,
+    Consolas, "Noto Sans Mono CJK SC", monospace;
+
+  /* ── 字号：14px 基准（控制台密度） ───────────────────────────────────── */
+  --text-xs: 0.75rem;
+  --text-sm: 0.8125rem;
+  --text-md: 0.875rem;
+  --text-lg: 1rem;
+  --text-xl: 1.25rem;
+  --text-2xl: 1.5rem;
+  --text-3xl: 1.75rem;
+
+  /* ── 圆角：嵌套时外层 = 内层 + 内边距，保持同心 ───────────────────────── */
+  --radius-xs: 6px;
+  --radius-sm: 8px;
+  --radius-md: 10px;
+  --radius-lg: 14px;
+  --radius-xl: 20px;
+  --radius-full: 999px;
+
+  /* ── 动效 ─────────────────────────────────────────────────────────── */
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  /* 轻微回弹的弹簧，只给位移类用（开关、指示条）。 */
+  --ease-spring: linear(
+    0,
+    0.006,
+    0.025 2.8%,
+    0.101 6.1%,
+    0.539 18.9%,
+    0.721 25.3%,
+    0.849 31.5%,
+    0.937 38.1%,
+    0.968 41.8%,
+    0.991 45.7%,
+    1.006 50.1%,
+    1.015 55%,
+    1.017 63.9%,
+    1.001
+  );
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 320ms;
+  --duration-slower: 520ms;
+
+  /* ── 品牌蓝色阶（原始值，两种模式共用；组件只用下面的语义令牌） ─────────── */
+  --blue-50: oklch(0.975 0.014 240);
+  --blue-100: oklch(0.948 0.03 242);
+  --blue-200: oklch(0.902 0.058 244);
+  --blue-300: oklch(0.835 0.098 246);
+  --blue-400: oklch(0.745 0.142 248);
+  --blue-500: oklch(0.66 0.176 251);
+  --blue-600: oklch(0.585 0.197 255);
+  --blue-700: oklch(0.515 0.196 259);
+  --blue-800: oklch(0.445 0.168 261);
+  --blue-900: oklch(0.375 0.128 262);
+  --blue-950: oklch(0.28 0.085 264);
+
+  /* 主按钮底：竖向微渐变，白字在中段约 4.7:1。 */
+  --accent-fill-top: oklch(0.6 0.19 254);
+  --accent-fill-bottom: oklch(0.52 0.205 261);
+  --on-accent: oklch(0.99 0 0);
+}
+
+/* ─────────────────────────────── 浅色 ─────────────────────────────── */
+:root,
+[data-theme="light"] {
+  color-scheme: light;
+
+  --bg: oklch(0.982 0.004 250);
+  --bg-elevated: oklch(1 0 0);
+  --bg-sunken: oklch(0.965 0.006 252);
+  --bg-hover: oklch(0.35 0.03 262 / 0.05);
+  --bg-active: oklch(0.35 0.03 262 / 0.09);
+  --card-glass: oklch(1 0 0 / 0.78);
+  --chrome-glass: oklch(1 0 0 / 0.72);
+
+  --border: oklch(0.3 0.03 262 / 0.1);
+  --border-strong: oklch(0.3 0.03 262 / 0.16);
+
+  --text: oklch(0.22 0.02 262);
+  --text-secondary: oklch(0.44 0.02 260);
+  --text-muted: oklch(0.54 0.018 258);
+  --text-faint: oklch(0.62 0.014 256);
+  --title-fade: oklch(0.42 0.06 258);
+
+  --accent: var(--blue-600);
+  --accent-text: var(--blue-700);
+  --accent-soft: oklch(0.585 0.197 255 / 0.09);
+  --accent-ring: oklch(0.585 0.197 255 / 0.2);
+  --accent-border: oklch(0.585 0.197 255 / 0.45);
+  --accent-glow: oklch(0.55 0.2 258 / 0.45);
+  --accent-spot: oklch(0.6 0.19 254 / 0.55);
+  --accent-edge: oklch(0.6 0.19 254 / 0.6);
+  --selection: oklch(0.66 0.176 251 / 0.22);
+
+  --status-good: oklch(0.6 0.15 155);
+  --status-warning: oklch(0.7 0.15 70);
+  --status-critical: oklch(0.58 0.2 27);
+  --status-critical-text: oklch(0.52 0.19 27);
+  --status-critical-soft: oklch(0.58 0.2 27 / 0.07);
+  --status-critical-border: oklch(0.58 0.2 27 / 0.22);
+
+  --switch-off: oklch(0.3 0.03 262 / 0.12);
+
+  --shadow-sm: 0 1px 2px oklch(0.25 0.03 262 / 0.07);
+  --shadow-md: 0 1px 2px oklch(0.25 0.03 262 / 0.05), 0 6px 16px -4px oklch(0.25 0.03 262 / 0.09);
+  --shadow-lg:
+    0 1px 2px oklch(0.25 0.03 262 / 0.04), 0 12px 32px -10px oklch(0.25 0.04 262 / 0.14),
+    0 32px 72px -32px oklch(0.45 0.14 258 / 0.22);
+  --highlight: inset 0 1px 0 oklch(1 0 0 / 0.8);
+
+  --logo-from: oklch(0.53 0.21 262);
+  --logo-to: oklch(0.74 0.15 236);
+  --logo-halo: oklch(0.7 0.16 248 / 0.45);
+  --logo-shadow: oklch(0.5 0.2 258 / 0.35);
+
+  --term-bg: oklch(0.205 0.02 264);
+  --term-bar: oklch(0.235 0.02 264);
+  --term-border: oklch(0.2 0.02 264 / 0.9);
+  --term-text: oklch(0.9 0.01 255);
+  --term-dim: oklch(0.66 0.016 258);
+  --term-accent: var(--blue-300);
+  --term-highlight: oklch(0.66 0.176 251 / 0.16);
+
+  --glow-strong: oklch(0.72 0.14 244 / 0.26);
+  --glow-soft: oklch(0.78 0.1 240 / 0.14);
+  --orb-a: oklch(0.66 0.18 258 / 0.2);
+  --orb-b: oklch(0.8 0.11 232 / 0.24);
+  --grid-dot: oklch(0.35 0.03 262 / 0.12);
+  --noise-opacity: 0.035;
+}
+
+/* ─────────────────────────────── 深色 ─────────────────────────────── */
+[data-theme="dark"] {
+  color-scheme: dark;
+
+  --bg: oklch(0.155 0.012 264);
+  --bg-elevated: oklch(0.195 0.014 264);
+  --bg-sunken: oklch(0.135 0.012 264);
+  --bg-hover: oklch(1 0 0 / 0.05);
+  --bg-active: oklch(1 0 0 / 0.09);
+  --card-glass: oklch(0.19 0.014 264 / 0.72);
+  --chrome-glass: oklch(0.2 0.014 264 / 0.7);
+
+  --border: oklch(1 0 0 / 0.085);
+  --border-strong: oklch(1 0 0 / 0.14);
+
+  --text: oklch(0.955 0.006 255);
+  --text-secondary: oklch(0.78 0.014 258);
+  --text-muted: oklch(0.66 0.016 258);
+  --text-faint: oklch(0.52 0.016 260);
+  --title-fade: oklch(0.74 0.06 252);
+
+  --accent: var(--blue-500);
+  --accent-text: var(--blue-300);
+  --accent-soft: oklch(0.66 0.176 251 / 0.14);
+  --accent-ring: oklch(0.7 0.16 250 / 0.3);
+  --accent-border: oklch(0.7 0.16 250 / 0.5);
+  --accent-glow: oklch(0.55 0.2 258 / 0.6);
+  --accent-spot: oklch(0.72 0.15 248 / 0.6);
+  --accent-edge: oklch(0.75 0.14 246 / 0.7);
+  --selection: oklch(0.66 0.176 251 / 0.35);
+
+  --status-good: oklch(0.74 0.15 155);
+  --status-warning: oklch(0.8 0.14 75);
+  --status-critical: oklch(0.7 0.17 25);
+  --status-critical-text: oklch(0.8 0.12 25);
+  --status-critical-soft: oklch(0.7 0.17 25 / 0.1);
+  --status-critical-border: oklch(0.7 0.17 25 / 0.28);
+
+  --switch-off: oklch(1 0 0 / 0.12);
+
+  --shadow-sm: 0 1px 2px oklch(0 0 0 / 0.35);
+  --shadow-md: 0 1px 2px oklch(0 0 0 / 0.3), 0 8px 20px -6px oklch(0 0 0 / 0.5);
+  --shadow-lg:
+    0 1px 2px oklch(0 0 0 / 0.35), 0 18px 44px -14px oklch(0 0 0 / 0.65),
+    0 36px 90px -36px oklch(0.45 0.18 260 / 0.4);
+  --highlight: inset 0 1px 0 oklch(1 0 0 / 0.07);
+
+  --logo-from: oklch(0.55 0.21 262);
+  --logo-to: oklch(0.76 0.14 236);
+  --logo-halo: oklch(0.6 0.19 255 / 0.55);
+  --logo-shadow: oklch(0.3 0.18 260 / 0.6);
+
+  --term-bg: oklch(0.13 0.012 264);
+  --term-bar: oklch(0.16 0.013 264);
+  --term-border: oklch(1 0 0 / 0.07);
+  --term-text: oklch(0.9 0.01 255);
+  --term-dim: oklch(0.62 0.016 258);
+  --term-accent: var(--blue-300);
+  --term-highlight: oklch(0.66 0.176 251 / 0.16);
+
+  --glow-strong: oklch(0.58 0.19 258 / 0.34);
+  --glow-soft: oklch(0.55 0.16 255 / 0.16);
+  --orb-a: oklch(0.5 0.2 264 / 0.32);
+  --orb-b: oklch(0.62 0.15 238 / 0.22);
+  --grid-dot: oklch(1 0 0 / 0.075);
+  --noise-opacity: 0.05;
+}

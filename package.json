@@ -11,6 +11,8 @@
   "scripts": {
     "typecheck": "pnpm -r typecheck",
     "dev:cli": "tsx packages/node/src/cli.ts",
+    "dev:webui": "pnpm --filter @weqbot/webui dev",
+    "build:webui": "pnpm --filter @weqbot/webui build",
     "lint": "biome lint --error-on-warnings .",
     "lint:fix": "biome lint --write .",
     "format": "biome format --write .",

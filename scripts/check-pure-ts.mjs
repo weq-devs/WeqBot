@@ -29,6 +29,8 @@ const LAYERS = {
   bot: ['common', 'wire', 'protocol', 'session', 'onebot'],
   control: ['common', 'wire'],
   node: ['common', 'wire', 'protocol', 'session', 'onebot', 'bot', 'control'],
+  // 浏览器里跑的静态 SPA：只通过 HTTP 与 node 通信，不 import 任何 @weqbot 包。
+  webui: [],
 };
 
 /** 只有这个包可以加载原生组件。 */

@@ -1,0 +1,73 @@
+.switch {
+  position: relative;
+  display: inline-flex;
+  flex: none;
+  width: 34px;
+  height: 20px;
+}
+
+.switch-input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+}
+
+.switch-input:disabled {
+  cursor: not-allowed;
+}
+
+.switch-track {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-full);
+  background: var(--switch-off);
+  box-shadow: inset 0 0 0 1px var(--border);
+  transition:
+    background-color var(--duration-base) var(--ease-out),
+    box-shadow var(--duration-base) var(--ease-out);
+}
+
+.switch-thumb {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 14px;
+  height: 14px;
+  border-radius: var(--radius-full);
+  background: oklch(1 0 0);
+  box-shadow:
+    0 1px 3px oklch(0.2 0.03 262 / 0.3),
+    0 0 0 0.5px oklch(0.2 0.03 262 / 0.1);
+  transition:
+    transform var(--duration-slow) var(--ease-spring),
+    width var(--duration-base) var(--ease-out);
+}
+
+.switch-input:checked + .switch-track {
+  background: var(--accent);
+  box-shadow: inset 0 0 0 1px transparent;
+}
+
+.switch-input:checked + .switch-track .switch-thumb {
+  transform: translateX(14px);
+}
+
+/* 按住时滑块拉长一点，松手回弹。 */
+.switch-input:active:not(:disabled) + .switch-track .switch-thumb {
+  width: 17px;
+}
+
+.switch-input:checked:active:not(:disabled) + .switch-track .switch-thumb {
+  transform: translateX(11px);
+}
+
+.switch-input:focus-visible + .switch-track {
+  box-shadow: 0 0 0 3px var(--accent-ring);
+}
+
+.switch-input:disabled + .switch-track {
+  opacity: 0.5;
+}
