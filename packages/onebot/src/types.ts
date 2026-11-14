@@ -98,6 +98,13 @@ export interface OneBotNetworks {
 /** 每个账号一份 OneBot 配置。 */
 export interface OneBotConfig {
   networks: OneBotNetworks;
+  /**
+   * QQ 空间 action 开关，默认开。关掉时 `qzone` 能力不注册（凭据也不会被换取）。
+   * 空间是主动写能力，暴露给不可信客户端的部署应当关闭。
+   */
+  qzone?: boolean;
+  /** 空间 cgi 的域，默认 `qzone.qq.com`。 */
+  qzoneDomain?: string;
 }
 
 /** 内部记录：一条消息在 QQ 侧的定位信息（`get_msg` / 撤回 / 引用都要）。 */

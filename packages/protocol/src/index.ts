@@ -145,6 +145,8 @@ export * from './highway';
 export * from './oidb/flashtransfer';
 
 export * from './web/gift-mall';
+export * from './web';
+export * from './qzone/feed-media-detail';
 
 export * from './msg';
 export * from './push';

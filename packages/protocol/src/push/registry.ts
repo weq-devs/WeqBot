@@ -149,8 +149,8 @@ function decodeOperator(raw: Uint8Array | undefined, allowRaw: boolean): string 
   if (allowRaw && /^u_[A-Za-z0-9_-]+$/.test(text)) return text;
   try {
     return asUid(
-      (decode(GROUP_CHANGE_OPERATOR, raw) as { operatorField?: { uid?: string } })
-        .operatorField?.uid,
+      (decode(GROUP_CHANGE_OPERATOR, raw) as { operatorField?: { uid?: string } }).operatorField
+        ?.uid,
     );
   } catch {
     return '';
@@ -540,8 +540,7 @@ function decodeGroupMember(raw: RawMessageBody): PushEvent | null {
       groupUin,
       memberUid,
       // 主动退群没有独立操作者，OneBot 语义里就是本人。
-      operatorUid:
-        dt === 130 ? memberUid : decodeOperator(change.operatorBytes, dt !== 3),
+      operatorUid: dt === 130 ? memberUid : decodeOperator(change.operatorBytes, dt !== 3),
       action: leaveType === 'disband' ? 'disband' : 'leave',
       leaveType,
     } satisfies PushGroupMemberEvent;

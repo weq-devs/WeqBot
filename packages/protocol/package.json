@@ -9,7 +9,8 @@
     "./msg": "./src/msg/index.ts",
     "./push": "./src/push/index.ts",
     "./protobuf": "./src/protobuf.ts",
-    "./contacts": "./src/oidb/contacts/index.ts"
+    "./contacts": "./src/oidb/contacts/index.ts",
+    "./web": "./src/web/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

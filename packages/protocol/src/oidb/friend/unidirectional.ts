@@ -50,9 +50,7 @@ export namespace GetUnidirectionalFriendList {
   export const reqSchema = REQ;
   export const respSchema = RESP;
 
-  export function serialize(
-    params: GetUnidirectionalFriendListParams,
-  ): Record<string, unknown> {
+  export function serialize(params: GetUnidirectionalFriendListParams): Record<string, unknown> {
     if (!params.uin.trim()) throw new Error('单向好友列表需要自己的 uin');
     return {
       subCommand: SUB_COMMAND,

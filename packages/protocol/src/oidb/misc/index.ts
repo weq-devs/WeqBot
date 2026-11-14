@@ -8,6 +8,8 @@ export {
   scaleOcrPoints,
   scaleOcrRect,
 } from './ocr-image';
+export { TranslateEnToZh } from './translate';
+export type { TranslateEnToZhParams } from './translate';
 export type { OcrBlock, OcrLanguage, OcrPoint, OcrRect, OcrResult } from './ocr-image';
 export { RequestDecryptKey } from './request-decrypt-key';
 export { FetchClientKey } from './fetch-client-key';

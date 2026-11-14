@@ -34,7 +34,7 @@ import type {
 import { IdentityCache, PushBridge, SessionStateMachine } from '@weqbot/session';
 import { createOneBotAdapter, type OneBotAdapter } from '@weqbot/onebot';
 import type { ProtocolClient } from '@weqbot/protocol';
-import { createProtocolClient } from '@weqbot/protocol';
+import { createOidbWebCredentials, createProtocolClient } from '@weqbot/protocol';
 import type { BotConfig } from './config';
 import { createMediaUrlResolver } from './media-url';
 import { createProtocolBackend } from './onebot-backend';
@@ -413,11 +413,23 @@ export function createBot(options: CreateBotOptions): Bot {
     if (!protocol) return;
 
     try {
+      // 空间 cgi 的凭据来源：纯 OIDB（`0x102a_1` → jump → `0x102a_0`），
+      // 不需要 QQ 进程，也不走 pt_login（那是 WeQ 宿主的能力，见 TODO D18）。
+      const webCredentials =
+        config.onebot.qzone === false
+          ? undefined
+          : createOidbWebCredentials({
+              native: protocol.native,
+              sessionId: protocol.sessionId,
+              uin,
+            });
       const backend = createProtocolBackend({
         protocol,
         selfUin: uin,
         ...(selfUid ? { selfUid: selfUid } : {}),
         logger: log,
+        ...(webCredentials ? { webCredentials } : {}),
+        ...(config.onebot.qzoneDomain ? { qzoneDomain: config.onebot.qzoneDomain } : {}),
         resolveUidUin: {
           uinByUid: (targetUid: string) => identity.uinOf(targetUid),
           uidByUin: (targetUin: string) => identity.uidOf(targetUin),

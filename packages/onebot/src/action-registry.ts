@@ -60,6 +60,43 @@ export interface ActionListEntry {
   summary?: string;
 }
 
+/**
+ * 一条待装配的 action。
+ *
+ * `available` 是 P8 新增的能力谓词（按域分组的能力面用它），`requires` 是旧的
+ * 扁平方法名清单；两者都给时以 `available` 为准。
+ */
+export interface ActionEntry {
+  definition: ActionDefinition<never, never>;
+  available?: (backend: import('./backend').OneBotBackend) => boolean;
+  requires?: Array<keyof import('./backend').OneBotBackend>;
+}
+
+/**
+ * 声明一条 action 并保留参数/返回类型推断。
+ *
+ * 直接写 `{ definition: {...}, available }` 会被 `ActionEntry` 的
+ * `ActionDefinition<never, never>` 吸成 `never`，所以统一走这个 helper。
+ */
+export function defineAction<P, R>(
+  definition: {
+    name: string;
+    summary?: string;
+    parse?: ParamParser<P>;
+    run(params: P, ctx: ActionContext): Promise<R>;
+  },
+  options: {
+    available?: (backend: import('./backend').OneBotBackend) => boolean;
+    requires?: Array<keyof import('./backend').OneBotBackend>;
+  } = {},
+): ActionEntry {
+  return {
+    definition: definition as unknown as ActionDefinition<never, never>,
+    ...(options.available ? { available: options.available } : {}),
+    ...(options.requires ? { requires: options.requires } : {}),
+  };
+}
+
 // ─────────────────────────── 参数校验小工具 ───────────────────────────
 
 export function requiredPositiveInt(raw: JsonObject, key: string): number {

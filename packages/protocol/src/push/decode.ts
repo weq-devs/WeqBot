@@ -16,12 +16,7 @@ import { decodeMessageBody, type RawMessageBody } from '../msg/decode';
 import type { SysMsgDedup } from './dedup';
 import { createMsgPushRegistry, type MsgPushRegistry } from './registry';
 import { MSG_PUSH_ENVELOPE, SEND_MESSAGE_RESPONSE } from './schemas';
-import type {
-  PushClientReceiptEvent,
-  PushEvent,
-  PushMessageEvent,
-  PushScene,
-} from './types';
+import type { PushClientReceiptEvent, PushEvent, PushMessageEvent, PushScene } from './types';
 
 /** OlPush 的 SSO 命令名。 */
 export const MSG_PUSH_CMD = 'trpc.msg.olpush.OlPushService.MsgPush';
@@ -193,10 +188,7 @@ export function decodeMessageBodies(
     .filter((event): event is PushMessageEvent => event !== null);
 }
 
-function messageEvent(
-  raw: RawMessageBody,
-  options: DecodePushOptions,
-): PushMessageEvent | null {
+function messageEvent(raw: RawMessageBody, options: DecodePushOptions): PushMessageEvent | null {
   const message = decodeMessageBody(raw);
   // 空消息（无元素、无 msgContent）是 QQ 的「[空消息]」幽灵推送。
   if (message.elements.length === 0 && (raw.body?.msgContent?.length ?? 0) === 0) {
