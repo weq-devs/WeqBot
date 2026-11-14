@@ -11,7 +11,7 @@ export type { QqLevelInfo, UserProfileInfo } from './get-user-qq-level';
 export { GetQqShowUrl } from './get-qq-show-url';
 export type { QqShowInfo } from './get-qq-show-url';
 export { GetProfileLike } from './get-profile-like';
-export type { LikeInfo, InteractionCounts } from './get-profile-like';
+export type { LikeInfo, LikeUserInfo, InteractionCounts } from './get-profile-like';
 export {
   SetOnlineStatus,
   SetDiyOnlineStatus,

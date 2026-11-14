@@ -8,28 +8,45 @@
  * `packages/protocol/src/redbag/`，它也只对 WeQ 宿主开放，不进 OneBot。
  */
 
+import { readFile } from 'node:fs/promises';
 import type {
+  ForwardMessageNode,
+  ForwardNode,
+  ForwardPreview,
   FriendInfo,
   GroupInfo,
   GroupMemberInfo,
+  HistoryMessage,
+  InboundElement,
   LoginInfo,
   OneBotBackend,
+  ProfileLikeUserInfo,
   RecallTarget,
   Segment,
   SendResult,
 } from '@weqbot/onebot';
-import { segmentsToElements } from '@weqbot/onebot';
+import { elementsToSegments, segmentsToElements } from '@weqbot/onebot';
 import type { ProtocolClient } from '@weqbot/protocol';
 import {
   ApproveDoubtFriendRequest,
   CommentGroupAlbumMedia,
+  decodeMessageBody,
+  fetchC2cHistoryRaw,
+  fetchForwardRaw,
+  fetchGroupHistoryRaw,
+  ReadedReport,
+  sendForward as sendLongMessage,
+  type ForwardNode as ProtocolForwardNode,
+  type RawMessageBody,
   composeGroupFileDownloadUrl,
   CreateGroupFolder,
   DeleteCustomFace,
   DeleteFriend,
+  DeleteFlashFile,
   DeleteGroupAlbumMedia,
   DeleteGroupFile,
   DeleteGroupFolder,
+  FetchAiVoiceList,
   FetchCustomFaceDetail,
   FetchCustomFaceList,
   FetchDoubtFriendRequests,
@@ -38,14 +55,20 @@ import {
   FetchSysFaces,
   FetchUserProfile,
   GetAlbumMediaList,
+  GetBuddyRecommendArk,
   GetEmojiLikes,
   GetGroupAlbumFeedDetail,
+  GetGroupRecommendArk,
   GetGroupAtAllRemain,
   GetGroupFileCount,
   GetGroupFileSpace,
   GetGroupMessagePolicies,
+  GetGroupPttUrl,
   GetGroupTodoList,
   GetGroupFileUrl,
+  GetPrivateFileUrl,
+  GetProfileLike,
+  GetFilesetDetail,
   GetUnidirectionalFriendList,
   GroupTodo,
   getDressRank,
@@ -81,6 +104,7 @@ import {
   HandleFriendRequest,
   KickGroupMember,
   LeaveGroup,
+  ListFilesets,
   ListGroupFiles,
   ModifyCustomFace,
   MoveGroupFile,
@@ -90,24 +114,37 @@ import {
   parseCustomFaceId,
   RecallGroup,
   RecallPrivate,
+  RequestDecryptKey,
   RejectDoubtFriendRequest,
+  RenameFlashFile,
   RenameGroupFile,
   RenameGroupFolder,
   sendC2cMessage,
   sendGroupMessage,
   sendMessage,
+  SendAiVoice,
+  SendFlashMsg,
   SendGroupSign,
   SendPoke,
   SendProfileLike,
+  SendTuwenArk,
+  SetDiyOnlineStatus,
+  SetFriendCategory,
   SetFriendRemark,
   SetGroupAdmin,
+  SetGroupEssence,
   SetGroupAlbumLike,
   SetGroupMemberCard,
   SetGroupName,
+  SetGroupRemark,
+  SetOnlineStatus,
   SetReaction,
+  SetSelfProfile,
+  setSelfAvatar,
   SetGroupSpecialTitle,
   TranslateEnToZh,
   getQzoneFeeds,
+  getQzoneMsgDetail,
   getQzoneMsgList,
   getQzoneProfile,
   getQzonePublicCapabilities,
@@ -120,9 +157,13 @@ import {
   publishQzoneMsg,
   setQzoneLike,
   setQzoneProfile,
+  uploadFlashFiles,
   uploadQzoneImage,
   withRetry,
   type GroupMemberListItem,
+  type LikeUserInfo,
+  type MediaIndexNode,
+  type PublicProfileFields,
   type SendElement,
   type WebCredentialSource,
 } from '@weqbot/protocol';
@@ -135,6 +176,18 @@ export interface ProtocolBackendOptions {
   selfUid?: string;
   nickname?: string;
   logger?: Logger;
+  /**
+   * 历史 / 合并转发消息里的媒体 URL 解析（与适配层入站事件同一份实现）。
+   * 不传时图片 / 语音段只有文件名，`url` 为空。
+   */
+  imageUrlResolver?: (
+    element: Record<string, unknown>,
+    isGroup: boolean,
+  ) => Promise<string> | string;
+  mediaUrlResolver?: (
+    element: Record<string, unknown>,
+    isGroup: boolean,
+  ) => Promise<string> | string;
   /** uid ↔ uin 缓存；`@` / 撤回都靠它。 */
   resolveUidUin?: {
     uinByUid(uid: string): string | undefined;
@@ -189,6 +242,519 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
     };
   }
 
+  // ─────────────── 历史 / 合并转发 / 已读（第 1 批） ───────────────
+  //
+  // 行走窗口的常量与 SnowLuma `core/src/bridge/apis/message.ts` 一致：小包、
+  // 有上限的请求数、请求之间留 300ms。服务端历史是现拉现转，不落盘。
+
+  const selfId = Number(selfUin);
+  const HISTORY_MAX_COUNT = 200;
+  const HISTORY_CHUNK_SEQ = 30;
+  const HISTORY_MAX_REQUESTS = 12;
+  const HISTORY_GAP_MS = 300;
+  const UINT32_MAX = 0xffffffff;
+
+  let lastHistoryAt = 0;
+  /** 历史请求节流：协议层不管限速，这里统一排队。 */
+  async function historyGate<T>(run: () => Promise<T>): Promise<T> {
+    const wait = lastHistoryAt + HISTORY_GAP_MS - Date.now();
+    if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+    lastHistoryAt = Date.now();
+    return run();
+  }
+
+  function historyLimit(count: number): number {
+    const value = Math.trunc(count) || 20;
+    return Math.min(Math.max(1, value), HISTORY_MAX_COUNT);
+  }
+
+  /** QQ 把已删除 / body 为空的漫游记录留成「无发送者且无时间」的空壳，跳过。 */
+  function isNullRoamRecord(raw: RawMessageBody): boolean {
+    return (raw.responseHead?.fromUin ?? 0) <= 0 && (raw.contentHead?.timestamp ?? 0) <= 0;
+  }
+
+  function segmentResolvers() {
+    return {
+      ...(options.imageUrlResolver ? { imageUrlResolver: options.imageUrlResolver as never } : {}),
+      ...(options.mediaUrlResolver ? { mediaUrlResolver: options.mediaUrlResolver as never } : {}),
+    };
+  }
+
+  /**
+   * 已读探测：只报 0 水位，读回会话当前 read/latest 对（不推进任何标记）。
+   * `SsoReadedReport` 是历史分页唯一不依赖本地存储的锚点来源。
+   */
+  async function latestGroupSequence(groupId: number): Promise<number> {
+    const probe = await ReadedReport.invoke(nt, sessionId, {
+      groups: [{ groupId, lastReadSeq: 0 }],
+    });
+    const item = probe.groups.find((entry) => entry.groupId === groupId);
+    if (!item || !Number.isInteger(item.latestSeq) || item.latestSeq <= 0) {
+      throw new Error(`无法探测群 ${groupId} 的最新消息序号（可能不在该群或服务端未返回水位）`);
+    }
+    return item.latestSeq;
+  }
+
+  async function latestPrivateSequence(userId: number, uid: string): Promise<number> {
+    const probe = await ReadedReport.invoke(nt, sessionId, {
+      c2c: [{ uid, lastReadTime: 0, lastReadSeq: 0 }],
+    });
+    const item = probe.c2c.find(
+      (entry) => entry.uid === uid || String(entry.targetUin) === String(userId),
+    );
+    if (!item || !Number.isInteger(item.latestSeq) || item.latestSeq <= 0) {
+      throw new Error(`无法探测私聊 ${userId} 的最新消息序号（服务端未返回水位）`);
+    }
+    return item.latestSeq;
+  }
+
+  async function walkGroupHistory(params: {
+    groupId: number;
+    anchorSequence?: number;
+    count: number;
+    reverseOrder: boolean;
+  }): Promise<RawMessageBody[]> {
+    const want = historyLimit(params.count);
+    const collected = new Map<number, RawMessageBody>();
+    const sequenceOf = (raw: RawMessageBody) => raw.contentHead?.sequence ?? 0;
+    const anchor = params.anchorSequence ?? (await latestGroupSequence(params.groupId));
+
+    if (params.reverseOrder) {
+      let curEnd = anchor;
+      for (let i = 0; i < HISTORY_MAX_REQUESTS && collected.size < want && curEnd >= 1; i++) {
+        const start = Math.max(1, curEnd - HISTORY_CHUNK_SEQ + 1);
+        const page = await historyGate(() =>
+          fetchGroupHistoryRaw(nt, sessionId, {
+            groupUin: params.groupId,
+            startSeq: start,
+            endSeq: curEnd,
+          }),
+        );
+        const batch = page.messages as RawMessageBody[];
+        if (batch.length === 0) {
+          curEnd = start - 1;
+          continue;
+        }
+        let minSeq = curEnd;
+        for (const raw of batch) {
+          const sequence = sequenceOf(raw);
+          if (!Number.isInteger(sequence) || sequence < start || sequence > curEnd) {
+            throw new Error(`群历史响应序号 ${sequence} 超出请求区间 ${start}-${curEnd}`);
+          }
+          if (sequence < minSeq) minSeq = sequence;
+          if (!isNullRoamRecord(raw)) collected.set(sequence, raw);
+        }
+        curEnd = minSeq - 1;
+      }
+      return [...collected.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .slice(-want)
+        .map((entry) => entry[1]);
+    }
+
+    let curStart = anchor;
+    for (
+      let i = 0;
+      i < HISTORY_MAX_REQUESTS && collected.size < want && curStart <= UINT32_MAX;
+      i++
+    ) {
+      const end = Math.min(UINT32_MAX, curStart + HISTORY_CHUNK_SEQ - 1);
+      const page = await historyGate(() =>
+        fetchGroupHistoryRaw(nt, sessionId, {
+          groupUin: params.groupId,
+          startSeq: curStart,
+          endSeq: end,
+        }),
+      );
+      const batch = page.messages as RawMessageBody[];
+      if (batch.length === 0) break;
+      let maxSeq = curStart - 1;
+      for (const raw of batch) {
+        const sequence = sequenceOf(raw);
+        if (!Number.isInteger(sequence) || sequence < curStart || sequence > end) {
+          throw new Error(`群历史响应序号 ${sequence} 超出请求区间 ${curStart}-${end}`);
+        }
+        if (sequence > maxSeq) maxSeq = sequence;
+        if (!isNullRoamRecord(raw)) collected.set(sequence, raw);
+      }
+      if (maxSeq < curStart) break;
+      curStart = maxSeq + 1;
+    }
+    return [...collected.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .slice(0, want)
+      .map((entry) => entry[1]);
+  }
+
+  async function walkPrivateHistory(params: {
+    userId: number;
+    friendUid: string;
+    anchorSequence?: number;
+    count: number;
+    reverseOrder: boolean;
+  }): Promise<RawMessageBody[]> {
+    const want = historyLimit(params.count);
+    const collected = new Map<number, RawMessageBody>();
+    // 私聊窗口按服务端 NT 序号，不是会话内序号（SnowLuma 同款）。
+    const sequenceOf = (raw: RawMessageBody) => raw.contentHead?.ntMsgSeq ?? 0;
+    const anchor =
+      params.anchorSequence ?? (await latestPrivateSequence(params.userId, params.friendUid));
+
+    if (params.reverseOrder) {
+      let curEnd = anchor;
+      for (let i = 0; i < HISTORY_MAX_REQUESTS && collected.size < want && curEnd >= 1; i++) {
+        const start = Math.max(1, curEnd - HISTORY_CHUNK_SEQ + 1);
+        const page = await historyGate(() =>
+          fetchC2cHistoryRaw(nt, sessionId, {
+            friendUid: params.friendUid,
+            startSeq: start,
+            endSeq: curEnd,
+          }),
+        );
+        const batch = page.messages as RawMessageBody[];
+        if (batch.length === 0) {
+          curEnd = start - 1;
+          continue;
+        }
+        let minSeq = curEnd;
+        for (const raw of batch) {
+          const sequence = sequenceOf(raw);
+          if (!Number.isInteger(sequence) || sequence < start || sequence > curEnd) {
+            throw new Error(`私聊历史响应序号 ${sequence} 超出请求区间 ${start}-${curEnd}`);
+          }
+          if (sequence < minSeq) minSeq = sequence;
+          if (!isNullRoamRecord(raw)) collected.set(sequence, raw);
+        }
+        curEnd = minSeq - 1;
+      }
+      return [...collected.entries()]
+        .sort((a, b) => a[0] - b[0])
+        .slice(-want)
+        .map((entry) => entry[1]);
+    }
+
+    let curStart = anchor;
+    for (
+      let i = 0;
+      i < HISTORY_MAX_REQUESTS && collected.size < want && curStart <= UINT32_MAX;
+      i++
+    ) {
+      const end = Math.min(UINT32_MAX, curStart + HISTORY_CHUNK_SEQ - 1);
+      const page = await historyGate(() =>
+        fetchC2cHistoryRaw(nt, sessionId, {
+          friendUid: params.friendUid,
+          startSeq: curStart,
+          endSeq: end,
+        }),
+      );
+      const batch = page.messages as RawMessageBody[];
+      if (batch.length === 0) break;
+      let maxSeq = curStart - 1;
+      for (const raw of batch) {
+        const sequence = sequenceOf(raw);
+        if (!Number.isInteger(sequence) || sequence < curStart || sequence > end) {
+          throw new Error(`私聊历史响应序号 ${sequence} 超出请求区间 ${curStart}-${end}`);
+        }
+        if (sequence > maxSeq) maxSeq = sequence;
+        if (!isNullRoamRecord(raw)) collected.set(sequence, raw);
+      }
+      if (maxSeq < curStart) break;
+      curStart = maxSeq + 1;
+    }
+    return [...collected.entries()]
+      .sort((a, b) => a[0] - b[0])
+      .slice(0, want)
+      .map((entry) => entry[1]);
+  }
+
+  // ─────────────────────── AI 声聊（0x929D / 0x929B） ───────────────────────
+  //
+  // 0x929B 合成成功时服务端已经把语音发到群里，回包只给媒体索引、不给消息序号。
+  // `send` 从群历史里按文件名找回那条自发语音，不落任何本地索引。
+
+  const AI_VOICE_POLL_LIMIT = 30;
+  const AI_VOICE_RECEIPT_ATTEMPTS = 10;
+  const AI_VOICE_RECEIPT_GAP_MS = 500;
+
+  async function synthesizeAiVoice(params: {
+    groupId: number;
+    voiceId: string;
+    text: string;
+    chatType: number;
+  }) {
+    const session = Math.floor(Math.random() * 0xffffffff) >>> 0;
+    for (let attempt = 0; attempt < AI_VOICE_POLL_LIMIT; attempt++) {
+      const result = await SendAiVoice.invoke(nt, sessionId, {
+        groupCode: params.groupId,
+        voiceId: params.voiceId,
+        text: params.text,
+        chatType: params.chatType as 1 | 2,
+        msgRandom: session,
+      });
+      if (!SendAiVoice.isOk(result)) {
+        throw new Error(`AI 语音合成失败：retCode=${result.retCode}`);
+      }
+      const node = result.audio?.node;
+      if (node) return node;
+    }
+    throw new Error(`AI 语音合成 ${AI_VOICE_POLL_LIMIT} 次轮询后仍未完成`);
+  }
+
+  function aiVoiceMediaNode(node: {
+    fileInfo: {
+      fileSize: number;
+      fileHash: string;
+      fileSha1: string;
+      fileName: string;
+      type: { type: number; picFormat: number; videoFormat: number; voiceFormat: number };
+      time: number;
+      original: number;
+    };
+    urlParam: string;
+    field3: number;
+    uploadTime: number;
+    ttlSeconds: number;
+    subType: number;
+  }): MediaIndexNode {
+    return {
+      fileUuid: node.urlParam,
+      fileSize: node.fileInfo.fileSize,
+      fileHash: node.fileInfo.fileHash,
+      fileSha1: node.fileInfo.fileSha1,
+      fileName: node.fileInfo.fileName,
+      time: node.fileInfo.time,
+      original: node.fileInfo.original,
+      type: node.fileInfo.type,
+      storeId: node.field3,
+      uploadTime: node.uploadTime,
+      ttl: node.ttlSeconds,
+      subType: node.subType,
+    };
+  }
+
+  async function waitAiVoiceReceipt(groupId: number, fileName: string): Promise<HistoryMessage> {
+    if (!fileName) throw new Error('服务端未返回 AI 语音文件名，无法核对发送回执');
+    for (let attempt = 0; attempt < AI_VOICE_RECEIPT_ATTEMPTS; attempt++) {
+      if (attempt > 0) {
+        await new Promise((resolve) => setTimeout(resolve, AI_VOICE_RECEIPT_GAP_MS));
+      }
+      const raws = await walkGroupHistory({ groupId, count: 30, reverseOrder: true });
+      for (let i = raws.length - 1; i >= 0; i--) {
+        const item = await toHistoryMessage(raws[i]!, true);
+        if (!item || item.senderId !== selfId) continue;
+        const matched = item.message.some(
+          (segment) => segment.type === 'record' && String(segment.data.file) === fileName,
+        );
+        if (matched) return item;
+      }
+    }
+    throw new Error(
+      `AI 语音已发布，但 ${AI_VOICE_RECEIPT_ATTEMPTS} 次群历史轮询都没找到回执（file=${fileName}）`,
+    );
+  }
+
+  async function toHistoryMessage(
+    raw: RawMessageBody,
+    isGroup: boolean,
+  ): Promise<HistoryMessage | null> {
+    const decoded = decodeMessageBody(raw);
+    if (decoded.elements.length === 0 && (raw.body?.msgContent?.length ?? 0) === 0) return null;
+    const message = (await elementsToSegments(decoded.elements as unknown as InboundElement[], {
+      isGroup,
+      selfId,
+      ...segmentResolvers(),
+    })) as unknown as Segment[];
+    const sequence = isGroup ? decoded.head.sequence : (decoded.head.ntMsgSeq ?? 0);
+    if (!Number.isInteger(sequence) || sequence <= 0) return null;
+    return {
+      sequence,
+      wireId: String(decoded.head.msgId),
+      time: decoded.head.timestamp,
+      senderId: decoded.sender.uin,
+      senderName: decoded.sender.name ?? '',
+      message,
+      ...(!isGroup && decoded.sender.uid && decoded.sender.uin !== selfId
+        ? { peerUid: decoded.sender.uid }
+        : {}),
+    };
+  }
+
+  /** wire uint64 msg_id → 有符号 int32（OneBot `message_id` 的惯用截断）。 */
+  function toSignedInt32(value: number): number {
+    if (!Number.isSafeInteger(value)) return 0;
+    return Number(BigInt(value) & 0xffffffffn) | 0;
+  }
+
+  async function forwardNodeFromRaw(raw: RawMessageBody): Promise<ForwardMessageNode> {
+    const decoded = decodeMessageBody(raw);
+    const isGroup = (raw.responseHead?.grp?.groupUin ?? 0) > 0;
+    const message = (await elementsToSegments(decoded.elements as unknown as InboundElement[], {
+      isGroup,
+      selfId,
+      ...segmentResolvers(),
+    })) as unknown as Segment[];
+    const groupId = raw.responseHead?.grp?.groupUin ?? 0;
+    return {
+      userId: decoded.sender.uin,
+      nickname: decoded.sender.name ?? String(decoded.sender.uin),
+      time: decoded.head.timestamp,
+      messageId: toSignedInt32(decoded.head.msgId),
+      sequence: decoded.head.sequence,
+      ...(groupId > 0 ? { groupId } : {}),
+      message,
+    };
+  }
+
+  async function fetchForwardNodesRaw(resId: string): Promise<RawMessageBody[]> {
+    if (!selfUid) throw new Error('拉取合并转发需要自己的 uid（登录票据里没有）');
+    const fetched = await fetchForwardRaw(nt, sessionId, { selfUid, resId });
+    const messages = fetched.messages as RawMessageBody[];
+    if (messages.length === 0) {
+      throw new Error(fetched.error ?? '合并转发内容为空');
+    }
+    return messages;
+  }
+
+  async function toProtocolForwardNode(node: ForwardNode): Promise<ProtocolForwardNode> {
+    const nested = node.children !== undefined && node.children.length > 0;
+    return {
+      ...(node.userId !== undefined ? { userUin: node.userId } : {}),
+      ...(node.nickname ? { nickname: node.nickname } : {}),
+      ...(node.time !== undefined ? { time: node.time } : {}),
+      elements: nested
+        ? []
+        : ((await toElements(node.message)) as unknown as ProtocolForwardNode['elements']),
+      ...(nested
+        ? { innerForward: await Promise.all(node.children!.map(toProtocolForwardNode)) }
+        : {}),
+    };
+  }
+
+  async function forwardPayload(
+    target: { groupId?: number; userId?: number },
+    nodes: ForwardNode[],
+  ) {
+    const userUid =
+      target.userId !== undefined
+        ? options.resolveUidUin?.uidByUin(String(target.userId))
+        : undefined;
+    if (target.userId !== undefined && !selfUid) {
+      throw new Error('私聊合并转发需要自己的 uid（登录票据里没有）');
+    }
+    return {
+      ...(target.groupId !== undefined ? { groupId: target.groupId } : { userUin: target.userId }),
+      ...(userUid ? { userUid } : {}),
+      selfUin,
+      selfUid: selfUid ?? '',
+      nodes: await Promise.all(nodes.map(toProtocolForwardNode)),
+    };
+  }
+
+  async function uploadForwardCard(
+    target: { groupId?: number; userId?: number },
+    nodes: ForwardNode[],
+    preview?: ForwardPreview,
+  ): Promise<{ resId: string; card: SendElement }> {
+    const result = await sendLongMessage(nt, sessionId, await forwardPayload(target, nodes));
+    return {
+      resId: result.resId,
+      card: {
+        kind: 'forward',
+        resId: result.resId,
+        forwardSource: preview?.source ?? result.card.forwardSource,
+        forwardSummary: preview?.summary ?? result.card.forwardSummary,
+        forwardPrompt: preview?.prompt ?? result.card.forwardPrompt,
+        forwardNews: preview?.news ?? result.card.forwardNews,
+        forwardTSum: result.card.forwardTSum,
+      },
+    };
+  }
+
+  async function sendGroupElements(groupId: number, elements: SendElement[]): Promise<SendResult> {
+    const receipt = await sendGroupMessage(nt, sessionId, groupId, elements, mediaParams());
+    if (!receipt.ok) {
+      throw new Error(`发送群消息失败：result=${receipt.result} ${receipt.errMsg}`);
+    }
+    return {
+      sequence: receipt.groupSequence,
+      clientSequence: receipt.clientSequence,
+      random: receipt.random,
+      timestamp: receipt.timestamp,
+    };
+  }
+
+  async function sendPrivateElements(userId: number, elements: SendElement[]): Promise<SendResult> {
+    const uid = options.resolveUidUin?.uidByUin(String(userId));
+    const receipt = await sendC2cMessage(nt, sessionId, userId, elements, {
+      ...(uid ? { userUid: uid } : {}),
+      ...mediaParams(),
+    });
+    if (!receipt.ok) {
+      throw new Error(`发送私聊消息失败：result=${receipt.result} ${receipt.errMsg}`);
+    }
+    return {
+      sequence: receipt.privateSequence,
+      clientSequence: receipt.clientSequence,
+      random: receipt.random,
+      timestamp: receipt.timestamp,
+    };
+  }
+
+  /** 已读上报：先报 0 水位读回服务端的 read/latest 对，再只推进落后的会话。 */
+  async function markRead(
+    groupIds: number[],
+    c2cTargets: Array<{ userId: number; uid: string }>,
+  ): Promise<void> {
+    const probe = await ReadedReport.invoke(nt, sessionId, {
+      groups: groupIds.map((groupId) => ({ groupId, lastReadSeq: 0 })),
+      c2c: c2cTargets.map((target) => ({
+        uid: target.uid,
+        lastReadTime: 0,
+        lastReadSeq: 0,
+      })),
+    });
+
+    const groups = groupIds.flatMap((groupId) => {
+      const item = probe.groups.find((entry) => entry.groupId === groupId);
+      if (!item) throw new Error(`已读探测没有返回群 ${groupId} 的水位`);
+      if (item.latestSeq < item.readSeq) {
+        throw new Error(`群 ${groupId} 的 latestSeq 小于 readSeq`);
+      }
+      return item.latestSeq > item.readSeq ? [{ groupId, lastReadSeq: item.latestSeq }] : [];
+    });
+
+    const c2c = c2cTargets.flatMap((target) => {
+      const item = probe.c2c.find(
+        (entry) => entry.uid === target.uid || String(entry.targetUin) === String(target.userId),
+      );
+      if (!item) throw new Error(`已读探测没有返回私聊 ${target.userId} 的水位`);
+      if (item.latestSeq < item.readSeq) {
+        throw new Error(`私聊 ${target.userId} 的 latestSeq 小于 readSeq`);
+      }
+      if (item.latestSeq <= item.readSeq) return [];
+      if (item.lastMsgTime <= 0) {
+        throw new Error(`私聊 ${target.userId} 缺少最后消息时间，无法上报已读`);
+      }
+      return [{ uid: target.uid, lastReadTime: item.lastMsgTime, lastReadSeq: item.latestSeq }];
+    });
+
+    if (groups.length === 0 && c2c.length === 0) return;
+    const confirm = await ReadedReport.invoke(nt, sessionId, { groups, c2c });
+
+    for (const requested of groups) {
+      const item = confirm.groups.find((entry) => entry.groupId === requested.groupId);
+      if (!item || item.readSeq < requested.lastReadSeq) {
+        throw new Error(`群 ${requested.groupId} 已读水位没有推进到 ${requested.lastReadSeq}`);
+      }
+    }
+    for (const requested of c2c) {
+      const item = confirm.c2c.find((entry) => (entry.uid || '') === requested.uid);
+      if (!item || item.readSeq < requested.lastReadSeq) {
+        throw new Error(`私聊 ${requested.uid} 已读水位没有推进到 ${requested.lastReadSeq}`);
+      }
+    }
+  }
+
   return {
     async getLoginInfo(): Promise<LoginInfo> {
       return {
@@ -199,17 +765,7 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
     },
 
     async sendGroupMessage(groupId: number, message: Segment[]): Promise<SendResult> {
-      const elements = await toElements(message);
-      const receipt = await sendGroupMessage(nt, sessionId, groupId, elements, mediaParams());
-      if (!receipt.ok) {
-        throw new Error(`发送群消息失败：result=${receipt.result} ${receipt.errMsg}`);
-      }
-      return {
-        sequence: receipt.groupSequence,
-        clientSequence: receipt.clientSequence,
-        random: receipt.random,
-        timestamp: receipt.timestamp,
-      };
+      return sendGroupElements(groupId, await toElements(message));
     },
 
     async sendPrivateMessage(
@@ -218,17 +774,13 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       tempGroupId?: number,
     ): Promise<SendResult> {
       const elements = await toElements(message);
+      if (!tempGroupId) return sendPrivateElements(userId, elements);
       const uid = options.resolveUidUin?.uidByUin(String(userId));
-      const receipt = tempGroupId
-        ? await sendMessage(nt, sessionId, {
-            groupTemp: { groupUin: tempGroupId, toUid: uid ?? '' },
-            elements,
-            ...mediaParams(),
-          })
-        : await sendC2cMessage(nt, sessionId, userId, elements, {
-            ...(uid ? { userUid: uid } : {}),
-            ...mediaParams(),
-          });
+      const receipt = await sendMessage(nt, sessionId, {
+        groupTemp: { groupUin: tempGroupId, toUid: uid ?? '' },
+        elements,
+        ...mediaParams(),
+      });
       if (!receipt.ok) {
         throw new Error(`发送私聊消息失败：result=${receipt.result} ${receipt.errMsg}`);
       }
@@ -332,11 +884,11 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       await SendProfileLike.invoke(nt, sessionId, { targetUid: uid, count: times });
     },
 
-    async sendPoke(target: { groupId?: number; userId: number }): Promise<void> {
+    async sendPoke(target: { groupId?: number; userId: number; targetId?: number }): Promise<void> {
       await SendPoke.invoke(nt, sessionId, {
         isGroup: target.groupId !== undefined,
         peerUin: target.groupId ?? target.userId,
-        targetUin: target.userId,
+        targetUin: target.targetId ?? target.userId,
       });
     },
 
@@ -393,6 +945,100 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       });
     },
 
+    // ─────────────────────── 历史 / 合并转发 / 已读 ───────────────────────
+
+    history: {
+      getGroupHistory: async (params) => {
+        const raws = await walkGroupHistory(params);
+        const out: HistoryMessage[] = [];
+        for (const raw of raws) {
+          const item = await toHistoryMessage(raw, true);
+          if (item) out.push(item);
+        }
+        return out;
+      },
+      getPrivateHistory: async (params) => {
+        const friendUid = options.resolveUidUin?.uidByUin(String(params.userId));
+        if (!friendUid) throw new Error(`私聊历史需要对方 uid（${params.userId} 未观测到）`);
+        const raws = await walkPrivateHistory({ ...params, friendUid });
+        const out: HistoryMessage[] = [];
+        for (const raw of raws) {
+          const item = await toHistoryMessage(raw, false);
+          if (item) out.push(item);
+        }
+        return out;
+      },
+    },
+
+    forward: {
+      uploadForward: async ({ groupId, userId, nodes }) => {
+        // 只上传、又没给目标时用私聊命名空间（`userUin=自己` 与 SnowLuma 一致）。
+        const target =
+          groupId !== undefined || userId !== undefined
+            ? { ...(groupId !== undefined ? { groupId } : {}), ...(userId ? { userId } : {}) }
+            : { userId: selfId };
+        const { resId } = await uploadForwardCard(target, nodes);
+        return { resId };
+      },
+      sendForward: async ({ groupId, userId, nodes, preview }) => {
+        const target = {
+          ...(groupId !== undefined ? { groupId } : {}),
+          ...(userId !== undefined ? { userId } : {}),
+        };
+        const { card, resId } = await uploadForwardCard(target, nodes, preview);
+        const send =
+          groupId !== undefined
+            ? await sendGroupElements(groupId, [card])
+            : await sendPrivateElements(userId!, [card]);
+        return { resId, send };
+      },
+      getForwardMessage: async (resId) => {
+        const raws = await fetchForwardNodesRaw(resId);
+        const out: ForwardMessageNode[] = [];
+        for (const raw of raws) out.push(await forwardNodeFromRaw(raw));
+        return out;
+      },
+      forwardSingleMessage: async ({ groupId, userId, message }) => {
+        const elements: SendElement[] = [];
+        for (const segment of message) {
+          if (segment.type !== 'forward') {
+            elements.push(...(await toElements([segment])));
+            continue;
+          }
+          const data = segment.data;
+          const resId = String(data.id ?? data.res_id ?? data.forward_id ?? '').trim();
+          if (!resId) throw new Error('转发段缺少 id');
+          // 长消息 resId 按来源会话命名，直接转给别的会话收端打不开，必须重传。
+          const nodes: ForwardNode[] = [];
+          for (const raw of await fetchForwardNodesRaw(resId)) {
+            const node = await forwardNodeFromRaw(raw);
+            nodes.push({
+              userId: node.userId,
+              nickname: node.nickname,
+              message: node.message,
+              time: node.time,
+            });
+          }
+          const target = groupId !== undefined ? { groupId } : { userId: userId! };
+          const { card } = await uploadForwardCard(target, nodes);
+          elements.push(card);
+        }
+        if (elements.length === 0) throw new Error('没有可转发的内容');
+        return groupId !== undefined
+          ? sendGroupElements(groupId, elements)
+          : sendPrivateElements(userId!, elements);
+      },
+    },
+
+    readReport: {
+      markGroupRead: (groupId) => markRead([groupId], []),
+      markPrivateRead: async (userId) => {
+        const uid = options.resolveUidUin?.uidByUin(String(userId));
+        if (!uid) throw new Error(`标记私聊已读需要对方 uid（${userId} 未观测到）`);
+        await markRead([], [{ userId, uid }]);
+      },
+    },
+
     // ─────────────────────── 群文件（P8.2） ───────────────────────
 
     groupFile: {
@@ -439,6 +1085,10 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
         DeleteGroupFolder.invoke(nt, sessionId, { groupId, folderId }),
       renameGroupFolder: (groupId, folderId, newName) =>
         RenameGroupFolder.invoke(nt, sessionId, { groupId, folderId, newFolderName: newName }),
+      getPrivateFileUrl: async (_userId, fileId, fileHash) => {
+        if (!selfUid) throw new Error('私聊文件下载链接需要自己的 uid（登录票据里没有）');
+        return GetPrivateFileUrl.invoke(nt, sessionId, { selfUid, fileId, fileHash });
+      },
     },
 
     // ─────────────────────── 收藏表情 ───────────────────────
@@ -459,6 +1109,23 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
         for (const emojiId of emojiIds) {
           await DeleteCustomFace.invoke(nt, sessionId, { selfUin, emojiId });
         }
+      },
+      resolveCustomFaceUrl: async (identifier) => {
+        const wanted = identifier.trim();
+        if (!wanted) throw new Error('emoji_id 不能为空');
+        const ids = await FetchCustomFaceList.invoke(nt, sessionId, { selfUin });
+        const byMd5 = /^[0-9a-fA-F]{32}$/.test(wanted);
+        const emojiId = ids.find((id) =>
+          byMd5 ? parseCustomFaceId(id).md5.toLowerCase() === wanted.toLowerCase() : id === wanted,
+        );
+        if (!emojiId) throw new Error('收藏表情不在当前账号的收藏列表里');
+        const { md5 } = parseCustomFaceId(emojiId);
+        // SnowLuma 同款 URL 形态（`p.qpic.cn/qq_expression/<uin>/<emojiId>/0`）。
+        return {
+          emojiId,
+          md5,
+          url: `https://p.qpic.cn/qq_expression/${selfUin}/${emojiId}/0`,
+        };
       },
     },
 
@@ -549,6 +1216,280 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
         };
       },
       translateEn2Zh: (words) => TranslateEnToZh.invoke(nt, sessionId, { words }),
+    },
+
+    groupAdminExtra: {
+      async setGroupRemark(groupId: number, remark: string): Promise<void> {
+        await SetGroupRemark.invoke(nt, sessionId, { groupId, remark });
+      },
+      async getGroupInfoEx(groupId: number) {
+        const groups = await FetchGroupList.invoke(nt, sessionId);
+        const group = groups.find((entry) => entry.groupId === groupId);
+        if (!group) throw new Error(`没有该群的资料：${groupId}`);
+        return {
+          groupId: group.groupId,
+          groupName: group.groupName,
+          memberCount: group.memberCount,
+          maxMemberCount: group.memberMax,
+          groupRemark: group.remark,
+          createTime: group.createdAt,
+          // 0xFE5_2 不回群等级；不要拿成员等级冒充。
+          level: 0,
+          memo: group.announcement,
+          description: group.description,
+          allShut: group.shutUpAllTimestamp !== 0,
+        };
+      },
+    },
+
+    profile: {
+      async setProfile(patch): Promise<void> {
+        await SetSelfProfile.invoke(nt, sessionId, {
+          uin: selfUin,
+          ...(patch.nickname !== undefined ? { nickname: patch.nickname } : {}),
+          ...(patch.personalNote !== undefined ? { signature: patch.personalNote } : {}),
+          ...(patch.sex !== undefined ? { gender: patch.sex } : {}),
+        });
+      },
+      async setAvatar(source): Promise<void> {
+        await setSelfAvatar(nt, sessionId, { uin: selfUin, source });
+      },
+      async getProfileLike(params) {
+        const self = !params.userId || params.userId === selfId;
+        const targetUid = self ? selfUid : options.resolveUidUin?.uidByUin(String(params.userId));
+        if (!targetUid) throw new Error(`查资料点赞需要对方 uid（${params.userId} 未观测到）`);
+        const info = await GetProfileLike.invoke(nt, sessionId, {
+          targetUid,
+          start: params.start,
+          limit: params.count,
+          ...(self ? { self: true } : {}),
+        });
+        return {
+          uid: info.uid,
+          time: info.time,
+          favorite: {
+            totalCount: info.favoriteInfo.totalCount,
+            lastTime: info.favoriteInfo.lastTime,
+            todayCount: info.favoriteInfo.todayCount,
+            users: info.favoriteInfo.users.map(mapLikeUser),
+          },
+          vote: {
+            totalCount: info.voteInfo.totalCount,
+            newCount: info.voteInfo.newCount,
+            newNearbyCount: info.voteInfo.newNearbyCount,
+            lastVisitTime: info.voteInfo.lastVisitTime,
+            users: info.voteInfo.users.map(mapLikeUser),
+          },
+        };
+      },
+      async setOnlineStatus(params): Promise<void> {
+        await SetOnlineStatus.invoke(nt, sessionId, {
+          status: params.status,
+          extStatus: params.extStatus,
+          batteryStatus: params.batteryStatus,
+        });
+      },
+      async setDiyOnlineStatus(params): Promise<void> {
+        await SetDiyOnlineStatus.invoke(nt, sessionId, {
+          faceId: params.faceId,
+          text: params.wording,
+          faceType: params.faceType,
+        });
+      },
+    },
+
+    contactsExtra: {
+      async getFriendCategories(_withProfile: boolean) {
+        // 好友列表这一条请求本身就带了公开资料 key；不再逐人补查，避免 N 次往返。
+        const { friends, categories } = await fetchAllFriends(nt, sessionId);
+        return categories.map((category) => ({
+          categoryId: category.categoryId,
+          categoryName: category.categoryName,
+          memberCount: category.memberCount,
+          friends: friends
+            .filter((entry) => entry.categoryId === category.categoryId)
+            .map(({ friend }) => mapCategoryFriend(friend)),
+        }));
+      },
+      async setFriendCategory(params): Promise<void> {
+        const { friends, categories } = await fetchAllFriends(nt, sessionId);
+        let categoryId = params.categoryId;
+        if (categoryId === undefined) {
+          const matches = categories.filter(
+            (category) => category.categoryName === params.categoryName,
+          );
+          if (matches.length !== 1) {
+            throw new Error(
+              matches.length === 0
+                ? `没有名为「${params.categoryName}」的好友分组`
+                : `好友分组「${params.categoryName}」不唯一`,
+            );
+          }
+          categoryId = matches[0]!.categoryId;
+        }
+        const friend = friends.find((entry) => entry.friend.uin === params.userId);
+        const uid = friend?.friend.uid ?? options.resolveUidUin?.uidByUin(String(params.userId));
+        if (!uid) throw new Error(`移动好友分组需要对方 uid（${params.userId} 未观测到）`);
+        await SetFriendCategory.invoke(nt, sessionId, { uid, categoryId });
+      },
+      getRecommendArk: (params) =>
+        params.kind === 'qq'
+          ? GetBuddyRecommendArk.invoke(nt, sessionId, {
+              uin: params.contactId,
+              ...(params.phoneNumber !== undefined ? { phoneNumber: params.phoneNumber } : {}),
+            })
+          : GetGroupRecommendArk.invoke(nt, sessionId, { groupId: params.contactId }),
+      async sendTuwenArk(params) {
+        const result = await SendTuwenArk.invoke(nt, sessionId, params);
+        // 外层 OIDB errorCode=0 也可能下发失败，必须看 result.errorCode。
+        if (result.errorCode !== 0) {
+          throw new Error(
+            `图文 Ark 发送失败：code=${result.errorCode} ${result.errorMessage}`.trim(),
+          );
+        }
+        return result;
+      },
+    },
+
+    flashTransfer: {
+      async createTask(files, name, thumbPath) {
+        if (!selfUid) throw new Error('创建闪传任务需要自己的 uid（登录票据里没有）');
+        const result = await uploadFlashFiles(
+          nt,
+          sessionId,
+          files.map((file) => ({
+            path: file.path,
+            ...(file.name !== undefined ? { name: file.name } : {}),
+          })),
+          {
+            ...(name !== undefined ? { name } : {}),
+            ...(thumbPath !== undefined ? { thumbPath } : {}),
+            uploader: { uin: selfUin, nickname: nickname || selfUin, uid: selfUid },
+          },
+        );
+        return { filesetId: result.filesetUuid, shareUrl: result.shareUrl };
+      },
+      async getFilesetInfo(filesetId) {
+        const entries = await GetFilesetDetail.invoke(nt, sessionId, { filesetUuid: filesetId });
+        return entries.map((entry) => ({
+          filesetId: entry.filesetUuid,
+          fileName: entry.fileName,
+          origName: entry.origName,
+          fileSize: entry.fileSize,
+          shareUrl: entry.shareUrl,
+          fileId: entry.fileId,
+          downloadUrl: entry.downloadUrl,
+        }));
+      },
+      async listFilesets() {
+        const entries = await ListFilesets.invoke(nt, sessionId, {});
+        return entries.map((entry) => ({
+          filesetId: entry.filesetUuid,
+          fileName: entry.fileName,
+          origName: entry.origName,
+          fileSize: entry.fileSize,
+          shareUrl: entry.uploadUrl,
+          fileId: entry.fileId,
+          downloadUrl: '',
+        }));
+      },
+      async getShareLink(filesetId) {
+        const entries = await GetFilesetDetail.invoke(nt, sessionId, { filesetUuid: filesetId });
+        return entries.find((entry) => entry.shareUrl)?.shareUrl ?? '';
+      },
+      async deleteFile(filesetId) {
+        await DeleteFlashFile.invoke(nt, sessionId, { filesetUuid: filesetId });
+      },
+      async renameFile(filesetId, newName) {
+        await RenameFlashFile.invoke(nt, sessionId, { filesetUuid: filesetId, newName });
+      },
+      async sendFlashMsg(filesetId, target) {
+        if (target.groupId !== undefined) {
+          await SendFlashMsg.invoke(nt, sessionId, {
+            groupId: target.groupId,
+            filesetUuid: filesetId,
+          });
+          return;
+        }
+        if (target.userId === undefined) {
+          throw new Error('send_flash_msg: user_id 或 group_id 必须给一个');
+        }
+        const targetUid = options.resolveUidUin?.uidByUin(String(target.userId));
+        if (!targetUid) {
+          throw new Error(`发送闪传需要对方 uid（${target.userId} 未观测到）`);
+        }
+        await SendFlashMsg.invoke(nt, sessionId, { targetUid, filesetUuid: filesetId });
+      },
+      async getFilesetIdByCode(shareCode) {
+        const url = flashShareUrl(shareCode);
+        const response = await fetch(url, {
+          redirect: 'manual',
+          signal: AbortSignal.timeout(20_000),
+        });
+        if (response.status >= 300 && response.status < 400) {
+          await response.body?.cancel();
+          throw new Error('get_fileset_id: 分享页不允许重定向');
+        }
+        if (!response.ok) {
+          await response.body?.cancel();
+          throw new Error(`get_fileset_id: 分享页 HTTP ${response.status}`);
+        }
+        const html = await readLimitedText(response, 2 * 1024 * 1024);
+        const match =
+          /fileset_id\\?"\s*:\s*\\?"([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})/.exec(
+            html,
+          );
+        if (!match) throw new Error('get_fileset_id: 分享页里找不到 fileset_id');
+        return match[1]!;
+      },
+    },
+
+    aiVoice: {
+      async listCharacters(groupId: number, chatType: number) {
+        const list = await FetchAiVoiceList.invoke(nt, sessionId, { groupId, chatType });
+        return list.map((category) => ({
+          category: category.category,
+          characters: category.voices.map((voice) => ({
+            characterId: voice.voiceId,
+            characterName: voice.voiceDisplayName,
+            previewUrl: voice.voiceExampleUrl,
+          })),
+        }));
+      },
+      async generate(groupId: number, character: string, text: string, chatType: number) {
+        const raw = await synthesizeAiVoice({
+          groupId,
+          voiceId: character,
+          text,
+          chatType,
+        });
+        return GetGroupPttUrl.invoke(nt, sessionId, {
+          groupId,
+          node: aiVoiceMediaNode(raw),
+        });
+      },
+      async send(groupId: number, character: string, text: string, chatType: number) {
+        const raw = await synthesizeAiVoice({
+          groupId,
+          voiceId: character,
+          text,
+          chatType,
+        });
+        const receipt = await waitAiVoiceReceipt(groupId, raw.fileInfo.fileName);
+        return { sequence: receipt.sequence, timestamp: receipt.time };
+      },
+    },
+
+    misc: {
+      async requestDecryptKey(dbPath: string): Promise<string> {
+        const bytes = await readFile(dbPath);
+        if (bytes.length < 0xaf) throw new Error('数据库文件过短，读不到 128 字符盐');
+        const dbSalt = bytes.subarray(0x2f, 0xaf).toString('utf8');
+        if (!/^[0-9a-fA-F]{128}$/.test(dbSalt)) {
+          throw new Error('数据库盐不是 128 字符十六进制字符串');
+        }
+        return RequestDecryptKey.invoke(nt, sessionId, dbSalt);
+      },
     },
 
     // ─────────────────────── QQ 空间（web cgi） ───────────────────────
@@ -934,6 +1875,14 @@ function createGroupWebBackend(options: {
     },
 
     groupEssence: {
+      async setEssence(params: {
+        groupId: number;
+        sequence: number;
+        random: number;
+        enable: boolean;
+      }) {
+        await SetGroupEssence.invoke(nt, sessionId, params);
+      },
       async getEssence(groupId: number, pageStart: number, pageLimit: number) {
         const page = await withRetry(source, QUN, (cred) =>
           getGroupEssencePage(cred, String(groupId), pageStart, pageLimit),
@@ -1013,6 +1962,11 @@ function createQzoneBackend(options: {
         getQzoneMsgList(cred, target(uin), pos, num),
       );
       return { total: result.total, list: result.list };
+    },
+    async getMsgDetail(uin: number | undefined, tid: string, pos: number, num: number) {
+      return withRetry(source, domain, (cred) =>
+        getQzoneMsgDetail(cred, target(uin), tid, pos, num),
+      );
     },
     async getFeeds(pageNum: number, count: number, cursor?: string) {
       return withRetry(source, domain, (cred) =>
@@ -1153,6 +2107,107 @@ function createQzoneBackend(options: {
       const cred = await source.forDomain(domain);
       return forwardQzonePublicFeed(cred, feed as never, reason);
     },
+  };
+}
+
+const QFILE_SHARE_ORIGIN = 'https://qfile.qq.com';
+
+/** 分享码 / 官方分享链接 → 受控的 qfile 分享页 URL。 */
+function flashShareUrl(input: string): string {
+  const value = input.trim();
+  if (!value) throw new Error('get_fileset_id: 分享码不能为空');
+  let code = value;
+
+  if (/^[a-z][a-z\d+.-]*:/i.test(value) || value.startsWith('//')) {
+    let parsed: URL;
+    try {
+      parsed = new URL(value);
+    } catch (cause) {
+      throw new Error('get_fileset_id: 需要 qfile.qq.com 官方分享链接', { cause });
+    }
+    if (
+      parsed.protocol !== 'https:' ||
+      parsed.hostname !== 'qfile.qq.com' ||
+      parsed.port !== '' ||
+      parsed.username !== '' ||
+      parsed.password !== ''
+    ) {
+      throw new Error('get_fileset_id: 需要 qfile.qq.com 官方分享链接');
+    }
+    const match = /^\/q\/([^/]+)\/?$/.exec(parsed.pathname);
+    if (!match) throw new Error('get_fileset_id: 需要 qfile.qq.com 官方分享链接');
+    try {
+      code = decodeURIComponent(match[1]!);
+    } catch (cause) {
+      throw new Error('get_fileset_id: 需要 qfile.qq.com 官方分享链接', { cause });
+    }
+  }
+
+  const forbidden = Array.from(code).some((char) => {
+    const point = char.codePointAt(0) ?? 0;
+    return point <= 0x20 || point === 0x7f || '/\\?#'.includes(char);
+  });
+  if (code.length > 256 || forbidden) throw new Error('get_fileset_id: 分享码非法');
+  return `${QFILE_SHARE_ORIGIN}/q/${encodeURIComponent(code)}`;
+}
+
+async function readLimitedText(
+  response: Awaited<ReturnType<typeof fetch>>,
+  maxBytes: number,
+): Promise<string> {
+  if (!response.body) throw new Error('get_fileset_id: 分享页响应没有 body');
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let total = 0;
+  let text = '';
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error('get_fileset_id: 分享页过大');
+    }
+    text += decoder.decode(value, { stream: true });
+  }
+  return text + decoder.decode();
+}
+
+function mapLikeUser(user: LikeUserInfo): ProfileLikeUserInfo {
+  return {
+    uid: user.uid,
+    uin: 0,
+    src: user.src,
+    latestTime: user.latestTime,
+    count: user.count,
+    giftCount: user.giftCount,
+    customId: user.customId,
+    lastCharged: user.lastCharged,
+    availableCount: user.availableCount,
+    todayVotedCount: user.todayVotedCount,
+    nick: user.nick,
+    gender: user.gender,
+    age: user.age,
+    isFriend: user.isFriend,
+    isVip: user.isVip,
+    isSvip: user.isSvip,
+  };
+}
+
+function mapCategoryFriend(friend: {
+  uin: number;
+  uid: string;
+  nickname: string;
+  remark: string;
+  categoryId: number;
+  profile?: PublicProfileFields;
+}): FriendInfo {
+  return {
+    userId: friend.uin,
+    nickname: friend.nickname,
+    remark: friend.remark,
+    categoryId: friend.categoryId,
+    ...(friend.profile ? { profile: friend.profile } : {}),
   };
 }
 

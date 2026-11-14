@@ -29,6 +29,8 @@ function ctx(backend: OneBotBackend): ActionContext {
     internSentMessageId: () => 42,
     resolveMessageMeta: () => null,
     resolveMessageEvent: () => null,
+    internMessageEvent: () => 43,
+    findLatestMessageAnchor: () => null,
   };
 }
 

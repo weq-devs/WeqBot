@@ -7,8 +7,8 @@ export {
 export type { GroupHistoryParams, C2cHistoryParams, HistoryFetchResult } from './get-history';
 export { SSO_GET_GROUP_MSG_CMD, SSO_GET_C2C_MSG_CMD } from './get-history';
 
-export { decodeMessage } from './decode';
-export type { DecodedMessage, DecodedDress } from './decode';
+export { decodeMessage, decodeMessageBody } from './decode';
+export type { DecodedMessage, DecodedDress, RawMessageBody } from './decode';
 
 export {
   buildSendElems,

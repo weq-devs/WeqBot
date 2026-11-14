@@ -47,6 +47,8 @@ export type {
 export { SendLocationArk, LOCATION_ARK_CMD } from './send-location-ark';
 export type { SendLocationArkParams } from './send-location-ark';
 export { SendAiVoice } from './send-ai-voice';
+export { FetchAiVoiceList } from './fetch-ai-voice-list';
+export type { AiVoiceCategory, AiVoiceItem } from './fetch-ai-voice-list';
 export type {
   SendAiVoiceParams,
   SendAiVoiceResult,

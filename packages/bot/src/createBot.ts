@@ -423,6 +423,9 @@ export function createBot(options: CreateBotOptions): Bot {
               sessionId: protocol.sessionId,
               uin,
             });
+      // 入站媒体：pic/ptt/video 只有 fileToken，URL 要靠 rkey 现拼（带缓存）。
+      // 历史消息 / 合并转发也要用同一份解析器，否则拉回来的图片只有文件名。
+      const media = createMediaUrlResolver({ protocol, logger: log });
       const backend = createProtocolBackend({
         protocol,
         selfUin: uin,
@@ -430,13 +433,13 @@ export function createBot(options: CreateBotOptions): Bot {
         logger: log,
         ...(webCredentials ? { webCredentials } : {}),
         ...(config.onebot.qzoneDomain ? { qzoneDomain: config.onebot.qzoneDomain } : {}),
+        imageUrlResolver: (element, isGroup) => media.imageUrl(element, isGroup),
+        mediaUrlResolver: (element, isGroup) => media.mediaUrl(element, isGroup),
         resolveUidUin: {
           uinByUid: (targetUid: string) => identity.uinOf(targetUid),
           uidByUin: (targetUin: string) => identity.uidOf(targetUin),
         },
       });
-      // 入站媒体：pic/ptt/video 只有 fileToken，URL 要靠 rkey 现拼（带缓存）。
-      const media = createMediaUrlResolver({ protocol, logger: log });
       const adapter = createOneBotAdapter({
         config: config.onebot,
         backend,

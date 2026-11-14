@@ -40,6 +40,32 @@ export interface ActionContext {
   resolveMessageMeta(messageId: number): import('./backend').RecallTarget | null;
   /** 按 OneBot message_id 取完整事件快照（`get_msg`）。 */
   resolveMessageEvent(messageId: number): Record<string, unknown> | null;
+  /**
+   * 给服务端历史里的一条消息分配 OneBot message_id，并缓存事件快照。
+   *
+   * 历史分页把上一页的 `message_id` 当锚点传回来，所以这些消息也必须进
+   * 同一张进程内有界表（`MessageStore` + `MessageIdMap`），否则第二页接不上。
+   */
+  internMessageEvent(
+    params: {
+      isGroup: boolean;
+      targetId: number;
+      sequence: number;
+      /** 私聊的服务端 NT 序号。 */
+      ntSequence?: number;
+      wireId: string;
+      random: number;
+      timestamp: number;
+    },
+    event: Record<string, unknown>,
+  ): number;
+  /**
+   * 本进程内该会话最新一条已观测消息的 seq；没有就返回 `null`。
+   *
+   * 历史 action 不传 `message_id` 时用它当锚点。它只读进程内已有的观测记录
+   * （`MessageStore`），不新增任何落盘 / 索引（硬约束 13）。
+   */
+  findLatestMessageAnchor(isGroup: boolean, targetId: number): number | null;
 }
 
 /** 参数校验器：返回规范化后的值，或抛 `ParamError`。 */
@@ -214,6 +240,11 @@ export class ActionRegistry {
     } catch (cause) {
       if (cause instanceof NotImplementedError) {
         return withEcho(failedResponse(RETCODE.UNKNOWN_ACTION, cause.message), echo);
+      }
+      // 需要 `ctx` 才能判定的参数错误（例如 message_id 与会话不匹配）只能在 run 里
+      // 抛；ParamError 的语义始终是 1400，不因抛出位置不同而变成业务失败。
+      if (cause instanceof ParamError) {
+        return withEcho(failedResponse(RETCODE.BAD_REQUEST, cause.message), echo);
       }
       const message = cause instanceof Error ? cause.message : String(cause);
       return withEcho(failedResponse(RETCODE.ACTION_FAILED, message), echo);

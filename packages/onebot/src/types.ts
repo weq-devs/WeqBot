@@ -112,6 +112,13 @@ export interface MessageMeta {
   isGroup: boolean;
   targetId: number;
   sequence: number;
+  /**
+   * 私聊的服务端 NT 序号（`SsoGetC2cMsg` 的窗口单位）。
+   *
+   * 私聊的 `sequence` 是会话内序号，不能拿去拉历史；两者分清才不会把历史窗口
+   * 算到错误区间。群消息不用这个字段。
+   */
+  ntSequence?: number;
   /** `sequence` 是否已被 QQ 确认、可以拿去做协议操作。 */
   sequenceAuthoritative: boolean;
   eventName: string;

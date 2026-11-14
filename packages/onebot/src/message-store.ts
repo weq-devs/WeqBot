@@ -44,6 +44,23 @@ export class MessageStore {
     return this.get(messageId)?.meta;
   }
 
+  /**
+   * 该会话在缓存里已知的最大分页序号（群 seq / 私聊 NT seq）。
+   *
+   * 只读已有观测记录：历史 action 不传锚点时用它，避免要求客户端先自己记 seq。
+   */
+  latestSequence(isGroup: boolean, targetId: number): number | undefined {
+    let best: number | undefined;
+    for (const { meta } of this.entries.values()) {
+      if (meta.isGroup !== isGroup || meta.targetId !== targetId) continue;
+      if (meta.sequenceAuthoritative !== true) continue;
+      const sequence = isGroup ? meta.sequence : (meta.ntSequence ?? 0);
+      if (!Number.isInteger(sequence) || sequence <= 0) continue;
+      if (best === undefined || sequence > best) best = sequence;
+    }
+    return best;
+  }
+
   forget(messageId: number): void {
     this.entries.delete(messageId);
   }

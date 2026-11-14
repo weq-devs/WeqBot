@@ -96,6 +96,7 @@ const AUDIO_NODE = message([
   { name: 'field3', tag: 3, type: 'uint32' },
   { name: 'uploadTime', tag: 4, type: 'uint32' },
   { name: 'ttlSeconds', tag: 5, type: 'uint32' },
+  { name: 'subType', tag: 6, type: 'uint32' },
   { name: 'field7', tag: 7, type: 'uint32' },
 ]);
 
@@ -169,6 +170,8 @@ export interface AiVoiceFileInfo {
   fileName: string;
   /** 文件类型；实测语音为 type=3, voiceFormat=1。 */
   type: { type: number; picFormat: number; videoFormat: number; voiceFormat: number };
+  /** 时长（秒）；语音场景服务端通常回 0，由发送侧自己填。 */
+  time: number;
   /** 是否原图（保留字段，语音场景实测为 1）。 */
   original: number;
 }
@@ -193,6 +196,8 @@ export interface SendAiVoiceResult {
       uploadTime: number;
       /** 票据有效期（秒），实测 604800 = 7 天。 */
       ttlSeconds: number;
+      /** 与 NTV2 `MediaIndexNode.subType` 同位；实测语音为 0。 */
+      subType: number;
       /** 实测 1403（未知语义）。 */
       field7: number;
     } | null;
@@ -252,12 +257,14 @@ export namespace SendAiVoice {
                   videoFormat: toInt(type.videoFormat),
                   voiceFormat: toInt(type.voiceFormat),
                 },
+                time: toInt(info.time),
                 original: toInt(info.original),
               },
               urlParam: typeof node.urlParam === 'string' ? node.urlParam : '',
               field3: toInt(node.field3),
               uploadTime: toInt(node.uploadTime),
               ttlSeconds: toInt(node.ttlSeconds),
+              subType: toInt(node.subType),
               field7: toInt(node.field7),
             }
           : null,

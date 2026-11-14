@@ -12,6 +12,8 @@
  *   - 入参已是 OneBot 语义（QQ 号、群号、segment），后端负责换成协议调用。
  */
 
+import type { Segment } from './segments';
+
 /** 后端没有实现这个能力。适配层把它翻成 `retcode 1404`。 */
 export class NotImplementedError extends Error {
   readonly action: string;
@@ -46,6 +48,46 @@ export interface FriendInfo {
   userId: number;
   nickname: string;
   remark: string;
+  /** 好友分组编号（`get_friends_with_category` 会带上）。 */
+  categoryId?: number;
+  /** 好友列表里顺带回的公开资料；服务端没给就省略。 */
+  profile?: FriendProfile;
+}
+
+/** 好友公开资料（字段名与协议层 `PublicProfileFields` 一致）。 */
+export interface FriendProfile {
+  sign?: string;
+  email?: string;
+  phoneNum?: string;
+  country?: string;
+  province?: string;
+  city?: string;
+  college?: string;
+  age?: number;
+  level?: number;
+  sex?: 'male' | 'female' | 'unknown';
+  birthdayYear?: number;
+  birthdayMonth?: number;
+  birthdayDay?: number;
+  vipFlag?: boolean;
+  yearVipFlag?: boolean;
+  svipFlag?: boolean;
+  vipLevel?: number;
+  privilegeIcons?: {
+    jumpUrl?: string;
+    open: FriendPrivilege[];
+    closed: FriendPrivilege[];
+  };
+}
+
+export interface FriendPrivilege {
+  type?: number;
+  level?: number;
+  flag?: number;
+  isBig?: boolean;
+  iconUrl?: string;
+  deluxeIconUrl?: string;
+  jumpUrl?: string;
 }
 
 export interface GroupInfo {
@@ -53,6 +95,22 @@ export interface GroupInfo {
   groupName: string;
   memberCount: number;
   maxMemberCount: number;
+}
+
+/** `get_group_info_ex` / `get_group_detail_info` 的扩展群资料。 */
+export interface GroupInfoEx extends GroupInfo {
+  /** 当前账号设置的群备注。 */
+  groupRemark: string;
+  /** 建群时间戳（秒）。 */
+  createTime: number;
+  /** 群等级；协议层没有该字段时恒 0。 */
+  level: number;
+  /** 群简介 / 公告预览。 */
+  memo: string;
+  /** 群简介（不含公告）。 */
+  description: string;
+  /** 是否全员禁言。 */
+  allShut: boolean;
 }
 
 export interface GroupMemberInfo {
@@ -93,6 +151,8 @@ export interface RecallTarget {
   clientSequence?: number;
   random?: number;
   timestamp?: number;
+  /** 私聊的服务端 NT 序号（历史分页窗口用它；群消息不用）。 */
+  ntSequence?: number;
 }
 
 // ─────────────────────── 按域分组的能力面（P8，2026-11-14） ───────────────────────
@@ -141,6 +201,11 @@ export interface GroupFileBackend {
     pageSize: number,
   ): Promise<GroupFilePageResult>;
   getGroupFileUrl(groupId: number, fileId: string, busId: number): Promise<string>;
+  /**
+   * 私聊文件下载直链（0xE37_1200）。`userId` 只为对齐 SnowLuma 的参数，
+   * 实际以登录账号自己的 uid 取链接。
+   */
+  getPrivateFileUrl(userId: number | undefined, fileId: string, fileHash: string): Promise<string>;
   getGroupFileCount(
     groupId: number,
   ): Promise<{ fileCount: number; maxCount: number; isFull: boolean }>;
@@ -175,6 +240,8 @@ export interface CustomFaceBackend {
   modifyCustomFace(emojiId: string, desc: string): Promise<void>;
   moveCustomFaceToFront(emojiId: string): Promise<void>;
   deleteCustomFace(emojiIds: string[]): Promise<void>;
+  /** 收藏表情（emoji_id 或 32 位 MD5）→ 图片 URL，`send_custom_face` 用。 */
+  resolveCustomFaceUrl(identifier: string): Promise<{ emojiId: string; url: string; md5: string }>;
 }
 
 export interface GroupTodoEntry {
@@ -195,23 +262,99 @@ export interface GroupTodoBackend {
   getGroupTodoList(groupId: number): Promise<GroupTodoEntry[]>;
 }
 
-/** 历史消息（只读）。 */
-export interface MessageHistoryBackend {
-  getGroupHistory(
-    groupId: number,
-    startSeq: number,
-    endSeq: number,
-  ): Promise<Record<string, unknown>[]>;
-  getPrivateHistory(
-    userId: number,
-    startSeq: number,
-    endSeq: number,
-  ): Promise<Record<string, unknown>[]>;
+/**
+ * 服务端历史里的一条消息（已解码成 OneBot 语义）。
+ *
+ * **不落盘**：每次 action 调用现拉现转，进程退出即丢（硬约束 13）。
+ */
+export interface HistoryMessage {
+  /** 会话序号：群消息是群 seq，私聊是服务端 NT seq。分页锚点用它。 */
+  sequence: number;
+  /** wire `msg_id`（十进制字符串）。 */
+  wireId: string;
+  time: number;
+  senderId: number;
+  senderName: string;
+  /** 已转成 OneBot segment 的内容。 */
+  message: Segment[];
+  /** 私聊对端的 uid（群聊为空）。 */
+  peerUid?: string;
 }
 
-/** 合并转发（只读）。 */
+/** 历史消息（只读，服务端拉取）。 */
+export interface MessageHistoryBackend {
+  getGroupHistory(params: {
+    groupId: number;
+    /** 锚点消息的群 seq；省略时后端用已读探测取会话最新序号。 */
+    anchorSequence?: number;
+    count: number;
+    reverseOrder: boolean;
+  }): Promise<HistoryMessage[]>;
+  getPrivateHistory(params: {
+    userId: number;
+    /** 锚点消息的服务端 NT seq；省略时后端用已读探测取会话最新序号。 */
+    anchorSequence?: number;
+    count: number;
+    reverseOrder: boolean;
+  }): Promise<HistoryMessage[]>;
+}
+
+/** 合并转发里的一个节点（OneBot 语义）。 */
+export interface ForwardNode {
+  userId?: number;
+  nickname?: string;
+  message: Segment[];
+  time?: number;
+  /** 嵌套转发：`content` 本身是一组节点时填这里。 */
+  children?: ForwardNode[];
+}
+
+/** 拉回来的合并转发节点。 */
+export interface ForwardMessageNode {
+  userId: number;
+  nickname: string;
+  time: number;
+  /** 节点回显用 id（wire `msgId` 截成有符号 int32；可能与本地 message_id 无关）。 */
+  messageId: number;
+  /** 节点会话序号（`message_seq`）。 */
+  sequence: number;
+  /** 节点来自群聊时填群号；私聊节点没有。 */
+  groupId?: number;
+  message: Segment[];
+}
+
+/** NapCat 兼容的转发卡片预览覆盖项（全可选）。 */
+export interface ForwardPreview {
+  source?: string;
+  summary?: string;
+  prompt?: string;
+  news?: { text: string }[];
+}
+
+/** 合并转发目标：群聊 / 私聊二选一；只上传时都为空。 */
+export interface ForwardTarget {
+  groupId?: number;
+  userId?: number;
+}
+
+/** 合并转发。 */
 export interface ForwardBackend {
-  getForwardMessage(resId: string): Promise<Record<string, unknown>[]>;
+  /** 只上传内容，返回服务端 `resId`（不发卡片）。 */
+  uploadForward(params: ForwardTarget & { nodes: ForwardNode[] }): Promise<{ resId: string }>;
+  /** 上传并发送转发卡片。 */
+  sendForward(
+    params: ForwardTarget & { nodes: ForwardNode[]; preview?: ForwardPreview },
+  ): Promise<{ resId: string; send: SendResult }>;
+  /** 按 `resId` 拉取转发内容。 */
+  getForwardMessage(resId: string): Promise<ForwardMessageNode[]>;
+  /** 单条消息转发：普通元素直接重发，转发卡片按目标场景重新上传。 */
+  forwardSingleMessage(params: ForwardTarget & { message: Segment[] }): Promise<SendResult>;
+}
+
+/** 会话已读上报。 */
+export interface ReadReportBackend {
+  markGroupRead(groupId: number): Promise<void>;
+  markPrivateRead(userId: number): Promise<void>;
 }
 
 /** 好友关系写操作 / 单向好友 / 可疑申请。 */
@@ -315,13 +458,185 @@ export interface GroupSigninBackend {
   }): Promise<unknown[]>;
 }
 
-/** 群精华（web cgi）。 */
+/** 群精华（web cgi 列表 + 0xEAC 写操作）。 */
 export interface GroupEssenceBackend {
   getEssence(
     groupId: number,
     pageStart: number,
     pageLimit: number,
   ): Promise<{ messages: unknown[]; complete: boolean }>;
+  /** `sequence` / `random` 取自消息元信息（`resolveMessageMeta`）。 */
+  setEssence(params: {
+    groupId: number;
+    sequence: number;
+    random: number;
+    enable: boolean;
+  }): Promise<void>;
+}
+
+/** 群备注 / 扩展群资料（0xF16、0xFE5_2）。 */
+export interface GroupAdminExtraBackend {
+  setGroupRemark(groupId: number, remark: string): Promise<void>;
+  getGroupInfoEx(groupId: number): Promise<GroupInfoEx>;
+}
+
+/** 资料点赞里的一个用户。 */
+export interface ProfileLikeUserInfo {
+  uid: string;
+  /** 资料里没有有效 QQ 号时为 0。 */
+  uin: number;
+  src: number;
+  latestTime: number;
+  count: number;
+  giftCount: number;
+  customId: number;
+  lastCharged: number;
+  availableCount: number;
+  todayVotedCount: number;
+  nick: string;
+  gender: number;
+  age: number;
+  isFriend: boolean;
+  isVip: boolean;
+  isSvip: boolean;
+}
+
+/** `get_profile_like`（0x7ED_12 / 13）。 */
+export interface ProfileLikeInfo {
+  uid: string;
+  time: number;
+  favorite: {
+    totalCount: number;
+    lastTime: number;
+    todayCount: number;
+    users: ProfileLikeUserInfo[];
+  };
+  vote: {
+    totalCount: number;
+    newCount: number;
+    newNearbyCount: number;
+    lastVisitTime: number;
+    users: ProfileLikeUserInfo[];
+  };
+}
+
+/** 账号资料 / 头像 / 在线状态（0x112A、highway 90、0x7ED、trpc SetStatus）。 */
+export interface ProfileBackend {
+  setProfile(patch: { nickname?: string; personalNote?: string; sex?: 0 | 1 | 2 }): Promise<void>;
+  /** 本地路径（含 `file://`）或已读出的字节。 */
+  setAvatar(source: string | Uint8Array): Promise<void>;
+  getProfileLike(params: {
+    userId?: number;
+    start: number;
+    count: number;
+  }): Promise<ProfileLikeInfo>;
+  setOnlineStatus(params: {
+    status: number;
+    extStatus: number;
+    batteryStatus: number;
+  }): Promise<void>;
+  setDiyOnlineStatus(params: { faceId: number; faceType: number; wording: string }): Promise<void>;
+}
+
+/** 闪传文件集里的一个文件。 */
+export interface FlashFileItem {
+  filesetId: string;
+  fileName: string;
+  origName: string;
+  fileSize: number;
+  /** 上传 / 分享链接 `https://qfile.qq.com/q/<code>`。 */
+  shareUrl: string;
+  fileId: string;
+  /** 0x93D3 回的缩略图链接；主文件直链需要 0x93D4/0x12A9_200（尚未搬）。 */
+  downloadUrl: string;
+}
+
+/** 闪传（0x93CF / 0x93D0 / 0x93D1 / 0x93D2 / 0x93D3 / 0x93D7 / 0x9407 / 0x9427）。 */
+export interface FlashTransferBackend {
+  createTask(
+    files: Array<{ path: string; name?: string }>,
+    name?: string,
+    thumbPath?: string,
+  ): Promise<{ filesetId: string; shareUrl: string }>;
+  getFilesetInfo(filesetId: string): Promise<FlashFileItem[]>;
+  listFilesets(): Promise<FlashFileItem[]>;
+  getShareLink(filesetId: string): Promise<string>;
+  deleteFile(filesetId: string): Promise<void>;
+  renameFile(filesetId: string, newName: string): Promise<void>;
+  sendFlashMsg(filesetId: string, target: { userId?: number; groupId?: number }): Promise<void>;
+  /** 从分享码 / 官方分享链接解析 fileset id（HTTP 分享页）。 */
+  getFilesetIdByCode(shareCode: string): Promise<string>;
+}
+
+/** 好友分组 / 推荐联系人卡片 / 图文 Ark。 */
+export interface ContactsExtraBackend {
+  /** 分组连同组内好友；`withProfile` 只影响是否额外补查资料。 */
+  getFriendCategories(withProfile: boolean): Promise<
+    Array<{
+      categoryId: number;
+      categoryName: string;
+      memberCount: number;
+      friends: FriendInfo[];
+    }>
+  >;
+  setFriendCategory(params: {
+    userId: number;
+    categoryId?: number;
+    categoryName?: string;
+  }): Promise<void>;
+  /** 只取卡不发送：服务端生成的推荐联系人 / 群 Ark JSON。 */
+  getRecommendArk(params: {
+    kind: 'qq' | 'group';
+    contactId: number;
+    phoneNumber?: string;
+  }): Promise<string>;
+  sendTuwenArk(params: {
+    targetId: number;
+    peerType: 0 | 1;
+    title: string;
+    desc: string;
+    summary: string;
+    previewUrl: string;
+    jumpUrl: string;
+  }): Promise<{
+    peerType: number;
+    targetId: number;
+    errorCode: number;
+    errorMessage: string;
+    detail?: { message: string; source: string };
+  }>;
+}
+
+/** AI 声聊角色（0x929D）。 */
+export interface AiVoiceCharacter {
+  characterId: string;
+  characterName: string;
+  previewUrl: string;
+}
+
+export interface AiVoiceCategory {
+  /** 服务端分类名（推荐 / 搞怪 / 古风 / …）。 */
+  category: string;
+  characters: AiVoiceCharacter[];
+}
+
+/** AI 声聊（0x929D 目录 + 0x929B 合成；仅群聊）。 */
+export interface AiVoiceBackend {
+  listCharacters(groupId: number, chatType: number): Promise<AiVoiceCategory[]>;
+  /**
+   * 合成并返回下载 URL。
+   *
+   * ⚠️ 0x929B 在合成成功后**会把语音发到群里**，不是纯生成接口。
+   */
+  generate(groupId: number, character: string, text: string, chatType: number): Promise<string>;
+  /** 合成后从群历史里找回这条语音的定位信息。 */
+  send(groupId: number, character: string, text: string, chatType: number): Promise<SendResult>;
+}
+
+/** 杂项：数据库解密密钥（0xCDE_2）。 */
+export interface MiscBackend {
+  /** `dbPath` 指向账号数据库文件；盐取自 0x2f..0xaf。 */
+  requestDecryptKey(dbPath: string): Promise<string>;
 }
 
 /** 账号侧 web 能力（装扮 / 会员 / 特别关心 / 好友互动标记）。 */
@@ -396,6 +711,12 @@ export interface QzoneBackend {
     pos: number,
     num: number,
   ): Promise<{ total: number; list: unknown[] }>;
+  getMsgDetail(
+    targetUin: number | undefined,
+    tid: string,
+    pos: number,
+    num: number,
+  ): Promise<unknown>;
   getFeeds(
     pageNum: number,
     count: number,
@@ -479,6 +800,8 @@ export interface OneBotBackend {
   history?: MessageHistoryBackend;
   /** 合并转发。 */
   forward?: ForwardBackend;
+  /** 已读上报。 */
+  readReport?: ReadReportBackend;
   /** 好友关系 / 单向好友 / 可疑申请。 */
   friendExtra?: FriendExtraBackend;
   /** 群公告。 */
@@ -491,6 +814,18 @@ export interface OneBotBackend {
   groupSignin?: GroupSigninBackend;
   /** 群精华。 */
   groupEssence?: GroupEssenceBackend;
+  /** 群备注 / 扩展群资料。 */
+  groupAdminExtra?: GroupAdminExtraBackend;
+  /** 账号资料 / 头像 / 点赞 / 在线状态。 */
+  profile?: ProfileBackend;
+  /** 好友分组 / 推荐联系人卡片 / 图文 Ark。 */
+  contactsExtra?: ContactsExtraBackend;
+  /** 数据库解密密钥。 */
+  misc?: MiscBackend;
+  /** AI 声聊（仅群聊）。 */
+  aiVoice?: AiVoiceBackend;
+  /** 闪传文件集。 */
+  flashTransfer?: FlashTransferBackend;
   /** 账号侧 web 能力（装扮 / 会员 / 特别关心）。 */
   accountWeb?: AccountWebBackend;
   /** 群策略 / 标签。 */
@@ -534,7 +869,7 @@ export interface OneBotBackend {
   ): Promise<void>;
 
   sendLike?(userId: number, times: number): Promise<void>;
-  sendPoke?(target: { groupId?: number; userId: number }): Promise<void>;
+  sendPoke?(target: { groupId?: number; userId: number; targetId?: number }): Promise<void>;
 
   setFriendAddRequest?(flag: string, approve: boolean, remark: string): Promise<void>;
   setGroupAddRequest?(flag: string, approve: boolean, reason: string): Promise<void>;
@@ -593,10 +928,18 @@ export function describeBackend(backend: OneBotBackend): string[] {
     'groupTodo',
     'history',
     'forward',
+    'readReport',
     'friendExtra',
     'groupPolicy',
     'interactionExtra',
     'qzone',
+    'groupEssence',
+    'groupAdminExtra',
+    'profile',
+    'contactsExtra',
+    'misc',
+    'aiVoice',
+    'flashTransfer',
   ];
   for (const group of groups) {
     if (backend[group]) flat.push(group);

@@ -570,6 +570,163 @@ export async function getQzoneMsgList(
   return mapMsgList(data);
 }
 
+// ─────────────── 单条说说详情 + 一页评论 — msgdetail_v6 ───────────────
+
+export interface QzoneMsgCommentReply {
+  /** 一级评论为评论 id；回复时为该条回复 id。 */
+  comment_id: string;
+  uin: number;
+  name: string;
+  time: number;
+  content: string;
+}
+
+export interface QzoneMsgComment extends QzoneMsgCommentReply {
+  /** 服务端内联二级回复，可能不完整。 */
+  replies: Array<
+    QzoneMsgCommentReply & {
+      /** 所属一级评论 id；回复时作为 comment_id。 */
+      parent_comment_id: string;
+      /** 所属一级评论作者；回复时作为 comment_uin。 */
+      parent_comment_uin: number;
+    }
+  >;
+}
+
+export interface QzoneMsgDetailResult {
+  tid: string;
+  content: string;
+  /** 服务端报告的评论总数，不是本页条数。 */
+  comment_num: number;
+  comments: QzoneMsgComment[];
+}
+
+function detailObject(value: unknown, field: string): Record<string, unknown> {
+  if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error(`invalid qzone msg detail: ${field} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function detailString(value: unknown, field: string): string {
+  if (typeof value !== 'string') {
+    throw new Error(`invalid qzone msg detail: ${field} must be a string`);
+  }
+  return value;
+}
+
+function detailInteger(value: unknown, field: string, min = 0): number {
+  const number = typeof value === 'string' && /^\d+$/.test(value) ? Number(value) : value;
+  if (typeof number !== 'number' || !Number.isSafeInteger(number) || number < min) {
+    throw new Error(`invalid qzone msg detail: ${field} must be an integer >= ${min}`);
+  }
+  return number;
+}
+
+function detailList(value: unknown, field: string): unknown[] {
+  if (value === undefined || value === null) return [];
+  if (!Array.isArray(value)) {
+    throw new Error(`invalid qzone msg detail: ${field} must be an array`);
+  }
+  return value;
+}
+
+function mapQzoneComment(value: Record<string, unknown>, field: string): QzoneMsgCommentReply {
+  const id =
+    typeof value.tid === 'number'
+      ? String(detailInteger(value.tid, `${field}.tid`))
+      : detailString(value.tid, `${field}.tid`);
+  if (!id) throw new Error(`invalid qzone msg detail: ${field}.tid is empty`);
+  return {
+    comment_id: id,
+    uin: detailInteger(value.uin, `${field}.uin`, 1),
+    name: detailString(value.name, `${field}.name`),
+    time: detailInteger(value.create_time, `${field}.create_time`),
+    content: detailString(value.content, `${field}.content`),
+  };
+}
+
+/**
+ * 读一条说说和一页一级评论（带服务端内联的楼中楼回复）。
+ *
+ * `pos` / `num` 与官方 `Emotion.load` 一致；`num` 是请求上限，实际条数由服务端
+ * 决定。响应 tid 必须与请求一致，避免把别人的说说当成目标返回。
+ */
+export async function getQzoneMsgDetail(
+  cred: WebCredential,
+  targetUin: string,
+  tid: string,
+  pos = 0,
+  num = 20,
+  signal?: AbortSignal,
+): Promise<QzoneMsgDetailResult> {
+  const gtk = computeBkn(cred.pskey || cred.skey);
+  const url = `https://h5.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msgdetail_v6?${new URLSearchParams(
+    {
+      tid,
+      uin: targetUin,
+      t1_source: '1',
+      not_trunc_con: '1',
+      need_right: '1',
+      not_adapt_outpic: '1',
+      g_tk: String(gtk),
+      pos: String(pos),
+      num: String(num),
+    },
+  ).toString()}`;
+
+  const text = await webRequestText(url, {
+    method: 'GET',
+    cookie: cookieHeader(cred),
+    headers: { Referer: `https://user.qzone.qq.com/${targetUin}` },
+    signal,
+    retry: WEB_READ_RETRY,
+  });
+  const data = parseQzoneJson<Record<string, unknown>>(text);
+  const code =
+    data.code !== undefined && data.code !== 0
+      ? Number(data.code)
+      : Number(data.subcode ?? data.code ?? -1);
+  if (code !== 0) {
+    throw qzoneCodeError(
+      'qzone msg detail',
+      code,
+      typeof data.message === 'string'
+        ? data.message
+        : typeof data.msg === 'string'
+          ? data.msg
+          : undefined,
+    );
+  }
+
+  const resultTid = detailString(data.tid, 'tid');
+  if (resultTid !== tid) {
+    throw new Error('invalid qzone msg detail: tid does not match the requested post');
+  }
+
+  return {
+    tid: resultTid,
+    content: detailString(data.content, 'content'),
+    comment_num: detailInteger(data.cmtnum, 'cmtnum'),
+    comments: detailList(data.commentlist, 'commentlist').map((value, index) => {
+      const field = `commentlist[${index}]`;
+      const comment = detailObject(value, field);
+      const mapped = mapQzoneComment(comment, field);
+      return {
+        ...mapped,
+        replies: detailList(comment.list_3, `${field}.list_3`).map((reply, replyIndex) => {
+          const replyField = `${field}.list_3[${replyIndex}]`;
+          return {
+            ...mapQzoneComment(detailObject(reply, replyField), replyField),
+            parent_comment_id: mapped.comment_id,
+            parent_comment_uin: mapped.uin,
+          };
+        }),
+      };
+    }),
+  };
+}
+
 // ─────────────── 好友动态 (friend feeds) — feeds3_html_more ───────────────
 // 好友动态 cgi 每条 feed 返回一段预渲染 HTML 加少量结构化字段。我们透出稳定的
 // 结构化字段,HTML 原样带出(深度 HTML→段 解析超出范围,需要的调用方自己解)。

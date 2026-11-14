@@ -220,6 +220,21 @@ export const GROUP_FILE_ACTIONS = [
   ),
   defineAction(
     {
+      name: 'get_private_file_url',
+      summary: '获取私聊文件下载链接',
+      parse: (raw) => ({
+        userId: optionalPositiveInt(raw, 'user_id'),
+        fileId: requiredString(raw, 'file_id'),
+        fileHash: optionalString(raw, 'file_hash') ?? '',
+      }),
+      run: async ({ userId, fileId, fileHash }, ctx) => ({
+        url: await ctx.backend.groupFile!.getPrivateFileUrl(userId, fileId, fileHash),
+      }),
+    },
+    { available: (backend) => typeof backend.groupFile?.getPrivateFileUrl === 'function' },
+  ),
+  defineAction(
+    {
       name: 'rename_group_file_folder',
       summary: '重命名群文件文件夹',
       parse: (raw) => ({

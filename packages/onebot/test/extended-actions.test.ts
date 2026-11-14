@@ -45,6 +45,8 @@ function makeContext(
           }
         : null,
     resolveMessageEvent: () => null,
+    internMessageEvent: () => 43,
+    findLatestMessageAnchor: () => null,
   };
 }
 

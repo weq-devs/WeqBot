@@ -60,6 +60,47 @@ const sendPoke = define(
   ['sendPoke'],
 );
 
+const friendPoke = define(
+  {
+    name: 'friend_poke',
+    summary: '好友拍一拍',
+    parse: (raw) => {
+      const targetId = raw.target_id;
+      return {
+        userId: requiredPositiveInt(raw, 'user_id'),
+        targetId:
+          targetId === undefined || targetId === null || targetId === 0
+            ? undefined
+            : requiredPositiveInt(raw, 'target_id'),
+      };
+    },
+    run: async ({ userId, targetId }, ctx) => {
+      await ctx.backend.sendPoke!({
+        userId,
+        ...(targetId !== undefined ? { targetId } : {}),
+      });
+      return null;
+    },
+  },
+  ['sendPoke'],
+);
+
+const groupPoke = define(
+  {
+    name: 'group_poke',
+    summary: '群拍一拍',
+    parse: (raw) => ({
+      groupId: requiredPositiveInt(raw, 'group_id'),
+      userId: requiredPositiveInt(raw, 'user_id'),
+    }),
+    run: async ({ groupId, userId }, ctx) => {
+      await ctx.backend.sendPoke!({ groupId, userId });
+      return null;
+    },
+  },
+  ['sendPoke'],
+);
+
 const setFriendAddRequest = define(
   {
     name: 'set_friend_add_request',
@@ -106,4 +147,11 @@ const setGroupAddRequest = define(
   ['setGroupAddRequest'],
 );
 
-export const INTERACTION_ACTIONS = [sendLike, sendPoke, setFriendAddRequest, setGroupAddRequest];
+export const INTERACTION_ACTIONS = [
+  sendLike,
+  sendPoke,
+  friendPoke,
+  groupPoke,
+  setFriendAddRequest,
+  setGroupAddRequest,
+];

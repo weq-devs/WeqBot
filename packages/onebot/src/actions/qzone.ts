@@ -70,6 +70,27 @@ const readActions = [
   ),
   defineAction(
     {
+      name: 'get_qzone_msg_detail',
+      summary: '获取空间说说详情与评论',
+      parse: (raw) => {
+        const tid = requiredString(raw, 'tid').trim();
+        if (!tid) throw new ParamError('tid 不能为空');
+        const num = optionalPositiveInt(raw, 'num') ?? 20;
+        if (num > 100) throw new ParamError('num 必须在 1-100 之间');
+        return {
+          tid,
+          targetUin: optionalTarget(raw),
+          pos: optionalPositiveInt(raw, 'pos') ?? 0,
+          num,
+        };
+      },
+      run: async ({ tid, targetUin, pos, num }, ctx) =>
+        ctx.backend.qzone!.getMsgDetail(targetUin, tid, pos, num),
+    },
+    { available: (backend) => typeof backend.qzone?.getMsgDetail === 'function' },
+  ),
+  defineAction(
+    {
       name: 'get_qzone_feeds',
       summary: '获取好友动态',
       parse: (raw) => ({

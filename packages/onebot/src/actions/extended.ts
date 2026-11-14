@@ -320,6 +320,176 @@ const miscActions = [
   ),
 ];
 
+/** 图文 Ark 的默认封面（SnowLuma 原样照搬）。 */
+const TUWEN_ARK_DEFAULT_PREVIEW =
+  'https://tangram-1251316161.file.myqcloud.com/files/20210721/e50a8e37e08f29bf1ffc7466e1950690.png';
+
+function shareArkTarget(raw: JsonObject): {
+  groupId?: number;
+  userId?: number;
+  phoneNumber: string;
+} {
+  const groupId = optionalPositiveInt(raw, 'group_id');
+  const userId = optionalPositiveInt(raw, 'user_id');
+  if (groupId === undefined && userId === undefined) {
+    throw new ParamError('user_id 或 group_id 必须给一个');
+  }
+  return {
+    ...(groupId !== undefined ? { groupId } : {}),
+    ...(userId !== undefined ? { userId } : {}),
+    phoneNumber: optionalString(raw, 'phone_number') ?? '',
+  };
+}
+
+function shareArkDefinition(name: string, summary: string) {
+  return defineAction(
+    {
+      name,
+      summary,
+      parse: shareArkTarget,
+      run: async ({ groupId, userId, phoneNumber }, ctx) => ({
+        arkMsg: await ctx.backend.contactsExtra!.getRecommendArk(
+          groupId !== undefined
+            ? { kind: 'group', contactId: groupId }
+            : { kind: 'qq', contactId: userId!, phoneNumber },
+        ),
+      }),
+    },
+    { available: (backend) => typeof backend.contactsExtra?.getRecommendArk === 'function' },
+  );
+}
+
+const sharePeer = shareArkDefinition('share_peer', '分享用户 / 群 Ark 卡片');
+// NapCat 标准名；与 share_peer 完全同形。
+const sendArkShare = shareArkDefinition(
+  'send_ark_share',
+  '分享用户 / 群 Ark 卡片（NapCat 标准名）',
+);
+
+const sendGroupArkShare = defineAction(
+  {
+    name: 'send_group_ark_share',
+    summary: '分享群 Ark 卡片',
+    parse: (raw) => ({ groupId: requiredPositiveInt(raw, 'group_id') }),
+    run: async ({ groupId }, ctx) =>
+      ctx.backend.contactsExtra!.getRecommendArk({ kind: 'group', contactId: groupId }),
+  },
+  { available: (backend) => typeof backend.contactsExtra?.getRecommendArk === 'function' },
+);
+
+const sendTuwenArk = defineAction(
+  {
+    name: 'send_tuwen_ark',
+    summary: '发送图文 Ark 卡片',
+    parse: (raw) => {
+      const groupId = optionalPositiveInt(raw, 'group_id');
+      const userId = optionalPositiveInt(raw, 'user_id');
+      if (groupId === undefined && userId === undefined) {
+        throw new ParamError('user_id 或 group_id 必须给一个');
+      }
+      const target =
+        groupId !== undefined
+          ? { targetId: groupId, peerType: 1 as const }
+          : { targetId: userId!, peerType: 0 as const };
+      return {
+        ...target,
+        title: requiredString(raw, 'title'),
+        desc: requiredString(raw, 'desc'),
+        summary: optionalString(raw, 'summary') ?? '[分享]',
+        previewUrl: optionalString(raw, 'preview_url') ?? TUWEN_ARK_DEFAULT_PREVIEW,
+        jumpUrl: requiredString(raw, 'jump_url'),
+      };
+    },
+    run: async (params, ctx) => {
+      await ctx.backend.contactsExtra!.sendTuwenArk(params);
+      return null;
+    },
+  },
+  { available: (backend) => typeof backend.contactsExtra?.sendTuwenArk === 'function' },
+);
+
+const arkActions = [sharePeer, sendArkShare, sendGroupArkShare, sendTuwenArk];
+
+function aiVoiceChatType(raw: JsonObject): number {
+  const value = raw.chat_type;
+  if (value === undefined || value === null) return 1;
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new ParamError('chat_type 必须是 >= 0 的整数');
+  }
+  return value;
+}
+
+function aiVoiceParams(raw: JsonObject) {
+  const character = requiredString(raw, 'character').trim();
+  const text = requiredString(raw, 'text').trim();
+  if (!character) throw new ParamError('character 不能为空');
+  if (!text) throw new ParamError('text 不能为空');
+  return {
+    groupId: requiredPositiveInt(raw, 'group_id'),
+    character,
+    text,
+    chatType: aiVoiceChatType(raw),
+  };
+}
+
+const getAiCharacters = defineAction(
+  {
+    name: 'get_ai_characters',
+    summary: '获取 AI 语音角色',
+    parse: (raw) => ({
+      groupId: requiredPositiveInt(raw, 'group_id'),
+      chatType: aiVoiceChatType(raw),
+    }),
+    run: async ({ groupId, chatType }, ctx) => {
+      const categories = await ctx.backend.aiVoice!.listCharacters(groupId, chatType);
+      return categories.map((category) => ({
+        type: category.category,
+        characters: category.characters.map((character) => ({
+          character_id: character.characterId,
+          character_name: character.characterName,
+          preview_url: character.previewUrl,
+        })),
+      }));
+    },
+  },
+  { available: (backend) => typeof backend.aiVoice?.listCharacters === 'function' },
+);
+
+const getAiRecord = defineAction(
+  {
+    name: 'get_ai_record',
+    summary: '生成 AI 语音并返回下载 URL',
+    parse: aiVoiceParams,
+    run: async ({ groupId, character, text, chatType }, ctx) =>
+      ctx.backend.aiVoice!.generate(groupId, character, text, chatType),
+  },
+  { available: (backend) => typeof backend.aiVoice?.generate === 'function' },
+);
+
+const sendGroupAiRecord = defineAction(
+  {
+    name: 'send_group_ai_record',
+    summary: '生成并发送 AI 语音到群',
+    parse: aiVoiceParams,
+    run: async ({ groupId, character, text, chatType }, ctx) => {
+      const result = await ctx.backend.aiVoice!.send(groupId, character, text, chatType);
+      return {
+        message_id: ctx.internSentMessageId({
+          isGroup: true,
+          targetId: groupId,
+          sequence: result.sequence,
+          clientSequence: result.clientSequence ?? 0,
+          random: result.random ?? 0,
+          timestamp: result.timestamp ?? Math.floor(Date.now() / 1000),
+        }),
+      };
+    },
+  },
+  { available: (backend) => typeof backend.aiVoice?.send === 'function' },
+);
+
+const aiVoiceActions = [getAiCharacters, getAiRecord, sendGroupAiRecord];
+
 const friendActions = [
   defineAction(
     {
@@ -399,5 +569,7 @@ export const EXTENDED_ACTIONS = [
   ...reactionActions,
   ...todoActions,
   ...miscActions,
+  ...arkActions,
+  ...aiVoiceActions,
   ...friendActions,
 ];

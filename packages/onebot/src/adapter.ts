@@ -126,6 +126,8 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
         isGroup: params.isGroup,
         targetId: params.targetId,
         sequence: params.sequence,
+        // 私聊发送回执里的 sequence 就是服务端会话序号，历史窗口也用它。
+        ...(params.isGroup ? {} : { ntSequence: params.sequence }),
         sequenceAuthoritative: true,
         eventName: params.isGroup ? 'group' : 'private',
         clientSequence: params.clientSequence,
@@ -133,6 +135,43 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
         timestamp: params.timestamp,
       },
       event: {},
+    });
+    return id;
+  }
+
+  /** 历史 / 转发里的一条消息：分配 message_id + 缓存快照（有界内存表）。 */
+  function internMessageEvent(
+    params: {
+      isGroup: boolean;
+      targetId: number;
+      sequence: number;
+      ntSequence?: number;
+      wireId: string;
+      random: number;
+      timestamp: number;
+    },
+    event: Record<string, unknown>,
+  ): number {
+    const wireId = params.wireId || `history-${messageIdSeed++}`;
+    const id = messageIds.intern({
+      wireId,
+      peerId: String(params.targetId),
+      seq: params.sequence,
+      at: Date.now(),
+    });
+    store.put(id, {
+      meta: {
+        isGroup: params.isGroup,
+        targetId: params.targetId,
+        sequence: params.sequence,
+        ...(params.ntSequence !== undefined ? { ntSequence: params.ntSequence } : {}),
+        sequenceAuthoritative: params.sequence > 0,
+        eventName: params.isGroup ? 'group' : 'private',
+        clientSequence: 0,
+        random: params.random,
+        timestamp: params.timestamp,
+      },
+      event,
     });
     return id;
   }
@@ -146,6 +185,9 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
       internSentMessageId,
       resolveMessageMeta: (messageId): RecallTarget | null => store.meta(messageId) ?? null,
       resolveMessageEvent: (messageId) => store.get(messageId)?.event ?? null,
+      internMessageEvent,
+      findLatestMessageAnchor: (isGroup, targetId) =>
+        store.latestSequence(isGroup, targetId) ?? null,
     };
   }
 
@@ -177,6 +219,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
               isGroup: message.scene === 'group',
               targetId: Number(message.peer.id) || 0,
               sequence: message.seq,
+              ...(message.ntMsgSeq !== undefined ? { ntSequence: message.ntMsgSeq } : {}),
               sequenceAuthoritative: true,
               eventName: message.scene,
               clientSequence: message.clientSequence ?? 0,
@@ -210,6 +253,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
           isGroup: event.message.scene === 'group',
           targetId: Number(event.message.peer.id) || 0,
           sequence: event.message.seq,
+          ...(event.message.ntMsgSeq !== undefined ? { ntSequence: event.message.ntMsgSeq } : {}),
           sequenceAuthoritative: true,
           eventName: event.message.scene,
           clientSequence: event.message.clientSequence ?? 0,
