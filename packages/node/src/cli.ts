@@ -192,11 +192,23 @@ async function main(argv: string[]): Promise<number> {
     if (event.type === 'error') log.error(event.error.message, { code: event.error.code });
   });
 
-  const stop = (): void => {
+  /**
+   * 优雅下线：`bot.stop()` 会走 `closeSession` → 发 `UnRegister`，服务端才会
+   * 把这条会话摘掉。
+   *
+   * 三个信号都要接：`SIGINT`（Ctrl-C）、`SIGTERM`（systemd / docker / kill 默认）、
+   * **`SIGHUP`（关终端窗口）**。SIGHUP 之前漏了 —— 在终端里直接关窗口时进程会
+   * 被直接杀掉，`UnRegister` 根本发不出去，手机端会一直显示「电脑在线」。
+   *
+   * `SIGKILL` 接不住（内核直接回收），那种情况只能靠服务端心跳超时把会话摘掉。
+   */
+  const stop = (signal: string): void => {
+    log.info('收到退出信号，开始下线', { signal });
     void bot.stop('closed').finally(() => process.exit(0));
   };
-  process.once('SIGINT', stop);
-  process.once('SIGTERM', stop);
+  for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+    process.once(signal, () => stop(signal));
+  }
 
   await bot.start();
   log.info('bot 已上线', {
