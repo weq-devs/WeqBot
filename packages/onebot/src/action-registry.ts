@@ -9,6 +9,7 @@
  *   - 敏感能力（红包 / 转账 / 支付）**永不进这张表** —— 见文件末尾的 deny-list。
  */
 
+import { actionMetadata, type JsonSchema } from './action-metadata';
 import { NotImplementedError, type OneBotBackend } from './backend';
 import { parseMessageSegments } from './message-parser';
 import {
@@ -76,6 +77,10 @@ export class ParamError extends Error {}
 export interface ActionDefinition<Params = JsonObject, Result = JsonValue> {
   name: string;
   summary?: string;
+  /** 比 summary 更长的文档说明；缺省时由 `ActionRegistry.describe()` 回退到 summary。 */
+  description?: string;
+  /** 入参 JSON Schema；缺省时由 `ActionRegistry.describe()` 从 action-metadata 取。 */
+  inputSchema?: JsonSchema;
   /** 未提供时按 `{}` 处理。 */
   parse?: ParamParser<Params>;
   run(params: Params, ctx: ActionContext): Promise<Result>;
@@ -84,6 +89,42 @@ export interface ActionDefinition<Params = JsonObject, Result = JsonValue> {
 export interface ActionListEntry {
   name: string;
   summary?: string;
+}
+
+/** 给文档 / 测试页消费的完整 action 元数据。 */
+export interface ActionDoc {
+  name: string;
+  summary?: string;
+  /** 始终非空：definition.description → metadata.description → summary。 */
+  description: string;
+  inputSchema: JsonSchema;
+}
+
+const EMPTY_INPUT_SCHEMA: JsonSchema = {
+  type: 'object',
+  properties: {},
+  additionalProperties: true,
+};
+
+/**
+ * 把一条 action 声明投影成文档元数据。
+ *
+ * 独立成函数是为了让「全部 action」（含后端未实现的）也能被文档生成器消费，
+ * 而不必先构造一个注册表。
+ */
+export function describeAction(definition: {
+  name: string;
+  summary?: string;
+  description?: string;
+  inputSchema?: JsonSchema;
+}): ActionDoc {
+  const metadata = actionMetadata(definition.name);
+  return {
+    name: definition.name,
+    ...(definition.summary ? { summary: definition.summary } : {}),
+    description: definition.description ?? metadata?.description ?? definition.summary ?? '',
+    inputSchema: definition.inputSchema ?? metadata?.inputSchema ?? EMPTY_INPUT_SCHEMA,
+  };
 }
 
 /**
@@ -108,6 +149,8 @@ export function defineAction<P, R>(
   definition: {
     name: string;
     summary?: string;
+    description?: string;
+    inputSchema?: JsonSchema;
     parse?: ParamParser<P>;
     run(params: P, ctx: ActionContext): Promise<R>;
   },
@@ -203,6 +246,16 @@ export class ActionRegistry {
       name,
       ...(summary ? { summary } : {}),
     }));
+  }
+
+  /**
+   * 文档 / 测试页用的完整元数据（仅已注册的 action）。
+   *
+   * 元数据优先取 action 自身内联的字段，其次取 `action-metadata.ts` 的登记表；
+   * 两处都没有时给空对象 schema，保证返回形状始终可用。
+   */
+  describe(): ActionDoc[] {
+    return [...this.actions.values()].map((definition) => describeAction(definition));
   }
 
   /**

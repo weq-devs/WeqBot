@@ -21,6 +21,7 @@
 export {
   ActionRegistry,
   DENIED_ACTIONS,
+  describeAction,
   isDeniedAction,
   ParamError,
   optionalBool,
@@ -31,9 +32,16 @@ export {
   requiredString,
   type ActionContext,
   type ActionDefinition,
+  type ActionDoc,
   type ActionListEntry,
   type ParamParser,
 } from './action-registry';
+export {
+  ACTION_METADATA,
+  actionMetadata,
+  type ActionMetadata,
+  type JsonSchema,
+} from './action-metadata';
 export {
   createOneBotAdapter,
   type ActionDispatchOptions,
@@ -43,6 +51,7 @@ export {
 } from './adapter';
 export {
   ALL_ACTIONS,
+  describeActions,
   registerActions,
   type ActionEntry,
 } from './actions';

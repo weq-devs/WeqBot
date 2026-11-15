@@ -11,8 +11,13 @@
  * 两者都给时以 `available` 为准。
  */
 
-import type { ActionEntry } from '../action-registry';
-import { isDeniedAction, type ActionDefinition, type ActionRegistry } from '../action-registry';
+import type { ActionDoc, ActionEntry } from '../action-registry';
+import {
+  describeAction,
+  isDeniedAction,
+  type ActionDefinition,
+  type ActionRegistry,
+} from '../action-registry';
 import type { OneBotBackend } from '../backend';
 import { ACCOUNT_ACTIONS } from './account';
 import { ACCOUNT_WEB_ACTIONS } from './account-web';
@@ -29,6 +34,15 @@ import { L2_EXTRA_ACTIONS } from './l2-extra';
 import { QZONE_ACTIONS } from './qzone';
 
 export type { ActionEntry } from '../action-registry';
+
+/**
+ * 全部 action 的文档元数据（含当前后端未实现、会被跳过的 action）。
+ *
+ * 文档生成器 / 测试页应当读这个而不是注册表，否则部署差异会让文档随能力漂移。
+ */
+export function describeActions(entries: readonly ActionEntry[] = ALL_ACTIONS): ActionDoc[] {
+  return entries.map((entry) => describeAction(entry.definition));
+}
 
 export const ALL_ACTIONS: ActionEntry[] = [
   ...MESSAGE_ACTIONS,
