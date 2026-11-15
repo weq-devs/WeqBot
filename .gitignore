@@ -3,7 +3,9 @@ dist/
 out/
 *.tsbuildinfo
 *.log
-logs/
+# 只忽略根目录的运行时日志。**不能**写成 `logs/`：那会连
+# `packages/webui/src/pages/logs/` 一起吞掉，导致前端构建在干净 clone 上失败。
+/logs/
 .DS_Store
 
 # 原生产物：由 nt_helper 的构建流水线产出，不进仓库
