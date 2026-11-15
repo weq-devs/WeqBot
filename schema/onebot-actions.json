@@ -2,9 +2,9 @@
   "version": 1,
   "generatedFrom": "packages/onebot/src/actions",
   "totals": {
-    "actions": 205,
-    "groups": 13,
-    "withParams": 185
+    "actions": 214,
+    "groups": 14,
+    "withParams": 194
   },
   "deniedActions": [
     "send_redbag",
@@ -6998,6 +6998,446 @@
           "params": [
             "category",
             "count"
+          ],
+          "required": [],
+          "denied": false,
+          "capability": {
+            "mode": "predicate"
+          },
+          "write": false
+        }
+      ]
+    },
+    {
+      "key": "custom",
+      "label": "自定义扩展",
+      "actions": [
+        {
+          "name": "get_dress_url",
+          "summary": "获取个性装扮（气泡 / 字体 / 头像挂件）的资源下载地址",
+          "description": "通过 scupdate 按 item_id 换取个性装扮资源地址；气泡 / 挂件会返回各分包的下载链接，字体返回 zip 地址。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "description": "装扮类型：bubble 气泡 / font 字体 / pendant 头像挂件",
+                "enum": [
+                  "bubble",
+                  "font",
+                  "pendant"
+                ]
+              },
+              "item_id": {
+                "type": "integer",
+                "description": "装扮 itemId",
+                "minimum": 1
+              }
+            },
+            "required": [
+              "type",
+              "item_id"
+            ],
+            "additionalProperties": true
+          },
+          "params": [
+            "type",
+            "item_id"
+          ],
+          "required": [
+            "type",
+            "item_id"
+          ],
+          "denied": false,
+          "capability": {
+            "mode": "predicate"
+          },
+          "write": false
+        },
+        {
+          "name": "ftf2ttf",
+          "summary": "把 FTF 字体转换成 TTF（原生 nt_helper 转换器）",
+          "description": "用原生 nt_helper 的字体转换器把 FTF 转成 TTF。输入输出都是本机文件路径，不读内存字节。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "file": {
+                "type": "string",
+                "description": "输入 .ftf 字体文件路径",
+                "x-role": "file"
+              },
+              "output": {
+                "type": "string",
+                "description": "输出 .ttf 路径；不传时把 .ftf 替换成 .ttf"
+              },
+              "assets_dir": {
+                "type": "string",
+                "description": "彩色字体资源目录"
+              },
+              "color": {
+                "type": "boolean",
+                "description": "是否生成彩色字形"
+              },
+              "color_chars": {
+                "type": "string",
+                "description": "参与彩色化的字符集"
+              },
+              "check_ots": {
+                "type": "boolean",
+                "description": "是否跑 OTS 校验（需要本机 ots-sanitize）"
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "additionalProperties": true
+          },
+          "params": [
+            "file",
+            "output",
+            "assets_dir",
+            "color",
+            "color_chars",
+            "check_ots"
+          ],
+          "required": [
+            "file"
+          ],
+          "denied": false,
+          "capability": {
+            "mode": "predicate"
+          },
+          "write": false
+        },
+        {
+          "name": "send_private_flash_photo",
+          "summary": "给好友发一张闪照（阅后即焚，仅私聊）",
+          "description": "给好友发闪照；文件可以是本机路径、http(s) URL 或 base64。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "user_id": {
+                "type": "integer",
+                "description": "QQ 号",
+                "minimum": 1,
+                "x-role": "user_id"
+              },
+              "file": {
+                "type": "string",
+                "description": "闪照图片",
+                "x-role": "image"
+              }
+            },
+            "required": [
+              "user_id",
+              "file"
+            ],
+            "additionalProperties": true
+          },
+          "params": [
+            "user_id",
+            "file"
+          ],
+          "required": [
+            "user_id",
+            "file"
+          ],
+          "denied": false,
+          "capability": {
+            "mode": "always"
+          },
+          "write": false
+        },
+        {
+          "name": "send_emoji_bounce",
+          "summary": "表情弹射：让同一个系统表情在聊天窗口里弹射多份",
+          "description": "表情弹射：把同一个系统表情弹射多份。group_id 与 user_id 二选一。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "group_id": {
+                "type": "integer",
+                "description": "群号；与 user_id 二选一",
+                "minimum": 1,
+                "x-role": "group_id"
+              },
+              "user_id": {
+                "type": "integer",
+                "description": "QQ 号；与 group_id 二选一",
+                "minimum": 1,
+                "x-role": "user_id"
+              },
+              "face_id": {
+                "type": "integer",
+                "description": "系统表情 id",
+                "minimum": 0
+              },
+              "count": {
+                "type": "integer",
+                "description": "弹射个数",
+                "minimum": 1,
+                "default": 10
+              },
+              "name": {
+                "type": "string",
+                "description": "表情名（不带斜杠或方括号）"
+              }
+            },
+            "required": [
+              "face_id"
+            ],
+            "additionalProperties": true
+          },
+          "params": [
+            "group_id",
+            "user_id",
+            "face_id",
+            "count",
+            "name"
+          ],
+          "required": [
+            "face_id"
+          ],
+          "denied": false,
+          "capability": {
+            "mode": "always"
+          },
+          "write": false
+        },
+        {
+          "name": "send_bubble_msg",
+          "summary": "发送泡泡消息（圆形循环播放的短视频）",
+          "description": "发送泡泡消息（圆形循环的短视频，模板名缺省用 video_penguin_dance）。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "group_id": {
+                "type": "integer",
+                "description": "群号；与 user_id 二选一",
+                "minimum": 1,
+                "x-role": "group_id"
+              },
+              "user_id": {
+                "type": "integer",
+                "description": "QQ 号；与 group_id 二选一",
+                "minimum": 1,
+                "x-role": "user_id"
+              },
+              "file": {
+                "type": "string",
+                "description": "视频文件路径 / URL / base64",
+                "x-role": "file"
+              },
+              "thumb": {
+                "type": "string",
+                "description": "封面图；不传时按宽高合成纯色图",
+                "x-role": "file"
+              },
+              "duration": {
+                "type": "integer",
+                "description": "时长（秒）",
+                "minimum": 1
+              },
+              "width": {
+                "type": "integer",
+                "description": "视频宽度",
+                "minimum": 1
+              },
+              "height": {
+                "type": "integer",
+                "description": "视频高度",
+                "minimum": 1
+              },
+              "template_name": {
+                "type": "string",
+                "description": "泡泡模板名"
+              }
+            },
+            "required": [
+              "file"
+            ],
+            "additionalProperties": true
+          },
+          "params": [
+            "group_id",
+            "user_id",
+            "file",
+            "thumb",
+            "duration",
+            "width",
+            "height",
+            "template_name"
+          ],
+          "required": [
+            "file"
+          ],
+          "denied": false,
+          "capability": {
+            "mode": "always"
+          },
+          "write": false
+        },
+        {
+          "name": "get_group_gift_list",
+          "summary": "获取群礼物面板（页签与礼物列表）",
+          "description": "拉取群礼物面板，返回页签与每个页签下的礼物条目。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "group_id": {
+                "type": "integer",
+                "description": "群号",
+                "minimum": 1,
+                "x-role": "group_id"
+              }
+            },
+            "required": [
+              "group_id"
+            ],
+            "additionalProperties": true
+          },
+          "params": [
+            "group_id"
+          ],
+          "required": [
+            "group_id"
+          ],
+          "denied": false,
+          "capability": {
+            "mode": "predicate"
+          },
+          "write": false
+        },
+        {
+          "name": "send_location_share",
+          "summary": "发起位置共享并发送位置共享卡片",
+          "description": "发起位置共享并发送位置共享卡片。坐标使用 GCJ-02、经度在前；停止调用 update_location_share 约 60 秒后房间结束。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "group_id": {
+                "type": "integer",
+                "description": "群号；与 user_id 二选一",
+                "minimum": 1,
+                "x-role": "group_id"
+              },
+              "user_id": {
+                "type": "integer",
+                "description": "QQ 号；与 group_id 二选一",
+                "minimum": 1,
+                "x-role": "user_id"
+              },
+              "longitude": {
+                "type": "number",
+                "description": "经度（GCJ-02）"
+              },
+              "latitude": {
+                "type": "number",
+                "description": "纬度（GCJ-02）"
+              },
+              "interval": {
+                "type": "integer",
+                "description": "期望的上报间隔（秒）",
+                "minimum": 1,
+                "default": 2
+              }
+            },
+            "required": [
+              "longitude",
+              "latitude"
+            ],
+            "additionalProperties": true
+          },
+          "params": [
+            "group_id",
+            "user_id",
+            "longitude",
+            "latitude",
+            "interval"
+          ],
+          "required": [
+            "longitude",
+            "latitude"
+          ],
+          "denied": false,
+          "capability": {
+            "mode": "predicate"
+          },
+          "write": false
+        },
+        {
+          "name": "update_location_share",
+          "summary": "更新位置共享里的当前定位（需按服务端间隔持续调用）",
+          "description": "更新位置共享里的当前定位；需要按服务端返回的 interval 持续调用。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "group_id": {
+                "type": "integer",
+                "description": "群号；与 user_id 二选一",
+                "minimum": 1,
+                "x-role": "group_id"
+              },
+              "user_id": {
+                "type": "integer",
+                "description": "QQ 号；与 group_id 二选一",
+                "minimum": 1,
+                "x-role": "user_id"
+              },
+              "longitude": {
+                "type": "number",
+                "description": "经度（GCJ-02）"
+              },
+              "latitude": {
+                "type": "number",
+                "description": "纬度（GCJ-02）"
+              },
+              "extra": {
+                "type": "number",
+                "description": "抓包里语义未确认的附加数值；缺省 0"
+              }
+            },
+            "required": [
+              "longitude",
+              "latitude"
+            ],
+            "additionalProperties": true
+          },
+          "params": [
+            "group_id",
+            "user_id",
+            "longitude",
+            "latitude",
+            "extra"
+          ],
+          "required": [
+            "longitude",
+            "latitude"
+          ],
+          "denied": false,
+          "capability": {
+            "mode": "predicate"
+          },
+          "write": false
+        },
+        {
+          "name": "get_qq_show_url",
+          "summary": "获取 QQ 秀图片地址；不传 user_id 时查自己",
+          "description": "获取 QQ 秀图片地址；不传 user_id 时查自己，没有 QQ 秀时 url 为空。",
+          "inputSchema": {
+            "type": "object",
+            "properties": {
+              "user_id": {
+                "type": "integer",
+                "description": "目标 QQ 号；不传表示自己",
+                "minimum": 1,
+                "x-role": "user_id"
+              }
+            },
+            "additionalProperties": true
+          },
+          "params": [
+            "user_id"
           ],
           "required": [],
           "denied": false,

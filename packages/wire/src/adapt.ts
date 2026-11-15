@@ -124,6 +124,19 @@ export interface RawNativeBinding {
   warmupSigner?(wrapperPath: string): Promise<{ signCoreRva: number; vmRva: number }>;
   getBuildInfo?(): NativeBuildInfo;
 
+  /** FTF → TTF 字体转换（进程层能力）。 */
+  convertFontAsync?(
+    inputPath: string,
+    outputPath: string,
+    options?: import('./types').ConvertFontOptions,
+  ): Promise<string>;
+  convertFont?(
+    inputPath: string,
+    outputPath: string,
+    options?: import('./types').ConvertFontOptions,
+  ): string;
+  getFontPipelineVersion?(): number;
+
   // ── 登录页（WebUI W4）用的进程层能力 ────────────────────────────────
   //
   // 这些**不进 `NativePort`**：它们是「读本机 QQ 的离线资料」，与 bot 上线链路
@@ -294,6 +307,22 @@ export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
   if (raw.getBuildInfo) {
     const call = raw.getBuildInfo.bind(raw);
     adapted.getBuildInfo = () => call();
+  }
+
+  if (raw.convertFontAsync) {
+    const call = raw.convertFontAsync.bind(raw);
+    adapted.convertFontAsync = (inputPath, outputPath, options) =>
+      call(inputPath, outputPath, options);
+  }
+
+  if (raw.convertFont) {
+    const call = raw.convertFont.bind(raw);
+    adapted.convertFont = (inputPath, outputPath, options) => call(inputPath, outputPath, options);
+  }
+
+  if (raw.getFontPipelineVersion) {
+    const call = raw.getFontPipelineVersion.bind(raw);
+    adapted.getFontPipelineVersion = () => call();
   }
 
   return adapted as NativePort;

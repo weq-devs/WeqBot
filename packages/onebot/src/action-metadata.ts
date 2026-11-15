@@ -1511,6 +1511,106 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
   get_qzone_share_ark: {
     inputSchema: input({ feed: object('完整动态对象') }, ['feed']),
   },
+
+  // ─────────────────────────── 自定义扩展 ───────────────────────────
+  get_dress_url: {
+    description:
+      '通过 scupdate 按 item_id 换取个性装扮资源地址；气泡 / 挂件会返回各分包的下载链接，字体返回 zip 地址。',
+    inputSchema: input(
+      {
+        type: enumOf('装扮类型：bubble 气泡 / font 字体 / pendant 头像挂件', [
+          'bubble',
+          'font',
+          'pendant',
+        ]),
+        item_id: int('装扮 itemId', { minimum: 1 }),
+      },
+      ['type', 'item_id'],
+    ),
+  },
+  ftf2ttf: {
+    description:
+      '用原生 nt_helper 的字体转换器把 FTF 转成 TTF。输入输出都是本机文件路径，不读内存字节。',
+    inputSchema: input(
+      {
+        file: fileSource('输入 .ftf 字体文件路径'),
+        output: str('输出 .ttf 路径；不传时把 .ftf 替换成 .ttf'),
+        assets_dir: str('彩色字体资源目录'),
+        color: bool('是否生成彩色字形'),
+        color_chars: str('参与彩色化的字符集'),
+        check_ots: bool('是否跑 OTS 校验（需要本机 ots-sanitize）'),
+      },
+      ['file'],
+    ),
+  },
+  send_private_flash_photo: {
+    description: '给好友发闪照；文件可以是本机路径、http(s) URL 或 base64。',
+    inputSchema: input({ user_id: userId(), file: imageSource('闪照图片') }, ['user_id', 'file']),
+  },
+  send_emoji_bounce: {
+    description: '表情弹射：把同一个系统表情弹射多份。group_id 与 user_id 二选一。',
+    inputSchema: input(
+      {
+        group_id: groupId('群号；与 user_id 二选一'),
+        user_id: userId('QQ 号；与 group_id 二选一'),
+        face_id: int('系统表情 id', { minimum: 0 }),
+        count: int('弹射个数', { minimum: 1, default: 10 }),
+        name: str('表情名（不带斜杠或方括号）'),
+      },
+      ['face_id'],
+    ),
+  },
+  send_bubble_msg: {
+    description: '发送泡泡消息（圆形循环的短视频，模板名缺省用 video_penguin_dance）。',
+    inputSchema: input(
+      {
+        group_id: groupId('群号；与 user_id 二选一'),
+        user_id: userId('QQ 号；与 group_id 二选一'),
+        file: fileSource('视频文件路径 / URL / base64'),
+        thumb: fileSource('封面图；不传时按宽高合成纯色图'),
+        duration: int('时长（秒）', { minimum: 1 }),
+        width: int('视频宽度', { minimum: 1 }),
+        height: int('视频高度', { minimum: 1 }),
+        template_name: str('泡泡模板名'),
+      },
+      ['file'],
+    ),
+  },
+  get_group_gift_list: {
+    description: '拉取群礼物面板，返回页签与每个页签下的礼物条目。',
+    inputSchema: input({ group_id: groupId() }, ['group_id']),
+  },
+  send_location_share: {
+    description:
+      '发起位置共享并发送位置共享卡片。坐标使用 GCJ-02、经度在前；停止调用 update_location_share 约 60 秒后房间结束。',
+    inputSchema: input(
+      {
+        group_id: groupId('群号；与 user_id 二选一'),
+        user_id: userId('QQ 号；与 group_id 二选一'),
+        longitude: { type: 'number', description: '经度（GCJ-02）' },
+        latitude: { type: 'number', description: '纬度（GCJ-02）' },
+        interval: int('期望的上报间隔（秒）', { minimum: 1, default: 2 }),
+      },
+      ['longitude', 'latitude'],
+    ),
+  },
+  update_location_share: {
+    description: '更新位置共享里的当前定位；需要按服务端返回的 interval 持续调用。',
+    inputSchema: input(
+      {
+        group_id: groupId('群号；与 user_id 二选一'),
+        user_id: userId('QQ 号；与 group_id 二选一'),
+        longitude: { type: 'number', description: '经度（GCJ-02）' },
+        latitude: { type: 'number', description: '纬度（GCJ-02）' },
+        extra: { type: 'number', description: '抓包里语义未确认的附加数值；缺省 0' },
+      },
+      ['longitude', 'latitude'],
+    ),
+  },
+  get_qq_show_url: {
+    description: '获取 QQ 秀图片地址；不传 user_id 时查自己，没有 QQ 秀时 url 为空。',
+    inputSchema: input({ user_id: userId('目标 QQ 号；不传表示自己') }),
+  },
 };
 
 /** 取某条 action 的元数据；未登记时返回 undefined（由调用方回退到 summary）。 */

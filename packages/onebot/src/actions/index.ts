@@ -23,6 +23,7 @@ import { ACCOUNT_ACTIONS } from './account';
 import { ACCOUNT_WEB_ACTIONS } from './account-web';
 import { COLLECTION_ACTIONS } from './collection';
 import { CONTACT_ACTIONS } from './contact';
+import { CUSTOM_ACTIONS } from './custom';
 import { GROUP_ADMIN_ACTIONS } from './group-admin';
 import { GROUP_WEB_ACTIONS } from './group-web';
 import { GROUP_FILE_ACTIONS } from './group-file';
@@ -63,6 +64,7 @@ const ACTION_GROUPS: ReadonlyArray<readonly [ActionEntry[], string, boolean]> = 
   [GROUP_WEB_ACTIONS, 'group-web', false],
   [ACCOUNT_WEB_ACTIONS, 'account-web', false],
   [COLLECTION_ACTIONS, 'collection', false],
+  [CUSTOM_ACTIONS, 'custom', false],
   [QZONE_ACTIONS, 'qzone', false],
 ];
 
@@ -185,6 +187,7 @@ export { ACCOUNT_ACTIONS } from './account';
 export { ACCOUNT_WEB_ACTIONS } from './account-web';
 export { COLLECTION_ACTIONS } from './collection';
 export { CONTACT_ACTIONS } from './contact';
+export { CUSTOM_ACTIONS } from './custom';
 export { GROUP_ADMIN_ACTIONS } from './group-admin';
 export { GROUP_FILE_ACTIONS } from './group-file';
 export { GROUP_WEB_ACTIONS } from './group-web';

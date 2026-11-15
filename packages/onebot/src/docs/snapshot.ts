@@ -30,6 +30,7 @@ import {
   ACCOUNT_WEB_ACTIONS,
   COLLECTION_ACTIONS,
   CONTACT_ACTIONS,
+  CUSTOM_ACTIONS,
   EXTENDED_ACTIONS,
   FLASH_TRANSFER_ACTIONS,
   GROUP_ADMIN_ACTIONS,
@@ -122,6 +123,7 @@ const GROUPS: ReadonlyArray<{ key: string; label: string; entries: readonly Acti
   { key: 'group-web', label: '群 Web', entries: GROUP_WEB_ACTIONS },
   { key: 'account-web', label: '账号 Web', entries: ACCOUNT_WEB_ACTIONS },
   { key: 'collection', label: '收藏', entries: COLLECTION_ACTIONS },
+  { key: 'custom', label: '自定义扩展', entries: CUSTOM_ACTIONS },
   { key: 'qzone', label: 'QQ 空间', entries: QZONE_ACTIONS },
 ];
 

@@ -207,6 +207,20 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
     },
   },
 
+  // ─── 表情弹射 ───────────────────────────────────────────────────────────
+  emojiBounce: {
+    fromSegment: (data) => {
+      const faceId = intOr(data.face_id ?? data.id, -1);
+      if (faceId < 0) return null;
+      return {
+        kind: 'emojiBounce',
+        faceId,
+        ...(data.count !== undefined ? { count: intOr(data.count, 1) } : {}),
+        ...(data.name !== undefined ? { name: str(data.name) } : {}),
+      };
+    },
+  },
+
   // ─── 引用回复 ───────────────────────────────────────────────────────────
   reply: {
     toSegment: (element) => ({
@@ -255,6 +269,16 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
     },
   },
 
+  // ─── 闪照（仅私聊） ──────────────────────────────────────────────────────
+  flashPhoto: {
+    fromSegment: (data) => {
+      const source = pickMediaSource(data);
+      if (!source) return null;
+      const inline = decodeInlineMedia(source);
+      return { kind: 'flashPhoto', source: inline ?? source };
+    },
+  },
+
   // ─── 语音 ───────────────────────────────────────────────────────────────
   ptt: {
     toSegment: async (element, ctx) => {
@@ -289,6 +313,24 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
         kind: 'video',
         ...(inline ? { video: { data: inline } } : { source }),
         ...(data.thumb ? { thumbUrl: str(data.thumb) } : {}),
+      };
+    },
+  },
+
+  // ─── 泡泡消息（短视频） ──────────────────────────────────────────────────
+  bubbleVideo: {
+    fromSegment: (data) => {
+      const source = pickMediaSource(data);
+      if (!source) return null;
+      const inline = decodeInlineMedia(source);
+      return {
+        kind: 'bubbleVideo',
+        source: inline ?? source,
+        ...(data.thumb ? { thumb: str(data.thumb) } : {}),
+        ...(data.duration !== undefined ? { duration: intOr(data.duration) } : {}),
+        ...(data.width !== undefined ? { width: intOr(data.width) } : {}),
+        ...(data.height !== undefined ? { height: intOr(data.height) } : {}),
+        ...(data.template_name ? { templateName: str(data.template_name) } : {}),
       };
     },
   },
@@ -390,6 +432,9 @@ const SEGMENT_TYPE_TO_KIND: Record<string, string> = {
   forward: 'forward',
   poke: 'poke',
   mface: 'mface',
+  flash_photo: 'flashPhoto',
+  emoji_bounce: 'emojiBounce',
+  bubble_video: 'bubbleVideo',
 };
 
 /** 按入站元素 kind 查 codec（`toSegment` 方向）。 */

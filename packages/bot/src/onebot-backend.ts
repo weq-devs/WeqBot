@@ -25,7 +25,7 @@ import type {
   Segment,
   SendResult,
 } from '@weqbot/onebot';
-import { elementsToSegments, segmentsToElements } from '@weqbot/onebot';
+import { elementsToSegments, NotImplementedError, segmentsToElements } from '@weqbot/onebot';
 import type { ProtocolClient } from '@weqbot/protocol';
 import {
   AddCustomFace,
@@ -93,6 +93,7 @@ import {
   GetGroupFileCount,
   GetGroupShareLink,
   GetMiniAppArk,
+  GroupGiftPanel,
   GetGroupFileSpace,
   GetGroupMessagePolicies,
   GetGroupPttUrl,
@@ -100,12 +101,16 @@ import {
   GetGroupFileUrl,
   GetPrivateFileUrl,
   GetProfileLike,
+  GetQqShowUrl,
   GetFilesetDetail,
   GetFlashDownload,
   GetFlashDownloadUrl,
   GetUnidirectionalFriendList,
   GroupTodo,
+  buildShareLocationElements,
+  getBubbleResources,
   getDressRank,
+  getFontResource,
   getFriendDress,
   getFriendMutualMark,
   getCollectionList,
@@ -113,6 +118,7 @@ import {
   getGroupEssencePage,
   getGroupNotice,
   getHonorList,
+  getPendantResources,
   getSelfDress,
   getSpecialCare,
   fetchDaySignedList,
@@ -177,6 +183,8 @@ import {
   SetSelfProfile,
   setSelfAvatar,
   SetGroupSpecialTitle,
+  StartLocationShare,
+  ReportLocation,
   TranslateEnToZh,
   getQzoneFeedDetail,
   getQzoneFeeds,
@@ -1761,6 +1769,8 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
     },
 
     profile: {
+      getQqShowUrl: (userId?: number) =>
+        GetQqShowUrl.invoke(nt, sessionId, { uin: userId ?? selfId }),
       async setProfile(patch): Promise<void> {
         await SetSelfProfile.invoke(nt, sessionId, {
           uin: selfUin,
@@ -2054,7 +2064,83 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       },
     },
 
+    // ─────────────────────── 自定义扩展：装扮 / 字体 / 位置共享 ───────────────────────
+    dress: {
+      getResources: async ({ kind, itemId }) => {
+        if (kind === 'bubble') return getBubbleResources(nt, sessionId, itemId);
+        if (kind === 'font') return getFontResource(nt, sessionId, itemId);
+        return getPendantResources(nt, sessionId, itemId);
+      },
+    },
+
+    font: {
+      convert: async (params) => {
+        const outputPath =
+          params.output ??
+          (params.input.toLowerCase().endsWith('.ftf')
+            ? `${params.input.slice(0, -4)}.ttf`
+            : `${params.input}.ttf`);
+        const options = {
+          ...(params.assetsDir !== undefined ? { assetsDir: params.assetsDir } : {}),
+          ...(params.color !== undefined ? { color: params.color } : {}),
+          ...(params.colorChars !== undefined ? { colorChars: params.colorChars } : {}),
+          ...(params.checkOts !== undefined ? { checkOts: params.checkOts } : {}),
+        };
+        if (nt.convertFontAsync) {
+          await nt.convertFontAsync(params.input, outputPath, options);
+        } else if (nt.convertFont) {
+          nt.convertFont(params.input, outputPath, options);
+        } else {
+          throw new NotImplementedError('ftf2ttf');
+        }
+        return {
+          inputPath: params.input,
+          outputPath,
+          pipelineVersion: nt.getFontPipelineVersion?.() ?? 0,
+        };
+      },
+    },
+
+    location: {
+      async start(params) {
+        const isGroup = params.groupId !== undefined;
+        const result = await StartLocationShare.invoke(nt, sessionId, {
+          scene: isGroup ? 'group' : 'c2c',
+          peer: (isGroup ? params.groupId : params.userId)!,
+          ...(isGroup ? {} : { selfUin: selfId }),
+          longitude: params.longitude,
+          latitude: params.latitude,
+          ...(params.interval !== undefined ? { interval: params.interval } : {}),
+        });
+        if (!result.ok) {
+          throw new Error(`发起位置共享失败：code=${result.code} ${result.message}`);
+        }
+        const elements = buildShareLocationElements(isGroup ? 'group' : 'c2c');
+        const send = isGroup
+          ? await sendGroupElements(params.groupId!, elements)
+          : await sendPrivateElements(params.userId!, elements);
+        return { code: result.code, message: result.message, send };
+      },
+      async report(params) {
+        const isGroup = params.groupId !== undefined;
+        const result = await ReportLocation.invoke(nt, sessionId, {
+          scene: isGroup ? 'group' : 'c2c',
+          peer: (isGroup ? params.groupId : params.userId)!,
+          ...(isGroup ? {} : { selfUin: selfId }),
+          longitude: params.longitude,
+          latitude: params.latitude,
+          ...(params.extra !== undefined ? { extra: params.extra } : {}),
+        });
+        if (!result.ok) {
+          throw new Error(`上报位置共享失败：code=${result.code} ${result.message}`);
+        }
+        return { code: result.code, message: result.message, interval: result.interval };
+      },
+    },
+
     misc: {
+      getGroupGiftList: (groupId: number) =>
+        GroupGiftPanel.invoke(nt, sessionId, { groupUin: groupId }),
       getMiniAppArk: (params) => GetMiniAppArk.invoke(nt, sessionId, params) as Promise<unknown>,
       async requestDecryptKey(dbPath: string): Promise<string> {
         const bytes = await readFile(dbPath);

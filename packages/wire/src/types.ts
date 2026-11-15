@@ -273,6 +273,18 @@ export type SessionStatusEvent =
   /** TS 侧消费太慢，native 丢了帧（有界队列）。 */
   | { kind: 'sink_overflow'; sessionId: SessionId; ts: number; dropped: number };
 
+/** FTF → TTF 字体转换参数（对应 native 的 `ConvertFontOptions`）。 */
+export interface ConvertFontOptions {
+  /** 彩色字体资源目录。 */
+  assetsDir?: string;
+  /** 是否生成彩色字形。 */
+  color?: boolean;
+  /** 参与彩色化的字符集。 */
+  colorChars?: string;
+  /** 是否跑 OTS 校验。 */
+  checkOts?: boolean;
+}
+
 /**
  * 原生端口。
  *
@@ -357,4 +369,16 @@ export interface NativePort {
   isQqLoggedIn?(dbPath: string): Promise<boolean>;
   warmupSigner?(wrapperPath: string): Promise<{ signCoreRva: number; vmRva: number }>;
   getBuildInfo?(): NativeBuildInfo;
+
+  // ── 字体转换（进程层能力，与 SSO 无关） ──────────────────────────────
+  /** 异步版本：把 `inputPath` 的 FTF 转成 `outputPath` 的 TTF。 */
+  convertFontAsync?(
+    inputPath: string,
+    outputPath: string,
+    options?: ConvertFontOptions,
+  ): Promise<string>;
+  /** 同步版本；大字体可能阻塞事件循环，优先用 `convertFontAsync`。 */
+  convertFont?(inputPath: string, outputPath: string, options?: ConvertFontOptions): string;
+  /** 字体转换管线的版本号。 */
+  getFontPipelineVersion?(): number;
 }

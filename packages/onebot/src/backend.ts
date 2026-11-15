@@ -657,6 +657,8 @@ export interface ProfileLikeInfo {
 /** 账号资料 / 头像 / 在线状态（0x112A、highway 90、0x7ED、trpc SetStatus）。 */
 export interface ProfileBackend {
   setProfile(patch: { nickname?: string; personalNote?: string; sex?: 0 | 1 | 2 }): Promise<void>;
+  /** QQ 秀图片地址（0xFE1_3）；不给 `userId` 时查自己。 */
+  getQqShowUrl?(userId?: number): Promise<{ uin: number; hasShow: boolean; url: string }>;
   /** 本地路径（含 `file://`）或已读出的字节。 */
   setAvatar(source: string | Uint8Array): Promise<void>;
   getProfileLike(params: {
@@ -792,6 +794,8 @@ export interface AiVoiceBackend {
 
 /** 杂项：数据库解密密钥（0xCDE_2）/ 小程序卡片。 */
 export interface MiscBackend {
+  /** 群礼物面板（`trpc.qqva.gift_midground_panel...SsoGetSceneItem`）。 */
+  getGroupGiftList?(groupId: number): Promise<unknown>;
   /** `dbPath` 指向账号数据库文件；盐取自 0x2f..0xaf。 */
   requestDecryptKey(dbPath: string): Promise<string>;
   /** `LightAppSvc.mini_app_share.AdaptShareInfo`：只取卡不发送。 */
@@ -802,6 +806,52 @@ export interface MiscBackend {
     picUrl: string;
     jumpUrl: string;
   }): Promise<unknown>;
+}
+
+/** 个性装扮资源（scupdate：气泡 / 字体 / 头像挂件）。 */
+export interface DressBackend {
+  getResources(params: {
+    kind: 'bubble' | 'font' | 'pendant';
+    itemId: number | string;
+  }): Promise<unknown>;
+}
+
+/** FTF → TTF 字体转换（native `convertFontAsync`）。 */
+export interface FontBackend {
+  convert(params: {
+    /** 输入 `.ftf` 文件路径。 */
+    input: string;
+    /** 输出 `.ttf` 路径；缺省把 `.ftf` 换成 `.ttf`。 */
+    output?: string;
+    /** 彩色字体资源目录。 */
+    assetsDir?: string;
+    /** 是否生成彩色字形。 */
+    color?: boolean;
+    /** 参与彩色化的字符集。 */
+    colorChars?: string;
+    /** 是否跑 OTS 校验（需要本机 ots-sanitize）。 */
+    checkOts?: boolean;
+  }): Promise<{ inputPath: string; outputPath: string; pipelineVersion: number }>;
+}
+
+/** 位置共享（`QQLBSShareSvc`）。 */
+export interface LocationShareBackend {
+  /** 发起共享并发送「发起了位置共享」卡片。 */
+  start(params: {
+    groupId?: number;
+    userId?: number;
+    longitude: number;
+    latitude: number;
+    interval?: number;
+  }): Promise<{ code: number; message: string; send: SendResult }>;
+  /** 上报一次坐标；不报约 60 秒后房间自动结束。 */
+  report(params: {
+    groupId?: number;
+    userId?: number;
+    longitude: number;
+    latitude: number;
+    extra?: number;
+  }): Promise<{ code: number; message: string; interval: number }>;
 }
 
 /** 下载 rkey（0x9067_202）。 */
@@ -1030,6 +1080,12 @@ export interface OneBotBackend {
   customFace?: CustomFaceBackend;
   /** 群待办。 */
   groupTodo?: GroupTodoBackend;
+  /** 个性装扮资源。 */
+  dress?: DressBackend;
+  /** FTF → TTF 字体转换。 */
+  font?: FontBackend;
+  /** 位置共享。 */
+  location?: LocationShareBackend;
   /** 历史消息。 */
   history?: MessageHistoryBackend;
   /** 合并转发。 */
@@ -1166,6 +1222,9 @@ export function describeBackend(backend: OneBotBackend): string[] {
     'groupFile',
     'customFace',
     'groupTodo',
+    'dress',
+    'font',
+    'location',
     'history',
     'forward',
     'readReport',
