@@ -7,7 +7,7 @@
 
 | 形态             | 原生组件                                                          | 入口                                         |
 | ---------------- | ----------------------------------------------------------------- | -------------------------------------------- |
-| 独立进程         | 自带 **slim** 产物（`native/<platform>-<arch>/weqbot.node`）      | `@weqbot/node`                               |
+| 独立进程         | `nt_helper` 完整产物（`native/<platform>/<arch>/nt_helper.node`） | `@weqbot/node`                               |
 | 嵌入 WeQ desktop | 复用 WeQ 的 full 产物（同一文件，第二进程加载），**不带 `.node`** | `@weqbot/node --sidecar` + `@weqbot/control` |
 | 测试             | 桩实现                                                            | 任意包                                       |
 

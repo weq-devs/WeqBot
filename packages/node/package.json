@@ -3,7 +3,7 @@
   "version": "0.0.0",
   "private": true,
   "type": "module",
-  "description": "独立宿主：唯一允许加载 .node 的包（slim native 加载器 + CLI）。WeQ 嵌入时不得依赖本包",
+  "description": "独立宿主：唯一允许加载 .node 的包（native 加载器 + CLI）。WeQ 嵌入时不得依赖本包",
   "exports": {
     ".": "./src/index.ts"
   },

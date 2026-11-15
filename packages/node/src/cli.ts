@@ -2,7 +2,7 @@
 /**
  * 独立进程入口（骨架）。
  *
- * 现在只做两件真事：加载 slim native、打印能力报告。
+ * 现在只做两件真事：加载 native、打印能力报告。
  * 完整的启动流程（vault → quickLogin → openSession → OneBot）在 P3/P4 落地，
  * 见 `TODO.md`「阶段计划」。
  */
@@ -38,7 +38,7 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
 
 选项:
   --account <uin>      账号 uin；不给则只起控制台
-  --native-dir <dir>   原生组件目录（默认 $WEQBOT_NATIVE_DIR 或 ./native/<platform>-<arch>）
+  --native-dir <dir>   原生组件目录（默认 $WEQBOT_NATIVE_DIR 或 ./native/<platform>/<arch>）
   --qq-db <path>       账号 nt_msg.db 绝对路径（mode2 预检 isQqLoggedIn 用；
                        也可用 $WEQBOT_QQ_DB）
   --config <path>      JSON 配置：native / qq / session / secToken / onebot / log

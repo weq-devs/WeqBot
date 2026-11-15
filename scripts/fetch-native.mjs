@@ -1,0 +1,967 @@
+/**
+ * 拉取 / 校验 nt_helper 原生产物（5 个平台的 `nt_helper.node`）。
+ *
+ * 搬自 `../WeQ/scripts/fetch-native.mjs`，**只保留 native addon**：
+ * 权限助手与装扮资源 `.dat` 不搬（WeqBot 不做长期授权，也不渲染装扮）。
+ *
+ * 二进制**不入库**：仓库里只留加载器与布局约定，二进制由 native 私仓
+ * `weq-devs/nt_helper` 构建后发布到公开仓 `weq-devs/nt_helper_release`，这里按需取回。
+ *
+ * **默认不是 latest，而是 `native/pinned.json` 里锚定的那个 tag**：WeqBot 的代码是照着
+ * 某一份 native 构建写的（类型、能力由它决定），跟着 latest 漂会在「代码已经用到新字段、
+ * 而本地那份还是旧的」这类情况下静默降级。锚文件是这个仓库里唯一一处「我们认哪一份
+ * native」的记录，升级它是一次显式提交（见 --write-pin）。
+ *
+ * **时效只做提示，不做门禁**（用户口径 2026-11-16：未来统一取消时效）。当前 release
+ * 构建自带 `BUILD_TIMESTAMP`，过期后 `getInitStatus()` 返回 -1；脚本会打印剩余时间，
+ * `--require-fresh` 仅供发版前临时挡一下。等 nt_helper 去掉时间戳，这段自然失效。
+ *
+ * 用法：
+ *   pnpm native:fetch                      # 本机平台 native（锚定的 tag）
+ *   pnpm native:fetch --all                # 五个平台 native
+ *   pnpm native:fetch --platform linux-arm64
+ *   pnpm native:fetch --latest             # 忽略锚点，取上游最新（试用新构建用）
+ *   pnpm native:fetch --version nt-helper-20261114-bf7882d
+ *   pnpm native:fetch --version <tag> --verify --write-pin # 对已验证的同一 tag 写回版本锚
+ *   pnpm native:fetch --check              # 只比对，不改文件（缺失 / 落后 / 过期 → 退出码 1）
+ *   pnpm native:fetch --require-fresh      # CI 用：剩余有效期不足 1/5 直接失败
+ *   pnpm native:fetch --verify             # 安装前隔离加载候选并检查 getInitStatus()
+ *   pnpm native:fetch --from-dir ./dist    # 从本地目录装（需含 manifest.json + 各资产；离线 / 镜像）
+ *   pnpm native:fetch --from-file ../nt_helper/index.linux-x64-gnu.node
+ *                                          # 装本地 cargo 构建（release 落后时的唯一可用路径）
+ *   pnpm native:fetch --dry-run            # 只打印将要写入的文件
+ *
+ * 环境变量：
+ *   NT_HELPER_RELEASE_REPO      发布仓，默认 weq-devs/nt_helper_release
+ *   NT_HELPER_RELEASE_BASE_URL  下载前缀（镜像 / 代理），默认 GitHub Releases
+ *   NT_HELPER_VERSION           钉死 tag（等价于 --version；CI 里临时试构建用）
+ *   NT_HELPER_RETRIES           单次请求最多尝试几次，默认 8（含第一次）
+ *   NT_HELPER_HTTP_TIMEOUT_MS   单次请求无响应多久算超时，默认 60000
+ *   HTTPS_PROXY / HTTP_PROXY    出网代理（含 NO_PROXY）。Node 内置 fetch 不认这几个，
+ *                               这里自己读：Clash 之类只开 HTTP 代理、没开 TUN 时必需。
+ */
+
+import { createHash } from 'node:crypto';
+import { execFileSync } from 'node:child_process';
+import { createReadStream, createWriteStream, existsSync } from 'node:fs';
+import { copyFile, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import http from 'node:http';
+import https from 'node:https';
+import { tmpdir } from 'node:os';
+import { dirname, join, resolve } from 'node:path';
+import { Transform } from 'node:stream';
+import { pipeline } from 'node:stream/promises';
+import { connect as tlsConnect } from 'node:tls';
+import { fileURLToPath } from 'node:url';
+import { installNativeFiles } from './native-install.mjs';
+import { isStale, manifestValidity, validityText } from './native-validity.mjs';
+import { RETRYABLE_HTTP_STATUS, RetryableHttpError, withRetry } from './retry.mjs';
+
+// ─────────────────────────── 常量 ───────────────────────────
+
+/** 默认发布仓：私仓构建后把产物推到这里，WeQ / WeqBot 都从这里取。 */
+const DEFAULT_REPO = 'weq-devs/nt_helper_release';
+/** 每个平台的目标目录与资产名，与 nt_helper_release 的 Release 工作流一致。 */
+const PLATFORMS = {
+  'win32-x64': { dir: 'native/win32/x64', asset: 'nt_helper-win32-x64.node' },
+  'linux-x64': { dir: 'native/linux/x64', asset: 'nt_helper-linux-x64.node' },
+  'linux-arm64': { dir: 'native/linux/arm64', asset: 'nt_helper-linux-arm64.node' },
+  'darwin-x64': { dir: 'native/darwin/x64', asset: 'nt_helper-darwin-x64.node' },
+  'darwin-arm64': { dir: 'native/darwin/arm64', asset: 'nt_helper-darwin-arm64.node' },
+};
+/** 装了哪个 tag / 哪些文件，供 --check 比对；.gitignore 掉了。 */
+const MARKER = join('native', '.installed.json');
+/**
+ * **入库的版本锚**：这个仓库认哪一份 native 构建。
+ *
+ * `tag` 决定下载版本，`commit` 为人工核对用（装扮密钥在 WeQ 才需要），`note` 为说明。
+ * 内容校验靠该 tag 的 manifest 里的 sha256，不在这里重复维护二进制哈希。
+ */
+const PIN = join('native', 'pinned.json');
+/** `.installed.json` / `pinned.json` 都缺 `note` 时的默认说明。 */
+const DEFAULT_PIN_NOTE =
+  'WeqBot 的代码锚定在这份 native 构建上。升级：对同一明确 tag 使用 --version 验证并 --write-pin。';
+
+const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..');
+
+// ─────────────────────────── 参数 ───────────────────────────
+
+const argv = process.argv.slice(2);
+const has = (flag) => argv.includes(flag);
+const opt = (flag) => {
+  const i = argv.indexOf(flag);
+  return i >= 0 ? argv[i + 1] : undefined;
+};
+const quiet = has('--quiet');
+
+if (has('--help') || has('-h')) {
+  const self = await readFile(fileURLToPath(import.meta.url), 'utf8');
+  const doc = self.slice(self.indexOf('/**') + 3, self.indexOf('*/'));
+  console.log(
+    doc
+      .split('\n')
+      .map((line) => line.replace(/^ \* ?/, ''))
+      .join('\n')
+      .trim(),
+  );
+  process.exit(0);
+}
+
+const checkOnly = has('--check');
+const dryRun = has('--dry-run');
+const doVerify = has('--verify');
+const requireFresh = has('--require-fresh');
+const wantLatest = has('--latest');
+const writePin = has('--write-pin');
+const explicitVersion = opt('--version') ?? process.env.NT_HELPER_VERSION;
+const fromDirArg = opt('--from-dir');
+const fromDir = fromDirArg ? resolve(fromDirArg) : undefined;
+const fromFileArg = opt('--from-file');
+const fromFile = fromFileArg ? resolve(fromFileArg) : undefined;
+const root = opt('--root') ? resolve(opt('--root')) : repoRoot;
+
+const releaseRepo = process.env.NT_HELPER_RELEASE_REPO ?? DEFAULT_REPO;
+const baseUrl = (
+  process.env.NT_HELPER_RELEASE_BASE_URL ?? `https://github.com/${releaseRepo}/releases`
+).replace(/\/+$/, '');
+
+const hostTag = `${process.platform}-${process.arch}`;
+
+/** GitHub Releases 的下载链路会间歇性 504；重试次数与超时都留了环境变量口子。 */
+const retryAttempts = positiveInt(process.env.NT_HELPER_RETRIES, 8);
+const requestTimeoutMs = positiveInt(process.env.NT_HELPER_HTTP_TIMEOUT_MS, 60_000);
+
+function positiveInt(raw, fallback) {
+  const value = Number(raw);
+  return Number.isInteger(value) && value > 0 ? value : fallback;
+}
+
+/**
+ * 读版本锚（`native/pinned.json`）。
+ *
+ * 缺文件 / 坏 JSON 都不致命：返回 `undefined`，调用方回落到 latest 并**大声提醒** ——
+ * 静默按 latest 走正是这个锚要解决的问题。
+ */
+async function readPin() {
+  const file = join(root, PIN);
+  if (!existsSync(file)) return undefined;
+  try {
+    const pin = JSON.parse(await readFile(file, 'utf8'));
+    return typeof pin?.tag === 'string' && pin.tag.length > 0 ? pin : undefined;
+  } catch (err) {
+    log(`⚠ 读不了版本锚 ${PIN}（${err instanceof Error ? err.message : err}），这次按 latest 走`);
+    return undefined;
+  }
+}
+
+/** 要装哪些平台：--all 全量；--platform 指定（逗号分隔）；否则宿主平台。 */
+function selectedPlatforms() {
+  if (has('--all')) return Object.keys(PLATFORMS);
+  const raw = opt('--platform');
+  const wanted = (raw ? raw.split(',') : [hostTag]).map((name) => name.trim()).filter(Boolean);
+  for (const name of wanted) {
+    if (!PLATFORMS[name]) {
+      throw new Error(
+        `不认识的平台 ${name}；可用：${Object.keys(PLATFORMS).join(' / ')}（宿主是 ${hostTag}）`,
+      );
+    }
+  }
+  return wanted;
+}
+
+// ─────────────────────────── 小工具 ───────────────────────────
+
+const log = (...args) => {
+  if (!quiet) console.log(...args);
+};
+
+const mb = (bytes) => `${(Number(bytes) / 1024 / 1024).toFixed(1)} MB`;
+
+// ─────────────────────────── 进度条 ───────────────────────────
+
+const IS_TTY = Boolean(process.stdout.isTTY);
+const BAR_WIDTH = 30;
+
+function humanBytes(bytes) {
+  const n = Number(bytes) || 0;
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${(n / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function fmtTime(sec) {
+  if (!Number.isFinite(sec) || sec < 0 || sec > 86400) return '--';
+  const rounded = Math.round(sec);
+  const pad = (value) => String(value).padStart(2, '0');
+  return `${pad(Math.floor(rounded / 3600))}:${pad(Math.floor(rounded / 60) % 60)}:${pad(rounded % 60)}`;
+}
+
+/**
+ * 覆盖式单行进度条。TTY 里用 `\r` 重绘；非 TTY（CI / 重定向）退化成每 5 秒
+ * 打一行纯文本，避免刷屏。宽度不够（总大小未知）时用 spinner + 已下载字节。
+ */
+class Progress {
+  constructor(label) {
+    this.label = label;
+    this.startedAt = Date.now();
+    this.lastAt = 0;
+    this.lastPlainAt = 0;
+    this.lastLen = 0;
+    this.lastText = '';
+    this.spinner = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+  }
+
+  render(done, total, force = false) {
+    if (quiet) return;
+    const now = Date.now();
+    const elapsed = Math.max(0.001, (now - this.startedAt) / 1000);
+    const perSec = done / elapsed;
+    const hasTotal = Number.isFinite(total) && total > 0;
+    const finished = hasTotal && done >= total;
+
+    let bar;
+    if (hasTotal) {
+      const ratio = Math.min(1, done / total);
+      const filled = Math.round(ratio * BAR_WIDTH);
+      bar =
+        `[${'█'.repeat(filled)}${'░'.repeat(BAR_WIDTH - filled)}] ` +
+        `${(ratio * 100).toFixed(1).padStart(5)}%`;
+    } else {
+      bar = `${this.spinner[Math.floor(now / 100) % this.spinner.length]} `;
+    }
+
+    const size = hasTotal ? `${humanBytes(done)}/${humanBytes(total)}` : humanBytes(done);
+    const eta = hasTotal && perSec > 0 ? (total - done) / perSec : Number.NaN;
+    const tail = hasTotal ? `  eta ${fmtTime(eta)}` : '';
+    const rate = `${(perSec / 1024 / 1024).toFixed(1)} MB/s`;
+    const text = `  ${bar}  ${this.label.padEnd(20)} ${size.padStart(18)}  ${rate.padStart(10)}${tail}`;
+
+    if (IS_TTY) {
+      if (!force && !finished && now - this.lastAt < 80) return;
+      this.lastAt = now;
+      process.stdout.write(`\r${text.padEnd(this.lastLen)}`);
+      this.lastLen = Math.max(this.lastLen, text.length);
+    } else {
+      if (!force && !finished && now - this.lastPlainAt < 5000) return;
+      if (text === this.lastText) return; // 别把最后一行打两遍
+      this.lastPlainAt = now;
+      this.lastText = text;
+      console.log(text.trim());
+    }
+  }
+
+  /** 收尾：TTY 里换行收干净，非 TTY 里补一行最终状态。 */
+  end(done, total) {
+    if (quiet) return;
+    this.render(done, total, true);
+    if (IS_TTY) process.stdout.write('\n');
+    this.lastLen = 0;
+  }
+}
+
+async function sha256File(file) {
+  const hash = createHash('sha256');
+  await pipeline(createReadStream(file), hash);
+  return hash.digest('hex');
+}
+
+/**
+ * 取这次请求要用的代理。
+ *
+ * Node 内置的 fetch（undici）**不认** HTTP_PROXY / HTTPS_PROXY，CLI 也没有
+ * `--use-env-proxy`（Node 24 才加），所以本机只挂 HTTP 代理（如 Clash 7897）又没开 TUN
+ * 时，直连 github.com:443 会超时（UND_ERR_CONNECT_TIMEOUT）。这里按惯例自己读一遍。
+ */
+function proxyFor(hostname) {
+  const raw =
+    process.env.HTTPS_PROXY ??
+    process.env.https_proxy ??
+    process.env.HTTP_PROXY ??
+    process.env.http_proxy;
+  if (!raw) return undefined;
+  const noProxy = process.env.NO_PROXY ?? process.env.no_proxy;
+  if (noProxy) {
+    const zones = noProxy
+      .split(',')
+      .map((zone) => zone.trim().toLowerCase())
+      .filter(Boolean);
+    const host = hostname.toLowerCase();
+    const skipped = zones.some(
+      (zone) => zone === '*' || host === zone || host.endsWith(`.${zone.replace(/^\./, '')}`),
+    );
+    if (skipped) return undefined;
+  }
+  return new URL(raw);
+}
+
+/** 在代理上对 `host:port` 建一条 CONNECT 隧道，拿到裸 socket。 */
+function openTunnel(proxy, host, port) {
+  return new Promise((resolve, reject) => {
+    const headers = {};
+    if (proxy.username || proxy.password) {
+      const auth = `${decodeURIComponent(proxy.username)}:${decodeURIComponent(proxy.password)}`;
+      headers['proxy-authorization'] = `Basic ${Buffer.from(auth).toString('base64')}`;
+    }
+    const req = http.request({
+      host: proxy.hostname,
+      port: proxy.port ? Number(proxy.port) : 80,
+      method: 'CONNECT',
+      path: `${host}:${port}`,
+      headers,
+    });
+    req.once('connect', (res, socket) => {
+      if (res.statusCode !== 200) {
+        socket.destroy();
+        reject(
+          new Error(`代理 CONNECT 失败（${res.statusCode}）：${proxy.host} → ${host}:${port}`),
+        );
+        return;
+      }
+      resolve(socket);
+    });
+    req.once('error', reject);
+    req.end();
+  });
+}
+
+/** 让 http(s).Agent 改走隧道：socket 先连代理，https 再补一层 TLS。 */
+function tunnelAgent(proxy, secure) {
+  const agent = new (secure ? https.Agent : http.Agent)({ keepAlive: false });
+  agent.createConnection = (options, callback) => {
+    openTunnel(proxy, options.host, options.port ?? (secure ? 443 : 80))
+      .then((socket) => {
+        if (!secure) {
+          callback(null, socket);
+          return;
+        }
+        const tls = tlsConnect({ socket, servername: options.servername ?? options.host });
+        tls.once('secureConnect', () => callback(null, tls));
+        tls.once('error', (err) => callback(err));
+      })
+      .catch((err) => callback(err));
+  };
+  return agent;
+}
+
+/** GET 一次并手动跟随重定向（内置 fetch 走不了代理，索性整条链路自己来）。 */
+async function httpGet(url, redirects = 8) {
+  const target = new URL(url);
+  const proxy = proxyFor(target.hostname);
+  const secure = target.protocol === 'https:';
+  const res = await new Promise((resolve, reject) => {
+    const req = (secure ? https.request : http.request)(
+      target,
+      {
+        method: 'GET',
+        headers: { 'user-agent': 'weqbot-native-fetch', accept: '*/*' },
+        agent: proxy ? tunnelAgent(proxy, secure) : undefined,
+      },
+      resolve,
+    );
+    req.once('error', reject);
+    // 只卡「无响应」：下载大文件时数据一直在流，socket 超时会不断重置。
+    req.setTimeout(requestTimeoutMs, () => {
+      req.destroy(
+        Object.assign(new Error(`请求超时（${requestTimeoutMs / 1000}s 无响应）：${url}`), {
+          code: 'ETIMEDOUT',
+        }),
+      );
+    });
+    req.end();
+  });
+  const location = res.headers.location;
+  if ([301, 302, 303, 307, 308].includes(res.statusCode) && location && redirects > 0) {
+    res.resume();
+    return httpGet(new URL(location, target).toString(), redirects - 1);
+  }
+  return res;
+}
+
+/** 给每一次重试打一行日志（进度条在 TTY 下还没换行，先收干净）。 */
+function logRetry(label, error, attempt, attempts, delayMs) {
+  if (IS_TTY) process.stdout.write('\n');
+  const reason = error instanceof Error ? error.message : String(error);
+  console.error(
+    `  ↻ ${label} 第 ${attempt}/${attempts} 次失败：${reason}；${(delayMs / 1000).toFixed(1)}s 后重试`,
+  );
+}
+
+/**
+ * `httpGet` + 对 5xx / 网络错误重试。
+ *
+ * 上游是 GitHub Releases：`/releases/download/...` 会 302 到 CDN，整条链路都可能
+ * 突然回 504。一次失败就放弃会让 CI / 发版随机挂掉，所以这里把「发请求 + 检查状态码」
+ * 当成一次尝试整体重试。
+ */
+async function httpGetWithRetry(url, { label = url, redirects = 8 } = {}) {
+  return withRetry(
+    async () => {
+      const res = await httpGet(url, redirects);
+      if (RETRYABLE_HTTP_STATUS.has(res.statusCode)) {
+        // 丢掉响应体前先兜住后续 socket 错误，避免变成 unhandled 'error'。
+        res.once('error', () => {});
+        res.resume();
+        throw new RetryableHttpError(res.statusCode, res.statusMessage, url);
+      }
+      return res;
+    },
+    {
+      attempts: retryAttempts,
+      onRetry: (error, attempt, attempts, delayMs) =>
+        logRetry(label, error, attempt, attempts, delayMs),
+    },
+  );
+}
+
+/** 把响应体整段读成字符串（manifest / latest.json 都很小）。 */
+async function readBody(res) {
+  let text = '';
+  res.setEncoding('utf8');
+  for await (const chunk of res) text += chunk;
+  return text;
+}
+
+async function download(url, dest, { label, size } = {}) {
+  await withRetry(() => downloadOnce(url, dest, { label, size }), {
+    attempts: retryAttempts,
+    onRetry: (error, attempt, attempts, delayMs) =>
+      logRetry(label ?? url, error, attempt, attempts, delayMs),
+  });
+}
+
+async function downloadOnce(url, dest, { label, size } = {}) {
+  // 必须走 httpGet 而不是内置 fetch：内置 fetch 不认 HTTP(S)_PROXY，
+  // 在只挂本地代理（如 Clash 7897）的环境里会直连超时，只报一句 `fetch failed`。
+  const res = await httpGet(url);
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    res.once('error', () => {});
+    res.resume();
+    if (RETRYABLE_HTTP_STATUS.has(res.statusCode)) {
+      throw new RetryableHttpError(res.statusCode, res.statusMessage, url);
+    }
+    throw new Error(`下载失败 ${res.statusCode} ${res.statusMessage ?? ''}：${url}`);
+  }
+  const contentLength = Number(res.headers['content-length']) || 0;
+  const total = size || contentLength;
+  const progress = quiet ? undefined : new Progress(label ?? url);
+  let done = 0;
+  const counter = new Transform({
+    transform(chunk, _enc, cb) {
+      done += chunk.length;
+      if (size && done > size) return cb(new Error('下载内容超过清单声明的体积'));
+      progress?.render(done, total);
+      cb(null, chunk);
+    },
+  });
+  try {
+    await pipeline(res, counter, createWriteStream(dest));
+  } catch (err) {
+    if (progress && IS_TTY) process.stdout.write('\n');
+    throw err;
+  }
+  progress?.end(done, total);
+}
+
+// ─────────────────────────── manifest ───────────────────────────
+
+/**
+ * 读远端（或 `--from-dir` 的本地）manifest。
+ *
+ * 结构由 nt_helper 的 publish-release job 生成：
+ *   {
+ *     tag: 'nt-helper-20261114-bf7882d',
+ *     commit: '<nt_helper commit sha>',
+ *     builtAt: '<ISO8601>',
+ *     expiresAt: '<ISO8601>',
+ *     platforms: { 'linux-x64': { asset, sha256, size }, … },
+ *   }
+ * WeqBot 只读 `platforms`；`dress` / `authorization` 字段存在也不处理。
+ */
+async function loadManifest(version) {
+  if (fromDir) {
+    const file = join(fromDir, 'manifest.json');
+    if (!existsSync(file)) throw new Error(`--from-dir 里没有 manifest.json：${file}`);
+    return { manifest: JSON.parse(await readFile(file, 'utf8')), localDir: fromDir };
+  }
+  const url = manifestUrl(version);
+  const res = await httpGetWithRetry(url, { label: `manifest（${version}）` });
+  if (res.statusCode < 200 || res.statusCode >= 300) {
+    res.resume();
+    throw new Error(
+      `拿不到 manifest（${res.statusCode} ${res.statusMessage ?? ''}）：${url}\n` +
+        (version === 'latest'
+          ? '发布仓还没有产物？先去 nt_helper 跑一次 Rust-Release-Build 工作流。'
+          : `这个 tag 是${PIN} 里锚定的那个：发布仓里没有它？把锚点改成实际存在的 tag（或用 --latest）。`),
+    );
+  }
+  return { manifest: JSON.parse(await readBody(res)), localDir: undefined };
+}
+
+function manifestUrl(version) {
+  return version === 'latest'
+    ? `${baseUrl}/latest/download/manifest.json`
+    : `${baseUrl}/download/${encodeURIComponent(version)}/manifest.json`;
+}
+
+/** 上游 latest 的 tag；拿不到（离线 / 限流）就返回 `undefined`。 */
+async function fetchLatestTag() {
+  try {
+    const res = await httpGetWithRetry(manifestUrl('latest'), { label: '上游 latest' });
+    if (res.statusCode < 200 || res.statusCode >= 300) {
+      res.resume();
+      return undefined;
+    }
+    const manifest = JSON.parse(await readBody(res));
+    return typeof manifest?.tag === 'string' ? manifest.tag : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * 把当前取值写回版本锚（升级锚点用；`note` 原样保留）。
+ *
+ * 顺带把**构建时间 / 过期时间**写进去：日期来自刚装好的 `.node` 自报的
+ * `getBuildInfo()`（读不到时回落到 manifest 的 `expiresAt`）。这两个字段只是诊断信息，
+ * WeqBot 的加载器不会据此拦截（时效最终会整体取消）。
+ */
+async function writePinFile(manifest, previous, binaryInfo) {
+  const validity = manifestValidity(manifest, binaryInfo);
+  const dest = join(root, PIN);
+  const pin = {
+    tag: manifest.tag,
+    ...(manifest.commit ? { commit: manifest.commit } : {}),
+    ...(validity.buildAt ? { builtAt: validity.buildAt } : {}),
+    ...(validity.expireAt ? { expiresAt: validity.expireAt } : {}),
+    pinnedAt: new Date().toISOString().slice(0, 10),
+    note:
+      typeof previous?.note === 'string' && previous.note.length > 0
+        ? previous.note
+        : DEFAULT_PIN_NOTE,
+  };
+  await writeFile(dest, `${JSON.stringify(pin, null, 2)}\n`);
+  const tail = validityText(validity);
+  log(`锚点已写入 ${PIN}：${pin.tag}${tail ? `（${tail}）` : ''}`);
+}
+
+/** manifest → 本次要落盘的文件清单（只有 `.node`，不带权限助手 / 装扮资源）。 */
+function planFiles(manifest, platforms) {
+  const files = [];
+  for (const name of platforms) {
+    const spec = PLATFORMS[name];
+    const meta = manifest.platforms?.[name];
+    if (!meta) throw new Error(`manifest（tag=${manifest.tag}）里没有平台 ${name}`);
+    files.push({
+      label: name,
+      path: join(spec.dir, 'nt_helper.node'),
+      asset: meta.asset ?? spec.asset,
+      sha256: meta.sha256,
+      size: meta.size,
+    });
+  }
+  return files;
+}
+
+// ─────────────────────────── 安装 ───────────────────────────
+
+async function install(manifest, files, localDir) {
+  const staging = await mkdtemp(join(tmpdir(), 'weqbot-native-'));
+  try {
+    const total = files.length;
+    let index = 0;
+    for (const entry of files) {
+      index++;
+      if (dryRun) {
+        log(`  [dry-run] ${entry.label.padEnd(16)} → ${entry.path} (${mb(entry.size)})`);
+        continue;
+      }
+
+      const staged = join(staging, entry.asset);
+      const step = `[${index}/${total}]`;
+      if (localDir) {
+        const source = join(localDir, entry.asset);
+        if (!existsSync(source)) throw new Error(`本地缺资产：${source}`);
+        if (entry.size != null && (await stat(source)).size !== entry.size)
+          throw new Error(`${entry.asset} 体积不匹配；已中止，本地文件未改动`);
+        await copyFile(source, staged);
+      } else {
+        await download(`${baseUrl}/download/${manifest.tag}/${entry.asset}`, staged, {
+          label: `${step} ${entry.label}`,
+          size: entry.size,
+        });
+      }
+
+      if (entry.sha256) {
+        const got = await sha256File(staged);
+        if (got !== entry.sha256) {
+          throw new Error(
+            `${entry.asset} sha256 不匹配（期望 ${entry.sha256}，实际 ${got}）；已中止，本地文件未改动`,
+          );
+        }
+      }
+      if (entry.size != null) {
+        const { size } = await stat(staged);
+        if (size !== entry.size)
+          throw new Error(`${entry.asset} 体积不匹配；已中止，本地文件未改动`);
+      }
+    }
+
+    if (dryRun) return undefined;
+    const hostFile = files.find(
+      (entry) => entry.path === join(PLATFORMS[hostTag]?.dir ?? '', 'nt_helper.node'),
+    );
+    const buildInfo = hostFile
+      ? readAddon(join(staging, hostFile.asset), false).buildInfo
+      : undefined;
+    const markerFile = join(staging, '.installed.json');
+    await writeFile(
+      markerFile,
+      `${JSON.stringify(await createMarker(manifest, files, buildInfo), null, 2)}\n`,
+    );
+    await installNativeFiles({
+      root,
+      files: [
+        ...files.map((entry) => ({
+          source: join(staging, entry.asset),
+          path: entry.path,
+          mode: 0o644,
+        })),
+        { source: markerFile, path: MARKER },
+      ],
+      verify: doVerify
+        ? async (directory) => {
+            const verified = await verifyHost(files, directory);
+            if (verified.code !== 0) throw new Error('候选 native 验证失败；本地文件未改动');
+          }
+        : undefined,
+    });
+    for (const entry of files)
+      log(`  ${entry.label.padEnd(16)} → ${entry.path} (${mb(entry.size)})`);
+    return buildInfo;
+  } finally {
+    await rm(staging, { recursive: true, force: true });
+  }
+}
+
+async function createMarker(manifest, files, buildInfo) {
+  // 同 tag 的多次 fetch 要合并，不能把之前的条目冲掉，否则 --check 会漏检这批文件。
+  // 换 tag 说明整份换新，旧的条目直接丢掉。
+  const previous = await readMarker();
+  const merged = new Map();
+  if (previous?.tag === manifest.tag) {
+    for (const entry of previous.files ?? []) merged.set(entry.path, entry);
+  }
+  for (const entry of files) {
+    merged.set(entry.path, { path: entry.path, sha256: entry.sha256 });
+  }
+
+  const validity = manifestValidity(manifest, buildInfo);
+  return {
+    tag: manifest.tag,
+    commit: manifest.commit,
+    builtAt: validity.buildAt ?? manifest.builtAt,
+    buildTime: validity.buildAt ?? manifest.buildTime,
+    ...(validity.expireAt ? { expiresAt: validity.expireAt } : {}),
+    fetchedAt: new Date().toISOString(),
+    files: [...merged.values()],
+  };
+}
+
+async function readMarker() {
+  const file = join(root, MARKER);
+  if (!existsSync(file)) return undefined;
+  try {
+    return JSON.parse(await readFile(file, 'utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+// ─────────────────────────── 校验 ───────────────────────────
+
+async function check(manifest, pin, files) {
+  const validity = manifestValidity(manifest);
+  log(
+    `远端：${manifest.tag}（commit ${String(manifest.commit ?? '').slice(0, 7)}，` +
+      `${validityText(validity) ?? '有效期未知'}）`,
+  );
+
+  const marker = await readMarker();
+  if (!marker) {
+    console.error('本地没装过（没有 native/.installed.json）→ 跑 `pnpm native:fetch`');
+    return 1;
+  }
+
+  const problems = [];
+  for (const expected of files) {
+    if (
+      !(marker.files ?? []).some(
+        (entry) => entry.path === expected.path && entry.sha256 === expected.sha256,
+      )
+    )
+      problems.push(`安装记录缺少或不匹配：${expected.path}`);
+  }
+  if (pin && pin.tag !== manifest.tag) {
+    problems.push(`版本锚 ${PIN} 锚定 ${pin.tag}，与本次比对的 ${manifest.tag} 不一致`);
+  }
+  if (!pin) problems.push(`缺版本锚 ${PIN}（跑一次 pnpm native:fetch --write-pin 生成）`);
+  if (marker.tag !== manifest.tag) problems.push(`落后：本地 ${marker.tag}，远端 ${manifest.tag}`);
+  const hostAddon = PLATFORMS[hostTag] ? join(PLATFORMS[hostTag].dir, 'nt_helper.node') : undefined;
+  if (hostAddon && !(marker.files ?? []).some((entry) => entry.path === hostAddon)) {
+    problems.push(`本机平台的 .node 没装：${hostAddon}（跑 pnpm native:fetch）`);
+  }
+  for (const entry of files) {
+    const file = join(root, entry.path);
+    if (!existsSync(file)) {
+      problems.push(`缺文件：${entry.path}`);
+    } else if (entry.sha256 && (await sha256File(file)) !== entry.sha256) {
+      problems.push(`内容对不上（被改过？）：${entry.path}`);
+    }
+  }
+  if (validity.expired) {
+    problems.push(`远端构建已过期（${validityText(validity)}），装上也用不了`);
+  }
+
+  if (problems.length === 0) {
+    log(`本地：${marker.tag} ✔ 一致（${marker.files?.length ?? 0} 个文件）`);
+    if (isStale(validity)) {
+      log(`提醒：这份构建${validityText(validity)}，建议重新 fetch`);
+    }
+    const latestTag = fromDir ? undefined : await fetchLatestTag();
+    if (latestTag && latestTag !== manifest.tag) {
+      log(
+        `提醒：上游有更新的构建 ${latestTag}（本地锚定 ${manifest.tag}）。` +
+          '试用：pnpm native:fetch --latest --verify；确认无误后 pnpm native:fetch --latest --write-pin 并提交锚文件。',
+      );
+    }
+    return 0;
+  }
+  for (const problem of problems) console.error(`✘ ${problem}`);
+  return 1;
+}
+
+/**
+ * require 一份已落盘的 `.node`，把 `getBuildInfo()` / `getInitStatus()` 一次读出来。
+ *
+ * 只返回可序列化的构建信息与初始化结果，不在安装进程持有原生模块。
+ * require 失败不抛，交给调用方决定。
+ */
+function readAddon(addonPath, withStatus = true) {
+  try {
+    // 验证子进程退出后再替换文件，避免 Windows 的已加载 DLL 锁定候选或旧产物。
+    return JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          '-e',
+          `
+      const addon = require(process.argv[1]);
+      const buildInfo = typeof addon.getBuildInfo === 'function' ? addon.getBuildInfo() : undefined;
+      const status = process.argv[2] === '1' && typeof addon.getInitStatus === 'function'
+        ? addon.getInitStatus() : undefined;
+      process.stdout.write(JSON.stringify({ buildInfo, status }));
+    `,
+          addonPath,
+          withStatus ? '1' : '0',
+        ],
+        {
+          encoding: 'utf8',
+          timeout: 15000,
+          maxBuffer: 65536,
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
+    );
+  } catch (err) {
+    return { buildInfo: undefined, status: undefined, error: err };
+  }
+}
+
+/**
+ * 在宿主机的隔离子进程 require 候选 .node，跑 `getInitStatus()`，顺带取回
+ * `getBuildInfo()` 供写进锚文件 / marker。
+ *
+ * WeqBot 不校验权限助手（不做长期授权），这里只剩「二进制能不能加载」这一件事。
+ * 返回值 `{ code, buildInfo }`：`code` 非 0 即失败（与退出码语义一致）。
+ */
+async function verifyHost(files, directory = root) {
+  const spec = PLATFORMS[hostTag];
+  if (
+    !spec ||
+    !files.some((entry) => resolve(root, entry.path) === resolve(root, spec.dir, 'nt_helper.node'))
+  ) {
+    log(`跳过 --verify：本次没装宿主平台（${hostTag}）的 .node`);
+    return { code: 0, buildInfo: undefined };
+  }
+  const addonPath = join(directory, spec.dir, 'nt_helper.node');
+  const { buildInfo, status, error } = readAddon(addonPath);
+  if (error) {
+    console.error(`✘ require/调用失败：${error instanceof Error ? error.message : error}`);
+    return { code: 1, buildInfo: undefined };
+  }
+  if (status !== 0) {
+    console.error(
+      `✘ getInitStatus() = ${status}（0 才是可用；-1 过期 / -200 损坏 / -201 被篡改 / 99 未知）`,
+    );
+    return { code: 1, buildInfo };
+  }
+  const validity = manifestValidity(undefined, buildInfo);
+  if (requireFresh) {
+    if (validity.expired || isStale(validity)) {
+      throw new Error(
+        `原生组件剩余有效期不足（${validityText(validity) ?? '有效期未知'}）—— ` +
+          '先去 nt_helper 跑一次 Rust-Release-Build 再发版。',
+      );
+    }
+  }
+  const tail = validityText(validity) ? `，${validityText(validity)}` : '';
+  log(`--verify ✔ ${spec.dir}/nt_helper.node 可用（getInitStatus() = 0${tail}）`);
+  return { code: 0, buildInfo };
+}
+
+// ─────────────────────────── 本地构建安装 ───────────────────────────
+
+/**
+ * 把一份本地 `.node` 装进 `native/<platform>/<arch>/nt_helper.node`。
+ *
+ * 用途：release 仓落后源码时不阻塞开发。刻意**不写版本锚、不写 marker** ——
+ * 那份锚代表「上游某一次可复现的发布」，本地 cargo 构建不该混进去；下一次
+ * `pnpm native:fetch --check` 会如实报告「本地没装过」，不会假装一致。
+ */
+async function installFromFile(platforms, file) {
+  if (platforms.length !== 1) {
+    throw new Error('--from-file 一次只能装一个平台（用 --platform 指定，默认宿主平台）');
+  }
+  if (!existsSync(file)) throw new Error(`文件不存在：${file}`);
+  const platform = platforms[0];
+  const spec = PLATFORMS[platform];
+  const launch = `native:fetch --from-file ${file}${platform === hostTag ? '' : ` --platform ${platform}`}`;
+  const target = join(spec.dir, 'nt_helper.node');
+
+  // 装之前先验：装完了才发现能力不全，等于白折腾一轮。
+  const { buildInfo, status, error } = readAddon(file);
+  if (error) throw new Error(`require 失败（不是本平台的 .node？）：${error.message ?? error}`);
+  if (status !== 0) {
+    throw new Error(
+      `getInitStatus() = ${status}（0 才是可用；-1 过期 / -200 损坏 / -201 被篡改 / 99 未知）`,
+    );
+  }
+  const before = await readCapabilities(file);
+  if (!before.includes('openSession')) {
+    console.warn(
+      '⚠ 这份构建没有 openSession —— 只能登录换票，跑不了 mode2 上线。' +
+        'release 仓的产物就是这种旧绑定构建，别拿它验收。',
+    );
+  }
+
+  if (dryRun) {
+    log(`  [dry-run] ${platform.padEnd(16)} → ${target} (${mb((await stat(file)).size)})`);
+    return 0;
+  }
+
+  await installNativeFiles({ root, files: [{ source: file, path: target, mode: 0o644 }] });
+  log(`  ${platform.padEnd(16)} → ${target} (${mb((await stat(file)).size)})`);
+  log(`来源：本地构建 ${file}（未写版本锚；${launch}）`);
+
+  const validity = manifestValidity(undefined, buildInfo);
+  const tail = validityText(validity);
+  const build = buildInfo?.isDev ? 'dev 构建（无时效）' : (tail ?? '有效期未知');
+  log(`构建信息：${build}；能力 ${before.length} 项`);
+  return 0;
+}
+
+/** 在隔离子进程里问一份 `.node` 导出了哪些能力（与 `@weqbot/wire` 的探测口径一致）。 */
+async function readCapabilities(addonPath) {
+  try {
+    return JSON.parse(
+      execFileSync(
+        process.execPath,
+        [
+          '-e',
+          `
+      const addon = require(process.argv[1]);
+      process.stdout.write(JSON.stringify(Object.keys(addon).filter((key) => typeof addon[key] === 'function')));
+    `,
+          addonPath,
+        ],
+        {
+          encoding: 'utf8',
+          timeout: 15000,
+          maxBuffer: 65536,
+          windowsHide: true,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        },
+      ),
+    );
+  } catch {
+    return [];
+  }
+}
+
+// ─────────────────────────── 主流程 ───────────────────────────
+
+async function main() {
+  const platforms = selectedPlatforms();
+  if (platforms.length === 0) throw new Error('没有任何要装的目标');
+
+  // `--from-file`：装一份本地 cargo / napi 构建。release 仓落后时会用到这条路 ——
+  // 它不做版本锚校验（没有 manifest 可对），装完直接打 `getBuildInfo()` 报告。
+  if (fromFile) return installFromFile(platforms, fromFile);
+
+  if (explicitVersion && wantLatest) {
+    throw new Error('--version 与 --latest 不能一起用：指定了 tag 就已经不是"取最新"的意思了');
+  }
+
+  const pin = await readPin();
+  const version = explicitVersion ?? (wantLatest ? 'latest' : (pin?.tag ?? 'latest'));
+  if (explicitVersion) log(`版本：${version}（--version / NT_HELPER_VERSION 指定）`);
+  else if (wantLatest) log(`版本：latest（--latest，忽略 ${PIN}）`);
+  else if (pin) log(`版本：${version}（锚定于 ${PIN}）`);
+  else log(`⚠ 没有 ${PIN}，这次按 latest 取；建议锚一份，避免代码与 native 悄悄漂开`);
+
+  const { manifest, localDir } = await loadManifest(version);
+  if (!manifest?.tag) throw new Error('manifest 里没有 tag 字段，发布仓格式不对？');
+
+  const remoteValidity = manifestValidity(manifest);
+  if (requireFresh && remoteValidity.expired) {
+    throw new Error(
+      `最新构建已过有效期（${validityText(remoteValidity)}）——` +
+        '先去 nt_helper 跑一次 Rust-Release-Build 再发版。',
+    );
+  }
+  if (requireFresh && isStale(remoteValidity)) {
+    throw new Error(
+      `最新构建剩余有效期不足（${validityText(remoteValidity)}，阈值 1/5）——` +
+        '先去 nt_helper 跑一次 Rust-Release-Build 再发版。',
+    );
+  }
+
+  const files = planFiles(manifest, platforms);
+  if (checkOnly) {
+    const checked = await check(manifest, pin, files);
+    if (checked !== 0 || !doVerify) return checked;
+    return (await verifyHost(files)).code;
+  }
+  log(`来源：${localDir ?? `${releaseRepo}@${manifest.tag}`}`);
+  log(`写入：${root}`);
+  const installedBuildInfo = await install(manifest, files, localDir);
+
+  // 日期取自候选二进制，验证与安装成功后才允许更新版本锚。
+  const hostBuildInfo = dryRun ? undefined : installedBuildInfo;
+  const validity = manifestValidity(manifest, hostBuildInfo);
+  if (writePin && !dryRun) await writePinFile(manifest, pin, hostBuildInfo);
+
+  if (!dryRun && isStale(validity)) {
+    const text = validityText(validity) ?? '有效期未知';
+    log(`提醒：这份构建${text}，建议重新 fetch；CI 的 --require-fresh 会在剩余不足 1/5 时失败`);
+  }
+  return 0;
+}
+
+try {
+  process.exitCode = await main();
+} catch (err) {
+  console.error(`✘ ${err instanceof Error ? err.message : err}`);
+  process.exitCode = 1;
+}

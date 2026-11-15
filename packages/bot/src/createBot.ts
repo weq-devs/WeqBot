@@ -7,7 +7,7 @@
  *
  * 本层只和 `sessionId` 打交道，**不接触 pid**。这一层也**不 import 任何 `.node`**，
  * 不 import `@weqbot/node`：宿主把 native 端口递进来。WeQ 传
- * `adaptNativeBinding(platform.native.ntHelper)`；独立进程传 slim 加载器的产物。
+ * `adaptNativeBinding(platform.native.ntHelper)`；独立进程传加载器读出的同一份产物。
  *
  * 推送 / 状态两条 sink 都在这里接：
  *   - 推送帧 → `@weqbot/protocol/push` 解码 → `PushBridge` → `BotEvent`；

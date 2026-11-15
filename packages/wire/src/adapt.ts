@@ -3,7 +3,7 @@
  *
  * 两个真实来源：
  *   - WeQ desktop：`platform.native.ntHelper`（`@weq/native` 的 `NtHelperBinding`）；
- *   - 独立进程：`@weqbot/node` 的 slim 加载器（形状刻意与 WeQ 那份一致）。
+ *   - 独立进程：`@weqbot/node` 的加载器（同一份 `nt_helper.node`，形状与 WeQ 一致）。
  *
  * 适配层只做两件事：**字节类型归一**（`Uint8Array` → `Buffer`）和**保留 this**。
  * 它不做版本判断，能力探测交给 `capabilities.ts`；缺失的方法保持 `undefined`，

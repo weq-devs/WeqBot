@@ -7,8 +7,10 @@ logs/
 .DS_Store
 
 # 原生产物：由 nt_helper 的构建流水线产出，不进仓库
+# `native/pinned.json`（版本锚）要入库，所以先放行再按文件忽略。
 *.node
-native/
+native/*
+!native/pinned.json
 
 # 工作用 TODO（规划稿，刻意不入库）
 TODO.md
