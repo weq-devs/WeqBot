@@ -48,6 +48,35 @@ pnpm docs:build   # 静态构建到 docs/.vitepress/dist
 内容分四块：使用手册（下载安装 / 登录 / 配置）、运行原理（架构 / 会话 / 凭据 / 嵌入）、
 事件推送（语义层 `BotEvent` 全量）、OneBot 接口（205 条动作，**由代码自动生成**）。
 
+## 快速开始（从 clone 开始）
+
+```bash
+git clone https://github.com/weq-devs/WeqBot.git && cd WeqBot
+pnpm dev
+```
+
+`pnpm dev` 会把开发环境一次备齐再启动：依赖缺失时 `pnpm install`，原生组件能力不齐时
+换一份、前端 `dist/` 缺失或比源码旧时 `build:webui`，最后起控制台并打印带令牌的链接。
+参数原样透传给 CLI：
+
+```bash
+pnpm dev -- --account <uin> --config packages/node/config.example.json
+pnpm dev -- --rebuild     # 强制重建前端
+pnpm dev -- --release     # 跳过本地构建，强制用 release 产物
+pnpm dev -- --help        # 只打印这个脚本的说明
+```
+
+::: warning 开发期原生组件要用本地构建
+
+发布仓 `native/pinned.json` 锚的那份是**旧 napi 绑定构建**，没有 `openSession` /
+`attachPushSink`，只能登录换票、跑不了 mode2 上线。`pnpm dev` 会优先找与本仓同级的
+`../nt_helper`（或 `NT_HELPER_DIR`）里的 `index.<platform>-<arch>-*.node`；找不到才回落到
+release 产物，并在能力不足时**明确报错**而不是起一个半残的控制台。
+
+上游修好后这一分支会自然不再被走到，脚本不需要改。
+
+:::
+
 ## 命令
 
 ```bash

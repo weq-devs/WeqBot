@@ -10,6 +10,7 @@
   },
   "scripts": {
     "typecheck": "pnpm -r typecheck",
+    "dev": "node scripts/dev.mjs",
     "dev:cli": "tsx packages/node/src/cli.ts",
     "dev:webui": "pnpm --filter @weqbot/webui dev",
     "build:webui": "pnpm --filter @weqbot/webui build",
