@@ -71,6 +71,7 @@ import {
   SetAdminPermissions,
   SetAdminReceiveVerify,
   SetGroupAddOption,
+  SetGroupRequest,
   SetGroupInvitePolicy,
   SetGroupHistoryVisibility,
   SetGroupMemberPermission,
@@ -198,6 +199,8 @@ import {
   uploadQzoneImage,
   withRetry,
   type GroupMemberListItem,
+  type GroupRequest,
+  type GroupRequestPage,
   type LikeUserInfo,
   type MediaIndexNode,
   type PublicProfileFields,
@@ -206,6 +209,7 @@ import {
 } from '@weqbot/protocol';
 import { fetchAllFriends, fetchAllGroupMembers } from '@weqbot/protocol/contacts';
 import type { Logger } from '@weqbot/common';
+import { parseGroupRequestFlag, type ParsedGroupRequestFlag } from './group-request-flag';
 
 export interface ProtocolBackendOptions {
   protocol: ProtocolClient;
@@ -316,6 +320,179 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
     return {
       ...(options.imageUrlResolver ? { imageUrlResolver: options.imageUrlResolver as never } : {}),
       ...(options.mediaUrlResolver ? { mediaUrlResolver: options.mediaUrlResolver as never } : {}),
+    };
+  }
+
+  // ─────────────── 加群请求：flag → 0x10C8 的四元组（第 1 批补齐） ───────────────
+  //
+  // 一次最多两个 OIDB（主 / 过滤收件箱），每个最多翻 GROUP_REQUEST_MAX_PAGES 页；
+  // 判断与 SnowLuma 的 `fetchRequestInboxes` 同口径：两个收件箱都失败才算失败，
+  // 单个失败只影响能不能匹配到。
+
+  interface ResolvedGroupRequest {
+    sequence: number;
+    groupId: number;
+    eventType: number;
+    filtered: boolean;
+    operateTransInfo?: Uint8Array;
+  }
+
+  const GROUP_REQUESTS_PER_PAGE = 50;
+  const GROUP_REQUEST_MAX_PAGES = 10;
+
+  async function fetchGroupRequestInbox(filtered: boolean): Promise<GroupRequest[]> {
+    const out: GroupRequest[] = [];
+    let cookie: number | bigint = 0;
+    for (let page = 0; page < GROUP_REQUEST_MAX_PAGES; page += 1) {
+      const result: GroupRequestPage = filtered
+        ? await FetchFilteredGroupRequests.invoke(nt, sessionId, {
+            count: GROUP_REQUESTS_PER_PAGE,
+            cookie,
+          })
+        : await FetchGroupRequests.invoke(nt, sessionId, {
+            count: GROUP_REQUESTS_PER_PAGE,
+            cookie,
+          });
+      out.push(...result.requests);
+      if (result.cookie === 0 || result.requests.length < GROUP_REQUESTS_PER_PAGE) break;
+      cookie = result.cookie;
+    }
+    return out;
+  }
+
+  /** 主 + 过滤收件箱一起拉；两个都失败才抛，单个失败只记日志。 */
+  async function fetchGroupRequestInboxes(): Promise<{
+    requests: GroupRequest[];
+    failures: unknown[];
+  }> {
+    const [main, filtered] = await Promise.allSettled([
+      fetchGroupRequestInbox(false),
+      fetchGroupRequestInbox(true),
+    ]);
+    const failures: unknown[] = [];
+    if (main.status === 'rejected') {
+      failures.push(main.reason);
+      options.logger?.warn('拉取加群请求主收件箱失败', { cause: main.reason });
+    }
+    if (filtered.status === 'rejected') {
+      failures.push(filtered.reason);
+      options.logger?.warn('拉取加群请求过滤收件箱失败', { cause: filtered.reason });
+    }
+    if (failures.length === 2) {
+      throw new Error('加群请求的主 / 过滤收件箱都拉取失败', { cause: failures[0] });
+    }
+    return {
+      requests: [
+        ...(main.status === 'fulfilled' ? main.value : []),
+        ...(filtered.status === 'fulfilled' ? filtered.value : []),
+      ],
+      failures,
+    };
+  }
+
+  function groupRequestSubType(request: GroupRequest): 'add' | 'invite' | undefined {
+    // 1 = 入群申请；2 = 别人邀请我（SnowLuma 的 `isSelfGroupInvitation`）；22 = 邀请。
+    if (request.eventType === 1) return 'add';
+    if (request.eventType === 2 || request.eventType === 22) return 'invite';
+    return undefined;
+  }
+
+  function missingGroupRequest(message: string, failures: unknown[]): never {
+    if (failures.length > 0) {
+      throw new Error(`加群请求查找不完整：${message}`, { cause: failures[0] });
+    }
+    throw new Error(message);
+  }
+
+  /**
+   * `slreq:` 规范形态：四元组已经有了，只在需要 `operateTransInfo` 时回查一次。
+   *
+   * 回查失败不算错 —— 没有透传字段也能发审批（SnowLuma 同样在 `!live` 时原样用 flag）。
+   */
+  async function resolveLiveGroupRequest(
+    handle: ResolvedGroupRequest,
+  ): Promise<ResolvedGroupRequest> {
+    try {
+      const { requests } = await fetchGroupRequestInboxes();
+      const live = requests.find(
+        (request) => request.groupId === handle.groupId && request.sequence === handle.sequence,
+      );
+      if (!live) return handle;
+      return {
+        sequence: live.sequence,
+        groupId: live.groupId,
+        eventType: live.eventType,
+        filtered: live.filtered,
+        ...(live.operateTransInfo ? { operateTransInfo: live.operateTransInfo } : {}),
+      };
+    } catch {
+      // 透传字段是可选的；拿不到就用 flag 里的四元组直接发。
+      return handle;
+    }
+  }
+
+  /** 裸序号 / `add:` / `invite:` → 去收件箱找出唯一匹配的那一条。 */
+  async function resolveGroupRequestFromInbox(
+    parsed: Exclude<ParsedGroupRequestFlag, { kind: 'canonical' }>,
+  ): Promise<ResolvedGroupRequest> {
+    const { requests, failures } = await fetchGroupRequestInboxes();
+
+    if (parsed.kind === 'sequence') {
+      const match = requests.find((request) => request.sequence === parsed.sequence);
+      if (!match) {
+        missingGroupRequest(`收件箱里没有序号 ${parsed.sequence} 的加群请求`, failures);
+      }
+      if (!groupRequestSubType(match)) {
+        missingGroupRequest(
+          `序号 ${parsed.sequence} 不是加群 / 邀请请求（eventType=${match.eventType}）`,
+          failures,
+        );
+      }
+      return {
+        sequence: match.sequence,
+        groupId: match.groupId,
+        eventType: match.eventType,
+        filtered: match.filtered,
+        ...(match.operateTransInfo ? { operateTransInfo: match.operateTransInfo } : {}),
+      };
+    }
+
+    // legacy：群号 + 申请人 uid（推送里只有这两个）。只看待处理的（state === 1）。
+    const candidates = requests.filter((request) => {
+      if (request.groupId !== parsed.groupId || request.state !== 1) return false;
+      if (groupRequestSubType(request) !== parsed.requestType) return false;
+      // 入群申请看 target（申请人）；邀请看 invitor（邀请人）。
+      return parsed.requestType === 'add'
+        ? request.target.uid === parsed.targetUid
+        : request.invitor.uid === parsed.targetUid;
+    });
+
+    if (candidates.length === 0) {
+      missingGroupRequest(
+        `群里没有匹配待处理请求（group=${parsed.groupId} kind=${parsed.requestType} uid=${parsed.targetUid}）`,
+        failures,
+      );
+    }
+    const match = candidates[0]!;
+    // 多条待处理请求同名同号时不能猜：宁可让调用方拿更精确的 flag 重来。
+    if (
+      candidates.some(
+        (request) =>
+          request.sequence !== match.sequence ||
+          request.eventType !== match.eventType ||
+          request.filtered !== match.filtered,
+      )
+    ) {
+      throw new Error(
+        `群 ${parsed.groupId} 有多条待处理请求匹配这个 flag，无法确定处理哪一条（请改用 get_group_system_msg 的 flag）`,
+      );
+    }
+    return {
+      sequence: match.sequence,
+      groupId: match.groupId,
+      eventType: match.eventType,
+      filtered: match.filtered,
+      ...(match.operateTransInfo ? { operateTransInfo: match.operateTransInfo } : {}),
     };
   }
 
@@ -935,6 +1112,31 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       const uid = flag.trim();
       if (!uid) throw new Error('好友申请 flag 为空');
       await HandleFriendRequest.invoke(nt, sessionId, { targetUid: uid, approve });
+    },
+
+    async setGroupAddRequest(flag: string, approve: boolean, reason: string): Promise<void> {
+      const parsed = parseGroupRequestFlag(flag);
+      // 实时推送的 flag 只有群号 + 申请人 uid（`add:` / `invite:`），裸序号也一样；
+      // 这两种都必须去 0x10C0 反查 `sequence` / `eventType` / `operateTransInfo`。
+      // 只有 `slreq:` 规范形态可以少一次网络往返。
+      const resolved =
+        parsed.kind === 'canonical'
+          ? await resolveLiveGroupRequest(parsed)
+          : await resolveGroupRequestFromInbox(parsed);
+      await SetGroupRequest.invoke(nt, sessionId, {
+        groupId: resolved.groupId,
+        sequence: resolved.sequence,
+        // 0x10C0 的 field 2 **原样**回填给 0x10C8：Lagrange 的拉取分支把 1 解成
+        // Join、22 解成 Invite，`SetGroupNotification` 又把同一个 `Type` 原样发回去；
+        // SnowLuma 的拉取文件头也写着「Field 2 in a list entry and in its approval
+        // uses the same wire value」。所以这里不要再过 `groupRequestOperationType`
+        // —— 它做的是「wire 值 → 客户端通知类型」，对 1 会返回 2，把入群申请发成邀请。
+        eventType: resolved.eventType,
+        approve,
+        reason,
+        ...(resolved.filtered ? { filtered: true } : {}),
+        ...(resolved.operateTransInfo ? { operateTransInfo: resolved.operateTransInfo } : {}),
+      });
     },
 
     async getStatus(): Promise<{ online: boolean; good: boolean }> {

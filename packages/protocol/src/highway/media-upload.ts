@@ -36,6 +36,7 @@ import {
   type Ntv2UploadInfoInput,
   runNtv2Upload,
 } from './ntv2-upload';
+import { fetchMediaBytes, isHttpUrl } from '../media-source';
 import { cleanNtLocalPath } from '../oidb/shared';
 import { buildPttWaveform, type PttWaveformSource } from './ptt-waveform';
 import { Sha1Stream } from './sha1-stream';
@@ -108,8 +109,17 @@ export const DEFAULT_BUBBLE_TEMPLATE = 'video_penguin_dance';
 
 // ───────────────────────── 公共类型 ─────────────────────────
 
-/** 媒体来源：本地文件路径，或已在内存里的字节。 */
+/**
+ * 媒体来源：本地文件路径、`http(s)` URL，或已在内存里的字节。
+ *
+ * 三种形态共用同一条上传管线 —— URL 在 `readMediaSource` 处下载成字节
+ * （见 `../media-source`）。视频走流式上传，URL 必须先整段落到内存，
+ * 所以它的上限单独放宽到 {@link MAX_VIDEO_DOWNLOAD_BYTES}。
+ */
 export type MediaSource = string | Uint8Array;
+
+/** 视频（URL 来源）的下载上限：比图片宽，但仍然是「明确拒绝」而不是无限吃内存。 */
+export const MAX_VIDEO_DOWNLOAD_BYTES = 256 * 1024 * 1024;
 
 /** 上传目标：自己 uin（highway 帧头）+ 会话（群号 / 对方 uid）。 */
 export interface MediaUploadTarget {
@@ -203,6 +213,8 @@ export interface MediaUploadResult {
 
 async function readMediaSource(source: MediaSource, what: string): Promise<Uint8Array> {
   if (typeof source === 'string') {
+    // OneBot 客户端发图最常给 `url`：先下载成字节，别把它当路径 readFile。
+    if (isHttpUrl(source)) return fetchMediaBytes(source, { what });
     // NT 的本地缓存路径常带 `::NTOSFull::` 虚拟前缀，直接 readFile 会 ENOENT。
     const filePath = cleanNtLocalPath(source);
     if (!filePath) throw new Error(`${what} 来源不能是空路径`);
@@ -744,13 +756,19 @@ export async function uploadVideoMsgInfo(
   options: MediaUploadOptions = {},
 ): Promise<MediaUploadResult> {
   const fp = params.fingerprint;
-  const isFile = typeof params.source === 'string';
-  const sourcePath = isFile ? cleanNtLocalPath(params.source as string) : '';
+  // URL 只能整段下载进内存：highway 的流式来源（FileChunkSource）要本地路径。
+  // 视频比图片大得多，所以上限单独放宽到 256 MiB（超过就明确报错，不做虚假的分片）。
+  const source: MediaSource =
+    typeof params.source === 'string' && isHttpUrl(params.source) && !fp
+      ? await fetchMediaBytes(params.source, { what: '视频', maxBytes: MAX_VIDEO_DOWNLOAD_BYTES })
+      : params.source;
+  const isFile = typeof source === 'string';
+  const sourcePath = isFile ? cleanNtLocalPath(source as string) : '';
   const size = fp
     ? fp.fileSize
     : isFile
       ? (await fsp.stat(sourcePath)).size
-      : (params.source as Uint8Array).length;
+      : (source as Uint8Array).length;
   if (size === 0) throw new Error('视频文件是空的');
 
   // 转发已有视频：没有字节，分块 sha1 也拿不到 —— 服务端 fast-upload 命中时不需要它
@@ -760,7 +778,7 @@ export async function uploadVideoMsgInfo(
     ? { ...fpVideo, sha1Blocks: [] as Uint8Array[] }
     : isFile
       ? await hashVideoFile(sourcePath, size)
-      : hashVideoBytes(params.source as Uint8Array);
+      : hashVideoBytes(source as Uint8Array);
   const fileName = params.fileName ?? fp?.fileName ?? `${videoHashes.md5Hex}.mp4`;
 
   const width = params.width ?? 0;
@@ -835,7 +853,7 @@ export async function uploadVideoMsgInfo(
           ? { bytes: EMPTY_MEDIA_BYTES }
           : isFile
             ? { fileSource: { filePath: sourcePath, fileSize: size } }
-            : { bytes: params.source as Uint8Array }),
+            : { bytes: source as Uint8Array }),
         md5: videoHashes.md5,
         // 视频主文件要带分块 sha1（服务端按块校验 + 拼接）。
         sha1: videoHashes.sha1Blocks,

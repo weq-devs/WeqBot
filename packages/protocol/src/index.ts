@@ -141,6 +141,13 @@ export {
 } from './redbag/schemas';
 
 export * from './scupdate';
+export {
+  fetchMediaBytes,
+  isHttpUrl,
+  MAX_MEDIA_DOWNLOAD_BYTES,
+  MEDIA_DOWNLOAD_TIMEOUT_MS,
+} from './media-source';
+export type { FetchMediaBytesOptions } from './media-source';
 export * from './highway';
 export * from './oidb/flashtransfer';
 

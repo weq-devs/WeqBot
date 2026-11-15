@@ -32,6 +32,7 @@
 
 import { createHash } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
+import { fetchMediaBytes, isHttpUrl } from '../media-source';
 import { cleanNtLocalPath } from '../oidb/shared';
 import { decode, encode } from '../protobuf';
 import { sendPacket } from '../transport';
@@ -124,6 +125,8 @@ export function stripLengthPrefix(reply: Uint8Array): Uint8Array {
 
 async function readSource(source: LegacyImageSource): Promise<Uint8Array> {
   if (typeof source === 'string') {
+    // 与 NTV2 图片同一口径：URL 先下载成字节（OneBot 客户端发图常只给 url）。
+    if (isHttpUrl(source)) return fetchMediaBytes(source, { what: '闪照图片' });
     const filePath = cleanNtLocalPath(source);
     if (!filePath) throw new Error('闪照图片来源不能是空路径');
     const bytes = new Uint8Array(await fsp.readFile(filePath));

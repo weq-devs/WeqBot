@@ -106,6 +106,7 @@ export {
   VIDEO_OIDB_GROUP,
   VIDEO_THUMB_HIGHWAY_C2C,
   VIDEO_THUMB_HIGHWAY_GROUP,
+  MAX_VIDEO_DOWNLOAD_BYTES,
 } from './media-upload';
 export type {
   MediaSource,
