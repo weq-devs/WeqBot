@@ -39,7 +39,7 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
   --qq-db <path>       账号 nt_msg.db 绝对路径（mode2 预检 isQqLoggedIn 用；
                        也可用 $WEQBOT_QQ_DB）
   --config <path>      JSON 配置：native / qq / session / secToken / onebot / log
-                       （不含凭据；字段见 docs/config.example.json）
+                       （不含凭据；字段见 packages/node/config.example.json）
   --qq-pid <pid>       只与 --print-capabilities 连用：诊断 QQ 进程的会话物料
                        （需要 root / CAP_SYS_PTRACE）
   --check              自检模式

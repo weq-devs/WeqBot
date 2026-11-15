@@ -12,7 +12,8 @@
       "!**/dist",
       "!**/*.tsbuildinfo",
       "!pnpm-lock.yaml",
-      "!logs"
+      "!logs",
+      "!schema/onebot-actions.json"
     ]
   },
   "formatter": {
@@ -58,6 +59,22 @@
             "noImportantStyles": "off"
           }
         }
+      }
+    },
+    {
+      "includes": ["docs/.vitepress/theme/components/**/*.vue"],
+      "linter": {
+        "rules": {
+          "correctness": {
+            "noUnusedVariables": "off"
+          }
+        }
+      }
+    },
+    {
+      "includes": ["docs/**/*.md"],
+      "formatter": {
+        "enabled": false
       }
     }
   ]

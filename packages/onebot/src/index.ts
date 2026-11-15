@@ -104,6 +104,14 @@ export { MessageIdMap, type MessageIdEntry, type MessageIdMapOptions } from './m
 export { parseMessageSegments } from './message-parser';
 export { MessageStore, type StoredMessage } from './message-store';
 export {
+  ACTIONS_SNAPSHOT_VERSION,
+  buildActionsSnapshot,
+  type ActionGroupSnapshot,
+  type ActionSnapshotEntry,
+  type ActionsSnapshot,
+  type CapabilityGate,
+} from './docs/snapshot';
+export {
   ELEMENT_CODECS,
   decodeInlineMedia,
   elementToSegment,

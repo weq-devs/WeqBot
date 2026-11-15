@@ -20,9 +20,13 @@
     "check": "biome check .",
     "check:pure-ts": "node scripts/check-pure-ts.mjs",
     "test": "node --import tsx --test \"packages/*/test/*.test.ts\"",
-    "verify": "pnpm run check:pure-ts && pnpm run typecheck && pnpm run test",
+    "verify": "pnpm run check:pure-ts && pnpm run typecheck && pnpm run docs:actions:check && pnpm run test",
     "sign:audit": "tsx scripts/sign-audit.mjs",
-    "smoke:onebot": "node scripts/smoke-onebot.mjs"
+    "smoke:onebot": "node scripts/smoke-onebot.mjs",
+    "docs:actions": "tsx scripts/dump-onebot-docs.mjs",
+    "docs:actions:check": "tsx scripts/dump-onebot-docs.mjs --check",
+    "docs:dev": "pnpm --filter @weqbot/docs dev",
+    "docs:build": "pnpm --filter @weqbot/docs build"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.7",

@@ -36,11 +36,23 @@ common  ←  wire  ←  protocol  ←  session  ←  onebot
 - **`@weqbot/control`** — desktop ↔ sidecar 控制通道契约与 NDJSON 编解码。
 - **`@weqbot/node`** — 独立宿主、sidecar 入口与 CLI。
 
+## 文档
+
+完整文档在 [`docs/`](./docs/index.md)（VitePress）：
+
+```bash
+pnpm docs:dev     # http://127.0.0.1:5175
+pnpm docs:build   # 静态构建到 docs/.vitepress/dist
+```
+
+内容分四块：使用手册（下载安装 / 登录 / 配置）、运行原理（架构 / 会话 / 凭据 / 嵌入）、
+事件推送（语义层 `BotEvent` 全量）、OneBot 接口（196 条动作，**由代码自动生成**）。
+
 ## 命令
 
 ```bash
 pnpm install
-pnpm verify          # 架构护栏 + 全量类型检查 + 契约测试
+pnpm verify          # 架构护栏 + 全量类型检查 + 文档快照一致性 + 契约测试
 pnpm typecheck
 pnpm test
 pnpm lint
@@ -48,15 +60,26 @@ pnpm check:pure-ts   # 只跑架构护栏
 pnpm dev:cli --help  # CLI（源码直接跑，靠 tsx；P6 再出打包产物）
 ```
 
+OneBot 文档快照：
+
+```bash
+pnpm docs:actions          # 从 action 代码重新生成 schema/onebot-actions.json
+pnpm docs:actions:check    # 只校验是否最新（`pnpm verify` 已包含）
+```
+
+改了 action 的 `summary` / `description` / `inputSchema` 后必须重跑 `docs:actions`，
+否则 `actions-snapshot.test.ts` 会红。
+
 真机相关：
 
 ```bash
-pnpm dev:cli --account <uin> --config docs/config.example.json   # 起 bot（含 OneBot）
+pnpm dev:cli --account <uin> --config packages/node/config.example.json   # 起 bot（含 OneBot）
 pnpm smoke:onebot --url ws://127.0.0.1:6700 --self <uin>         # 只读冒烟
 pnpm smoke:onebot --url ws://127.0.0.1:6700 --self <uin> --send  # 含真实发消息
 ```
 
-配置样例见 `docs/config.example.json`，完整验证流程见 `docs/real-device-checklist.md`。
+配置样例见 `packages/node/config.example.json`（字段说明见[配置文件](./docs/guide/config.md)）；
+完整真机验证流程见 `REAL-DEVICE-CHECKLIST.md`（本地文件，不入库）。
 
 ## 约束（由 `scripts/check-pure-ts.mjs` 强制）
 

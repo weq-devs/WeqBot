@@ -1,5 +1,10 @@
 packages:
   - packages/*
+  # 文档站自带 package.json（VitePress），单独占一个槽位。
+  # 内容目录就是 docs/ 本身，构建产物落在 docs/.vitepress/dist（已 ignore）。
+  # 注意：docs/ 将来会改成指向 weq-devs/WeqBotDocs 的 submodule —— 那时这一行要
+  # 连同 docs/package.json 一起搬到独立仓库，父 workspace 不再包含它。
+  - docs
 
 # tsx 的 esbuild 需要一个能跑的二进制；显式放行，避免 install 时被静默跳过。
 allowBuilds:

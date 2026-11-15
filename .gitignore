@@ -12,3 +12,10 @@ native/
 
 # 工作用 TODO（规划稿，刻意不入库）
 TODO.md
+
+# 本地真机验证清单（含真实账号，不入库）
+REAL-DEVICE-CHECKLIST.md
+
+# VitePress 构建产物与缓存（内容目录就是 docs/ 本身）
+docs/.vitepress/dist
+docs/.vitepress/cache
