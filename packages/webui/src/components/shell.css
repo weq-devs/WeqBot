@@ -1,0 +1,388 @@
+/* ───────────────────────────── 应用壳 ───────────────────────────── */
+
+/*
+ * 布局：左固定侧栏 + 右侧单列内容。侧栏可折叠（宽度 224 → 64），
+ * 内容区自己滚动，顶栏始终可见。
+ */
+
+.shell {
+  display: grid;
+  grid-template-columns: 224px minmax(0, 1fr);
+  min-height: 100dvh;
+  background: var(--bg);
+  transition: grid-template-columns var(--duration-slow) var(--ease-out);
+}
+
+.shell[data-collapsed] {
+  grid-template-columns: 64px minmax(0, 1fr);
+}
+
+/* ───────────────────────────── 侧栏 ───────────────────────────── */
+
+.shell-nav {
+  position: sticky;
+  top: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  height: 100dvh;
+  padding: 18px 12px 14px;
+  border-right: 1px solid var(--border);
+  background: var(--bg-sunken);
+}
+
+.shell-brand {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 0 6px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.shell-brand-name {
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.015em;
+}
+
+.shell-nav-list {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.shell-nav-item {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 38px;
+  padding: 0 10px;
+  overflow: hidden;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  font-weight: 500;
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-base) var(--ease-out),
+    color var(--duration-base) var(--ease-out);
+}
+
+.shell-nav-item:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.shell-nav-item[aria-current="page"] {
+  color: var(--text);
+}
+
+/* 选中块的底：与 layoutId 的 motion.span 分离，避免动画反弹时颜色跟着抖。 */
+.shell-nav-active {
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  box-shadow: inset 0 0 0 1px var(--accent-ring);
+}
+
+.shell-nav-item > svg,
+.shell-nav-item > span:not(.shell-nav-active) {
+  position: relative;
+  z-index: 1;
+}
+
+.shell-nav-item > svg {
+  flex: none;
+  color: var(--text-muted);
+  transition: color var(--duration-base) var(--ease-out);
+}
+
+.shell-nav-item[aria-current="page"] > svg,
+.shell-nav-item:hover > svg {
+  color: var(--accent-text);
+}
+
+.shell-nav-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: auto;
+}
+
+.shell-nav-link {
+  flex: 1;
+  text-decoration: none;
+}
+
+.shell-collapse {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-base) var(--ease-out),
+    color var(--duration-base) var(--ease-out);
+}
+
+.shell-collapse:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* ───────────────────────────── 主区 ───────────────────────────── */
+
+.shell-main {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.shell-top {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  height: 56px;
+  padding: 0 22px;
+  border-bottom: 1px solid var(--border);
+  background: var(--chrome-glass);
+  backdrop-filter: blur(16px) saturate(1.3);
+}
+
+.shell-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  min-width: 0;
+}
+
+.shell-heading h1 {
+  margin: 0;
+  font-size: var(--text-xl);
+  font-weight: 600;
+  letter-spacing: -0.02em;
+}
+
+.shell-heading-sub {
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-top-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+/* 状态胶囊：圆点 + 文字，颜色只在小面积上出现（配色纪律第 3 条）。 */
+.shell-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 28px;
+  padding: 0 11px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-full);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  white-space: nowrap;
+}
+
+.shell-status-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.shell-status[data-phase="online"] .shell-status-dot {
+  background: var(--status-good);
+  box-shadow: 0 0 0 3px color-mix(in oklch, var(--status-good) 18%, transparent);
+  animation: status-pulse 2.4s var(--ease-in-out) infinite;
+}
+
+.shell-status[data-phase="starting"] .shell-status-dot {
+  background: var(--status-warning);
+}
+
+.shell-status[data-phase="offline"] .shell-status-dot {
+  background: var(--status-critical);
+}
+
+@keyframes status-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.45;
+  }
+}
+
+.shell-icon-button {
+  display: grid;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-base) var(--ease-out),
+    border-color var(--duration-base) var(--ease-out),
+    color var(--duration-base) var(--ease-out);
+}
+
+.shell-icon-button:hover {
+  border-color: var(--border);
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* ───────────────────────────── 账号菜单 ───────────────────────────── */
+
+.shell-menu-anchor {
+  position: relative;
+}
+
+.shell-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  right: 0;
+  width: 268px;
+  padding: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg), var(--highlight);
+  transform-origin: top right;
+}
+
+.shell-menu-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 8px 10px;
+  overflow: hidden;
+}
+
+.shell-menu-head div {
+  display: grid;
+  min-width: 0;
+}
+
+.shell-menu-head strong {
+  overflow: hidden;
+  font-size: var(--text-md);
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.shell-menu-head span {
+  color: var(--text-faint);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.shell-avatar {
+  flex: none;
+  border-radius: 50%;
+  object-fit: cover;
+}
+
+.shell-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  height: 34px;
+  padding: 0 9px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-md);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.shell-menu-item:hover:not(:disabled) {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.shell .shell-menu-item > svg {
+  flex: none;
+}
+
+.shell-menu-item:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+/* 右侧的小字提示：说明这个动作的影响（哪些是下线、哪些只是退出控制台）。 */
+.shell-menu-hint {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.shell-menu-sep {
+  height: 1px;
+  margin: 6px 4px;
+  border: 0;
+  background: var(--border);
+}
+
+/* ───────────────────────────── 内容 ───────────────────────────── */
+
+.shell-content {
+  flex: 1;
+  min-width: 0;
+  padding: 20px 22px 40px;
+}
+
+@media (max-width: 860px) {
+  .shell {
+    grid-template-columns: 64px minmax(0, 1fr);
+  }
+
+  .shell-brand-name,
+  .shell-nav-item > span:not(.shell-nav-active) {
+    display: none;
+  }
+
+  .shell-heading-sub,
+  .shell-status {
+    display: none;
+  }
+
+  .shell-content {
+    padding: 16px 14px 32px;
+  }
+}

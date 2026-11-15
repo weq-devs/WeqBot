@@ -39,9 +39,17 @@ function fakeBot(): Bot {
     events: new TypedEventBus<BotEventMap>(),
     protocol: undefined,
     onebot: undefined,
+    snapshot: {
+      uin: '2863253201',
+      state: 'online',
+      sessionId: 7,
+      reconnects: 0,
+      startedAt: Date.now(),
+    },
     start: async () => {},
     stop: async () => {},
     refreshSecToken: async () => {},
+    reloadOneBot: async () => {},
   };
 }
 

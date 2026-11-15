@@ -11,11 +11,14 @@ import {
   canReceiveAction,
   canReceiveEvent,
   MAX_BUFFERED_BYTES,
+  type NetworkSnapshot,
 } from './index';
 import type { ActionDispatcher } from '../adapter';
 import type { JsonObject, MessageFormat, WsRole } from '../types';
 
 export interface WsClientOptions {
+  /** 配置里的名字，只用于状态快照展示。 */
+  name?: string;
   url: string;
   role?: WsRole;
   accessToken?: string;
@@ -31,6 +34,8 @@ export class WsClientAdapter {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private heartbeat: ReturnType<typeof setInterval> | undefined;
   private stopped = false;
+  private connected = false;
+  private lastError: string | undefined;
 
   constructor(
     private readonly options: WsClientOptions,
@@ -70,18 +75,40 @@ export class WsClientAdapter {
     this.socket = socket;
 
     socket.on('open', () => {
+      this.connected = true;
+      this.lastError = undefined;
       this.startHeartbeat();
     });
     socket.on('message', (raw) => {
       void this.onMessage(raw.toString());
     });
     socket.on('close', () => {
+      this.connected = false;
       this.stopHeartbeat();
       this.scheduleReconnect();
     });
-    socket.on('error', () => {
-      // `close` 会跟着来，重连在那里统一处理。
+    socket.on('error', (cause: Error) => {
+      // `close` 会跟着来，重连在那里统一处理；这里只记下最近的错误给状态快照。
+      this.lastError = cause.message;
     });
+  }
+
+  /** 观测快照（WebUI 网络页 / 总览）。 */
+  snapshot(): NetworkSnapshot {
+    return {
+      kind: 'ws-client',
+      name: this.options.name ?? `ws-client:${this.options.url}`,
+      endpoint: this.options.url,
+      state: this.stopped
+        ? 'stopped'
+        : this.connected
+          ? 'connected'
+          : this.lastError
+            ? 'error'
+            : 'connecting',
+      clients: this.connected ? 1 : 0,
+      ...(this.lastError ? { error: this.lastError } : {}),
+    };
   }
 
   private startHeartbeat(): void {
@@ -145,6 +172,7 @@ export class WsClientAdapter {
 
   async stop(): Promise<void> {
     this.stopped = true;
+    this.connected = false;
     if (this.timer) clearTimeout(this.timer);
     this.timer = undefined;
     this.stopHeartbeat();

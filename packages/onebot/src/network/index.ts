@@ -49,3 +49,27 @@ export const MAX_BUFFERED_BYTES = 8 * 1024 * 1024;
 /** 关闭码：鉴权/路径不合法 1008，服务端下线 1012。 */
 export const CLOSE_POLICY_VIOLATION = 1008;
 export const CLOSE_SERVICE_RESTART = 1012;
+
+/** 一类网络的运行状态（WebUI 总览 / 网络页用，纯观测，不参与分发）。 */
+export type NetworkKind = 'http-server' | 'http-client' | 'ws-server' | 'ws-client';
+
+export interface NetworkSnapshot {
+  kind: NetworkKind;
+  /** 配置里的 `name`；没有就退化成地址。 */
+  name: string;
+  /** 监听地址（服务端）或目标地址（客户端）。 */
+  endpoint: string;
+  /** `listening`（服务端在听）/ `connected`（客户端已连上）/ `connecting` / `stopped` / `error`。 */
+  state: 'listening' | 'connected' | 'connecting' | 'stopped' | 'error';
+  /** 实际监听端口（服务端，`port=0` 时是系统分配的）。 */
+  port?: number;
+  /** 已建立的客户端连接数（服务端）或 1/0（客户端）。 */
+  clients: number;
+  /** 最近的错误摘要；重新连上就清空。 */
+  error?: string;
+}
+
+/** 网络适配器实现状态面的统一形状。 */
+export interface NetworkStatus {
+  snapshot(): NetworkSnapshot;
+}

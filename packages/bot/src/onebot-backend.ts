@@ -192,6 +192,16 @@ import {
   getQzonePublicReplies,
   commentQzoneMsg,
   deleteQzoneMsg,
+  fetchGiftMallAIDiscStatus,
+  fetchGiftMallGiftList,
+  fetchGiftMallHomePageExtraInfo,
+  fetchGiftMallSingleGiftInfo,
+  fetchGiftMallVipInfo,
+  fetchGiftMallWall,
+  buildGiftMallSendRequest,
+  forwardQzoneMsg,
+  submitGiftMallBuyItem,
+  searchGiftMall,
   publishQzoneMsg,
   setQzoneLike,
   setQzoneProfile,
@@ -2499,6 +2509,79 @@ function createGroupWebBackend(options: {
             pageSize: pageSize ?? 40,
           }),
         ),
+      // 礼物商城：查询与 WeQ 一样走 VIP 域（p_skey），下单只换一次票、不重放。
+      getGiftMallHome: (toUin?: number) =>
+        withRetry(source, VIP, (cred) =>
+          fetchGiftMallHomePageExtraInfo(cred, toUin ?? Number(selfUin)),
+        ),
+      getGiftMallList: (params: {
+        toUin?: number;
+        tabName?: string;
+        subTabName?: string[];
+        attachInfo?: string;
+        batchNum?: number;
+        crowdTab?: string;
+      }) =>
+        withRetry(source, VIP, (cred) =>
+          fetchGiftMallGiftList(cred, params.toUin ?? Number(selfUin), {
+            ...(params.tabName ? { tabName: params.tabName as never } : {}),
+            ...(params.subTabName ? { subTabName: params.subTabName as never } : {}),
+            ...(params.attachInfo !== undefined ? { attachInfo: params.attachInfo } : {}),
+            ...(params.batchNum !== undefined ? { batchNum: params.batchNum } : {}),
+            ...(params.crowdTab !== undefined ? { crowdTab: params.crowdTab } : {}),
+          }),
+        ),
+      searchGiftMall: (params: {
+        keyword: string;
+        toUin?: number;
+        pageNo?: number;
+        pageSize?: number;
+        attachInfo?: string;
+      }) =>
+        withRetry(source, VIP, (cred) =>
+          searchGiftMall(cred, {
+            keyword: params.keyword,
+            toUin: params.toUin ?? Number(selfUin),
+            pageNo: params.pageNo ?? 1,
+            pageSize: params.pageSize ?? 20,
+            ...(params.attachInfo !== undefined ? { attachInfo: params.attachInfo } : {}),
+          }),
+        ),
+      getGiftMallGift: (giftId: string, toUin?: number) =>
+        withRetry(source, VIP, (cred) =>
+          fetchGiftMallSingleGiftInfo(cred, giftId, toUin ?? Number(selfUin)),
+        ),
+      getGiftMallVip: (giftId: string) =>
+        withRetry(source, VIP, (cred) => fetchGiftMallVipInfo(cred, giftId)),
+      getGiftMallWall: (params: { isSend: boolean; beginTime: number; batchInfo: string }) =>
+        withRetry(source, VIP, (cred) => fetchGiftMallWall(cred, params)),
+      getGiftMallAiDiscStatus: () =>
+        withRetry(source, VIP, (cred) => fetchGiftMallAIDiscStatus(cred)),
+      async sendGift(params: {
+        gift: { giftId: number; giftPrice?: number; svipDiscount?: number };
+        toUin: number;
+        message?: string;
+        needAnonymous?: boolean;
+        buyNum?: number;
+      }) {
+        if (params.gift.giftPrice === undefined || params.gift.svipDiscount === undefined) {
+          throw new Error('礼物缺少 giftPrice / svipDiscount，请先读取列表或详情');
+        }
+        const request = buildGiftMallSendRequest({
+          gift: {
+            giftId: params.gift.giftId,
+            giftPrice: params.gift.giftPrice,
+            svipDiscount: params.gift.svipDiscount,
+          },
+          senderUin: Number(selfUin),
+          toUin: params.toUin,
+          ...(params.message !== undefined ? { message: params.message } : {}),
+          ...(params.needAnonymous !== undefined ? { needAnonymous: params.needAnonymous } : {}),
+          ...(params.buyNum !== undefined ? { buyNum: params.buyNum } : {}),
+        });
+        const cred = await source.forDomain(VIP);
+        return submitGiftMallBuyItem(cred, request);
+      },
     },
   };
 }
@@ -2677,6 +2760,10 @@ function createQzoneBackend(options: {
     async forwardPublicFeed(feed: Record<string, unknown>, reason: string) {
       const cred = await source.forDomain(domain);
       return forwardQzonePublicFeed(cred, feed as never, reason);
+    },
+    async forwardMsg(uin: number | undefined, tid: string, reason: string) {
+      const cred = await source.forDomain(domain);
+      await forwardQzoneMsg(cred, target(uin), tid, reason);
     },
   };
 }

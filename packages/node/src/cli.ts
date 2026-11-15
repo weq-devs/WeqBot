@@ -17,6 +17,7 @@ import { adaptNativeBinding, inspectNative } from '@weqbot/wire';
 import { ConfigError, loadConfigFile, mergeConfig } from './config';
 import { loadNative } from './loader';
 import { runSidecar } from './sidecar';
+import { runWebUi } from './webui';
 
 /** 独立进程的默认凭据目录；`WEQBOT_VAULT_DIR` 可覆盖（测试 / 多实例）。 */
 function defaultVaultDir(): string {
@@ -26,26 +27,34 @@ function defaultVaultDir(): string {
 const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
 
 用法:
-  weqbot --account <uin>            启动 bot（P3 落地）
+  weqbot                            只启动 WebUI 控制台，在浏览器里选账号登录
+  weqbot --account <uin>            启动 bot（并同时提供 WebUI 控制台）
+  weqbot --account <uin> --no-webui 只启动 bot，不开控制台
   weqbot --account <uin> --check    只做 native 自检，不连网
   weqbot --print-capabilities       打印原生组件能力
   weqbot --print-capabilities --qq-pid <pid> --account <uin>
                                     额外打印从 QQ 内存读到的 secToken 来源与 TTL
-  weqbot --sidecar --account <uin>  desktop 托管模式：控制通道走 stdio（P3 落地）
+  weqbot --sidecar --account <uin>  desktop 托管模式：控制通道走 stdio
 
 选项:
-  --account <uin>      账号 uin
+  --account <uin>      账号 uin；不给则只起控制台
   --native-dir <dir>   原生组件目录（默认 $WEQBOT_NATIVE_DIR 或 ./native/<platform>-<arch>）
   --qq-db <path>       账号 nt_msg.db 绝对路径（mode2 预检 isQqLoggedIn 用；
                        也可用 $WEQBOT_QQ_DB）
   --config <path>      JSON 配置：native / qq / session / secToken / onebot / log
                        （不含凭据；字段见 packages/node/config.example.json）
+  --webui-port <port>  控制台端口（默认 6099，只听 127.0.0.1）
+  --webui-host <host>  控制台监听地址（默认 127.0.0.1；非回环会告警）
+  --no-webui           不启动控制台
   --qq-pid <pid>       只与 --print-capabilities 连用：诊断 QQ 进程的会话物料
                        （需要 root / CAP_SYS_PTRACE）
   --check              自检模式
   --sidecar            desktop 拉起的托管模式（NDJSON over stdio，见 @weqbot/control）
   --verbose            打开 debug 日志
   -h, --help           显示本帮助
+
+环境变量:
+  WEQBOT_WEBUI_TOKEN   固定控制台令牌（默认每次启动随机生成并打印）
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -57,6 +66,9 @@ async function main(argv: string[]): Promise<number> {
       'qq-db': { type: 'string' },
       'qq-pid': { type: 'string' },
       config: { type: 'string' },
+      'webui-port': { type: 'string' },
+      'webui-host': { type: 'string' },
+      'no-webui': { type: 'boolean', default: false },
       check: { type: 'boolean', default: false },
       sidecar: { type: 'boolean', default: false },
       'print-capabilities': { type: 'boolean', default: false },
@@ -136,21 +148,24 @@ async function main(argv: string[]): Promise<number> {
     return 0;
   }
 
-  if (!values.account) {
-    process.stderr.write('缺少 --account <uin>\n\n');
-    process.stderr.write(USAGE);
-    return 2;
+  if (values.check) {
+    if (!values.account) {
+      process.stderr.write('--check 需要 --account <uin>\n');
+      return 2;
+    }
+    process.stdout.write(
+      `${describeBot({ config: { account: { uin: values.account } }, native })}\n`,
+    );
+    return 0;
   }
-
-  process.stdout.write(
-    `${describeBot({ config: { account: { uin: values.account } }, native })}\n`,
-  );
-
-  if (values.check) return 0;
 
   const vault = new FileCredentialVault({ dir: defaultVaultDir() });
 
   if (values.sidecar) {
+    if (!values.account) {
+      process.stderr.write('--sidecar 需要 --account <uin>\n');
+      return 2;
+    }
     // 凭据只从控制通道拿；事件写回 stdout，日志走 stderr（stdout 是协议流）。
     runSidecar({
       uin: values.account,
@@ -167,30 +182,72 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const qqDbPath = values['qq-db'] ?? process.env.WEQBOT_QQ_DB;
-  const bot = createBot({
-    config: mergeConfig({
-      ...(fileConfig ? { file: fileConfig } : {}),
+  const baseConfig = mergeConfig({
+    ...(fileConfig ? { file: fileConfig } : {}),
+    ...(values.account ? { uin: values.account } : { uin: '' }),
+    ...(qqDbPath ? { qqDbPath } : {}),
+  });
+
+  // 控制台的配置里没有 account：账号由登录页决定（单进程单账号）。
+  const { account: _ignoredAccount, ...consoleConfig } = baseConfig;
+  void _ignoredAccount;
+
+  const webui = values['no-webui']
+    ? undefined
+    : await runWebUi({
+        binding: loaded.binding,
+        native,
+        vault,
+        config: consoleConfig,
+        ...(values.config ? { configPath: values.config } : {}),
+        ...(qqDbPath ? { qqDbPath } : {}),
+        ...(values['webui-host'] ? { host: values['webui-host'] } : {}),
+        ...(values['webui-port'] ? { port: Number(values['webui-port']) } : {}),
+        ...(process.env.WEQBOT_WEBUI_TOKEN ? { token: process.env.WEQBOT_WEBUI_TOKEN } : {}),
+        logger: log,
+      });
+
+  if (!values.account && !webui) {
+    process.stderr.write('没有 --account，且指定了 --no-webui：无事可做\n\n');
+    process.stderr.write(USAGE);
+    return 2;
+  }
+
+  // 带 `--account` 时立即用这个账号上线；不带时停在登录页等用户选。
+  if (values.account) {
+    if (!webui) {
+      // `--no-webui` 的直启路径：自己建 bot，不经过控制台。
+      const bot = createBot({ config: baseConfig, native, vault, logger: log });
+      bot.events.on('state', (change) => log.info('状态', change));
+      const stop = (signal: string): void => {
+        log.info('收到退出信号，开始下线', { signal });
+        void bot.stop('closed').finally(() => process.exit(0));
+      };
+      for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+        process.once(signal, () => stop(signal));
+      }
+      await bot.start();
+      log.info('bot 已上线', {
+        uin: values.account,
+        onebot: bot.onebot
+          ? { port: bot.onebot.port, actions: bot.onebot.actions().length }
+          : 'off',
+      });
+      return -1;
+    }
+    await webui.runtime.startAccount(values.account);
+    log.info('bot 已上线', {
       uin: values.account,
-      ...(qqDbPath ? { qqDbPath } : {}),
-    }),
-    native,
-    vault,
-    logger: log,
-  });
-  bot.events.on('state', (change) => log.info('状态', change));
-  bot.events.on('message', (message) =>
-    log.info('消息', {
-      scene: message.scene,
-      peer: message.peer.id,
-      sender: message.sender.id,
-      elements: message.elements.length,
-      dress: message.dress,
-    }),
-  );
-  bot.events.on('notice', (notice) => log.info('通知', { kind: notice.kind }));
-  bot.events.on('event', (event) => {
-    if (event.type === 'error') log.error(event.error.message, { code: event.error.code });
-  });
+      onebot: webui.runtime.currentBot?.onebot
+        ? {
+            port: webui.runtime.currentBot.onebot.port,
+            actions: webui.runtime.currentBot.onebot.actions().length,
+          }
+        : 'off',
+    });
+  } else {
+    log.info('未指定 --account：控制台等待在登录页选择账号');
+  }
 
   /**
    * 优雅下线：`bot.stop()` 会走 `closeSession` → 发 `UnRegister`，服务端才会
@@ -204,17 +261,13 @@ async function main(argv: string[]): Promise<number> {
    */
   const stop = (signal: string): void => {
     log.info('收到退出信号，开始下线', { signal });
-    void bot.stop('closed').finally(() => process.exit(0));
+    const closing = webui ? webui.close() : Promise.resolve();
+    void closing.finally(() => process.exit(0));
   };
   for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
     process.once(signal, () => stop(signal));
   }
 
-  await bot.start();
-  log.info('bot 已上线', {
-    uin: values.account,
-    onebot: bot.onebot ? { port: bot.onebot.port, actions: bot.onebot.actions().length } : 'off',
-  });
   return -1;
 }
 

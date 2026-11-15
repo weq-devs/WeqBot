@@ -68,6 +68,64 @@ select {
   z-index: 10;
 }
 
+/* ───────────────────────────── 通用件 ───────────────────────────── */
+
+/*
+ * 卡片：控制台唯一的表面单位。浅色靠阴影分层、深色靠 1px 白边 + 顶部内高光
+ * （`--highlight` 在两种模式下分别取值）。
+ */
+.card {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-sm), var(--highlight);
+}
+
+/* 等宽数字：所有会跳动的数值都用它，避免逐帧宽度抖动。 */
+.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* 加载中转圈。`prefers-reduced-motion` 下由上面的全局规则压到接近静止。 */
+.spin {
+  animation: spin 900ms linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* 首屏极短的加载态：只给一个会呼吸的品牌色块，不画 spinner（避免闪烁）。 */
+.boot-screen {
+  display: grid;
+  place-items: center;
+  min-height: 100dvh;
+}
+
+.boot-mark {
+  width: 44px;
+  height: 44px;
+  border-radius: 14px;
+  background: var(--brand-gradient, var(--accent));
+  opacity: 0.5;
+  animation: boot-pulse 1.4s var(--ease-in-out) infinite;
+}
+
+@keyframes boot-pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 0.7;
+    transform: scale(1);
+  }
+}
+
 /* 主题切换的圆形扩散由 JS 驱动（lib/theme.ts），这里关掉 View Transition 默认的交叉淡入。 */
 ::view-transition-old(root),
 ::view-transition-new(root) {

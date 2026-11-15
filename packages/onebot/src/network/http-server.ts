@@ -7,12 +7,14 @@
  */
 
 import { createServer, type IncomingMessage, type Server, type ServerResponse } from 'node:http';
-import { isAuthorized } from './index';
+import { isAuthorized, type NetworkSnapshot } from './index';
 import type { ActionDispatcher } from '../adapter';
 import type { JsonObject, MessageFormat } from '../types';
 import { WsServerAdapter } from './ws-server';
 
 export interface HttpServerOptions {
+  /** 配置里的名字，只用于状态快照展示。 */
+  name?: string;
   host?: string;
   port: number;
   path?: string;
@@ -25,11 +27,29 @@ export interface HttpServerOptions {
 export class HttpServerAdapter {
   private server: Server | undefined;
   private ws: WsServerAdapter | undefined;
+  private listeningPort: number | undefined;
+  private lastError: string | undefined;
 
   constructor(
     private readonly options: HttpServerOptions,
     private readonly dispatch: ActionDispatcher,
   ) {}
+
+  /** 观测快照（WebUI 网络页 / 总览）。 */
+  snapshot(): NetworkSnapshot {
+    const host = this.options.host ?? '127.0.0.1';
+    const port = this.listeningPort ?? this.options.port;
+    const clients = this.ws?.snapshot().clients ?? 0;
+    return {
+      kind: 'http-server',
+      name: this.options.name ?? `http-server:${port}`,
+      endpoint: `${host}:${port}${this.path}`,
+      state: this.lastError ? 'error' : this.server ? 'listening' : 'stopped',
+      ...(port !== undefined ? { port } : {}),
+      clients,
+      ...(this.lastError ? { error: this.lastError } : {}),
+    };
+  }
 
   private get path(): string {
     return (this.options.path ?? '/').replace(/\/$/, '') || '';
@@ -46,8 +66,18 @@ export class HttpServerAdapter {
     });
     this.server = server;
 
-    await new Promise<void>((resolve) => {
-      server.listen(this.options.port, this.options.host ?? '127.0.0.1', () => resolve());
+    await new Promise<void>((resolve, reject) => {
+      server.once('error', (cause: Error) => {
+        this.lastError = cause.message;
+        reject(cause);
+      });
+      server.listen(this.options.port, this.options.host ?? '127.0.0.1', () => {
+        const address = server.address();
+        this.listeningPort =
+          typeof address === 'object' && address ? address.port : this.options.port;
+        this.lastError = undefined;
+        resolve();
+      });
     });
 
     if (this.options.enableWebSocket) {
@@ -66,8 +96,7 @@ export class HttpServerAdapter {
       await this.ws.start();
     }
 
-    const address = server.address();
-    return typeof address === 'object' && address ? address.port : this.options.port;
+    return this.listeningPort ?? this.options.port;
   }
 
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {

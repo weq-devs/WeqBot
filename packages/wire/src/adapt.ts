@@ -123,6 +123,49 @@ export interface RawNativeBinding {
   }>;
   warmupSigner?(wrapperPath: string): Promise<{ signCoreRva: number; vmRva: number }>;
   getBuildInfo?(): NativeBuildInfo;
+
+  // ── 登录页（WebUI W4）用的进程层能力 ────────────────────────────────
+  //
+  // 这些**不进 `NativePort`**：它们是「读本机 QQ 的离线资料」，与 bot 上线链路
+  // 无关，只有 `@weqbot/node` 的 WebUI 服务直接调。
+
+  /** `login.db` 的固定 pre-login key 探测：给出页 HMAC / KDF HMAC 算法。 */
+  testDatabaseKey?(
+    dbPath: string,
+    key: string,
+  ): Promise<{
+    success: boolean;
+    pageHmacAlgorithm?: string | null;
+    kdfHmacAlgorithm?: string | null;
+  }>;
+  /** 用探测出的算法解密 `login.db`，返回账号行；**同步**函数（native 侧不是 async）。 */
+  decryptLoginDb?(
+    loginDbPath: string,
+    algo: { pageHmacAlgorithm: string; kdfHmacAlgorithm: string },
+  ): Array<{
+    uin: string;
+    uid: string;
+    avatarUrl?: string;
+    userName?: string;
+    a1Key?: string;
+    lastLoginAt?: number;
+    a1Payload?: string | null;
+    guid?: string | null;
+  }>;
+  /** `major.node` → `{ appid, qua, version, build }`。 */
+  resolveAppidFromMajor?(majorPath: string): {
+    appid: string;
+    qua?: string | null;
+    version?: string | null;
+    build?: string | null;
+  };
+  /** 从数据根离线计算设备 guid（32 位小写 hex）。 */
+  readDeviceGuid?(dataRoot: string): string | null;
+  /** 二维码登录。事件与 `quickLogin` 的 `onEvent` 同一形状。 */
+  qrLogin?(
+    options: RawQuickLoginOptions,
+    onEvent?: (error: Error | null, event: unknown) => unknown,
+  ): Promise<QuickLoginResult>;
 }
 
 export function adaptNativeBinding(raw: RawNativeBinding): NativePort {

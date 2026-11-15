@@ -82,6 +82,12 @@
   --accent-fill-top: oklch(0.6 0.19 254);
   --accent-fill-bottom: oklch(0.52 0.205 261);
   --on-accent: oklch(0.99 0 0);
+
+  /*
+   * 品牌渐变：只用在 logo、主按钮、少量高光边（见配色纪律第 1 条）。
+   * 与 WeQ logo 同向（hue 236 → 264）。
+   */
+  --brand-gradient: linear-gradient(135deg, var(--logo-from), var(--logo-to));
 }
 
 /* ─────────────────────────────── 浅色 ─────────────────────────────── */

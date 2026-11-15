@@ -7,7 +7,13 @@
  * 独立进程的入口在 `@weqbot/node`。
  */
 
-export { createBot, describeBot, type Bot, type CreateBotOptions } from './createBot';
+export {
+  createBot,
+  describeBot,
+  type Bot,
+  type BotSnapshot,
+  type CreateBotOptions,
+} from './createBot';
 export { generateSecToken } from './sec-token';
 export type { BotConfig, BotOneBotConfig } from './config';
 export { createProtocolBackend, type ProtocolBackendOptions } from './onebot-backend';

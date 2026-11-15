@@ -35,7 +35,7 @@ import { IdentityCache, PushBridge, SessionStateMachine } from '@weqbot/session'
 import { createOneBotAdapter, type OneBotAdapter } from '@weqbot/onebot';
 import type { ProtocolClient } from '@weqbot/protocol';
 import { createOidbWebCredentials, createProtocolClient } from '@weqbot/protocol';
-import type { BotConfig } from './config';
+import type { BotConfig, BotOneBotConfig } from './config';
 import { createMediaUrlResolver } from './media-url';
 import { createProtocolBackend } from './onebot-backend';
 import { generateSecToken } from './sec-token';
@@ -48,6 +48,21 @@ export interface CreateBotOptions {
   logger?: Logger;
   /** 覆盖 secToken 生成（测试 / 逆向实验用）。 */
   secToken?: (account: StoredAccount) => string;
+  /**
+   * OneBot action 调用观测钩子（WebUI 日志 / 调试页）。
+   *
+   * 透传给 `createOneBotAdapter`；本层不解释它，也不为它改变任何行为。
+   */
+  onActionCall?(entry: {
+    ts: number;
+    action: string;
+    params: Record<string, unknown>;
+    retcode: number;
+    status: 'ok' | 'failed';
+    latencyMs: number;
+    transport: 'ws' | 'http' | 'webui';
+    client: string;
+  }): void;
 }
 
 export interface Bot {
@@ -60,10 +75,41 @@ export interface Bot {
   readonly protocol: ProtocolClient | undefined;
   /** OneBot 适配器；未配置 `config.onebot` 时为 undefined。 */
   readonly onebot: OneBotAdapter | undefined;
+  /**
+   * 观测快照：会话 / 重连 / SecToken / 设备档案。
+   *
+   * WebUI 总览用。**不包含任何凭据**（a1 / a2 / d2 / d2Key / secToken 都不在里面）。
+   */
+  readonly snapshot: BotSnapshot;
   start(): Promise<void>;
   stop(reason?: OfflineReason): Promise<void>;
   /** 立即原地轮换 `SecToken`（不重连、不重新登录）。 */
   refreshSecToken(): Promise<void>;
+  /**
+   * 只重启 OneBot 网络适配器，**不动会话**（WebUI 改网络配置用）。
+   *
+   * 传入的配置会替换 `createBot` 时的那一份，随后从现在起生效。失败会把旧适配器
+   * 恢复回来并抛出 —— 不能因为改错一个端口就把整个 OneBot 面搞没。
+   */
+  reloadOneBot(config?: BotOneBotConfig): Promise<void>;
+}
+
+/** 总览页需要的观测数据；不含凭据。 */
+export interface BotSnapshot {
+  uin: string;
+  uid?: string;
+  state: SessionState;
+  /** 当前 native 会话 id（未上线时 undefined）。 */
+  sessionId?: number;
+  /** 进入在线状态的时刻（ms）；不在线时 undefined。 */
+  onlineSince?: number;
+  device?: DeviceProfile;
+  /** 本次进程内重连 / 重登次数。 */
+  reconnects: number;
+  /** SecToken 下次轮换时刻（ms）；关闭轮换或未排期时 undefined。 */
+  secTokenRotatesAt?: number;
+  /** 本次进程启动时刻（ms）。 */
+  startedAt: number;
 }
 
 export function createBot(options: CreateBotOptions): Bot {
@@ -91,6 +137,13 @@ export function createBot(options: CreateBotOptions): Bot {
   let tokenTimer: ReturnType<typeof setTimeout> | undefined;
   let reloginTimer: ReturnType<typeof setTimeout> | undefined;
   let reloginAttempts = 0;
+  /** 本次进程内累计的重连次数（含成功与失败的重登尝试）。 */
+  let reconnects = 0;
+  let onlineSince: number | undefined;
+  let secTokenRotatesAt: number | undefined;
+  /** 当前生效的 OneBot 配置；`reloadOneBot` 会替换它。 */
+  let onebotConfig: BotOneBotConfig | undefined = config.onebot;
+  const startedAt = Date.now();
   /** 主动 stop 期间忽略 native 的 `closed`，避免自己触发重登。 */
   let stopping = false;
 
@@ -208,12 +261,16 @@ export function createBot(options: CreateBotOptions): Bot {
   function scheduleTokenRotation(): void {
     if (machine.isTerminal) return;
     const rotateMs = config.secToken?.rotateMs ?? 24 * 60 * 60 * 1000;
-    if (rotateMs <= 0) return;
+    if (rotateMs <= 0) {
+      secTokenRotatesAt = undefined;
+      return;
+    }
     if (!native.setSecToken) {
       log.warn('native 缺少 setSecToken，长跑将无法轮换 SecToken', { uin });
       return;
     }
 
+    secTokenRotatesAt = Date.now() + rotateMs;
     tokenTimer = setTimeout(() => {
       void refreshSecToken()
         .catch((cause) => log.warn('SecToken 轮换失败', { uin, cause }))
@@ -403,20 +460,21 @@ export function createBot(options: CreateBotOptions): Bot {
     }
 
     reloginAttempts = 0;
+    onlineSince = Date.now();
     scheduleTokenRotation();
     await startOneBot();
   }
 
   /** 起 OneBot（若已配置）。失败只记日志：OneBot 挂了不该把会话一起拖下水。 */
   async function startOneBot(): Promise<void> {
-    if (!config.onebot || onebot) return;
+    if (!onebotConfig || onebot) return;
     if (!protocol) return;
 
     try {
       // 空间 cgi 的凭据来源：纯 OIDB（`0x102a_1` → jump → `0x102a_0`），
       // 不需要 QQ 进程，也不走 pt_login（那是 WeQ 宿主的能力，见 TODO D18）。
       const webCredentials =
-        config.onebot.qzone === false
+        onebotConfig.qzone === false
           ? undefined
           : createOidbWebCredentials({
               native: protocol.native,
@@ -432,7 +490,7 @@ export function createBot(options: CreateBotOptions): Bot {
         ...(selfUid ? { selfUid: selfUid } : {}),
         logger: log,
         ...(webCredentials ? { webCredentials } : {}),
-        ...(config.onebot.qzoneDomain ? { qzoneDomain: config.onebot.qzoneDomain } : {}),
+        ...(onebotConfig.qzoneDomain ? { qzoneDomain: onebotConfig.qzoneDomain } : {}),
         imageUrlResolver: (element, isGroup) => media.imageUrl(element, isGroup),
         mediaUrlResolver: (element, isGroup) => media.mediaUrl(element, isGroup),
         shutdown: (reason) => stop(reason === 'bot-exit' ? 'bot-exit' : 'closed'),
@@ -442,7 +500,7 @@ export function createBot(options: CreateBotOptions): Bot {
         },
       });
       const adapter = createOneBotAdapter({
-        config: config.onebot,
+        config: onebotConfig,
         backend,
         selfId: Number(uin),
         events: {
@@ -452,6 +510,7 @@ export function createBot(options: CreateBotOptions): Bot {
         imageUrlResolver: (element, isGroup) => media.imageUrl(element, isGroup),
         mediaUrlResolver: (element, isGroup) => media.mediaUrl(element, isGroup),
         logger: log,
+        ...(options.onActionCall ? { onActionCall: options.onActionCall as never } : {}),
       });
       await adapter.start();
       onebot = adapter;
@@ -469,6 +528,44 @@ export function createBot(options: CreateBotOptions): Bot {
       await adapter.stop();
     } catch (cause) {
       log.warn('OneBot 停止失败', { uin, cause });
+    }
+  }
+
+  /**
+   * 换一份 OneBot 配置并重启适配器。
+   *
+   * 顺序是「旧的一定先停」：端口冲突本身就是最常见的失败原因，先停再起才可能
+   * 复用同一个端口。旧适配器停掉后新配置起不来时，用旧配置再起一次 —— WebUI 的
+   * 「保存」按钮不该把用户正在用的 OneBot 面搞没。
+   */
+  async function reloadOneBot(next?: BotOneBotConfig): Promise<void> {
+    const previousConfig = onebotConfig;
+    const previousAdapter = onebot;
+    if (next !== undefined) onebotConfig = next;
+    else onebotConfig = config.onebot;
+
+    await stopOneBot();
+    if (!onebotConfig) {
+      log.info('OneBot 配置已清空，网络适配器全部停止', { uin });
+      return;
+    }
+    if (!protocol) {
+      log.info('会话不在线，OneBot 配置已记录，上线后生效', { uin });
+      return;
+    }
+
+    try {
+      await startOneBot();
+      if (!onebot) throw new Error('OneBot 适配器没有起来（见上一条日志）');
+    } catch (cause) {
+      log.error('新 OneBot 配置启动失败，回滚到上一份', { uin, cause });
+      onebotConfig = previousConfig;
+      await stopOneBot();
+      if (previousAdapter && previousConfig) {
+        onebotConfig = previousConfig;
+        await startOneBot();
+      }
+      throw cause;
     }
   }
 
@@ -518,6 +615,7 @@ export function createBot(options: CreateBotOptions): Bot {
     }
 
     reloginAttempts += 1;
+    reconnects += 1;
     const delay = Math.min(1000 * 2 ** (reloginAttempts - 1), 16_000);
     if (machine.state === 'online') machine.transition('degraded', `第 ${reloginAttempts} 次重登`);
     log.info('准备重登', { uin, attempt: reloginAttempts, delayMs: delay });
@@ -584,9 +682,23 @@ export function createBot(options: CreateBotOptions): Bot {
     get onebot() {
       return onebot;
     },
+    get snapshot(): BotSnapshot {
+      return {
+        uin,
+        ...(selfUid ? { uid: selfUid } : {}),
+        state: machine.state,
+        ...(session ? { sessionId: session.sessionId } : {}),
+        ...(onlineSince !== undefined && machine.state === 'online' ? { onlineSince } : {}),
+        ...(storedAccount ? { device: storedAccount.device } : {}),
+        reconnects,
+        ...(secTokenRotatesAt !== undefined ? { secTokenRotatesAt } : {}),
+        startedAt,
+      };
+    },
     start,
     stop,
     refreshSecToken,
+    reloadOneBot,
   };
 }
 

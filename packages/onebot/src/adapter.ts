@@ -15,7 +15,7 @@ import { createLogger, type Logger } from '@weqbot/common';
 import type { BotEvent, BotEventMap } from '@weqbot/session';
 
 type BotEventMapEvent<K extends keyof BotEventMap> = BotEventMap[K];
-import { ActionRegistry, type ActionContext } from './action-registry';
+import { ActionRegistry, type ActionContext, type ActionDoc } from './action-registry';
 import { registerActions } from './actions';
 import { describeBackend, type OneBotBackend, type RecallTarget } from './backend';
 import { convertEvent, heartbeatMetaEvent, lifecycleMetaEvent } from './event-converter';
@@ -24,6 +24,7 @@ import { MessageStore } from './message-store';
 import type { JsonObject, JsonValue, MessageFormat, OneBotConfig } from './types';
 import { HttpClientAdapter } from './network/http-client';
 import { HttpServerAdapter } from './network/http-server';
+import type { NetworkSnapshot } from './network';
 import { WsClientAdapter } from './network/ws-client';
 import { WsServerAdapter } from './network/ws-server';
 
@@ -33,10 +34,43 @@ interface NetworkAdapter {
   stop(): Promise<void>;
   /** `report_self_message`：false 时不推自己发出的消息。 */
   readonly reportSelfMessage: boolean;
+  /** 观测快照；老适配器可能没有，调用方按可选处理。 */
+  snapshot?(): NetworkSnapshot;
 }
 
 export interface ActionDispatchOptions {
   echo?: unknown;
+  /** 适配器注入的观测钩子（网络层不需要知道）。 */
+  onActionCall?(entry: {
+    ts: number;
+    action: string;
+    params: JsonObject;
+    retcode: number;
+    status: 'ok' | 'failed';
+    latencyMs: number;
+    transport: 'ws' | 'http' | 'webui';
+    client: string;
+  }): void;
+  /** 调用方的传输类型（日志 / 统计用）；`call()` 内部固定传 `webui`。 */
+  transport?: 'ws' | 'http' | 'webui';
+  /** 客户端标识（连接名 / 远端地址）。 */
+  client?: string;
+  /**
+   * 调用观测钩子（WebUI 的 action 流水）。
+   *
+   * 放在 dispatch 上而不是网络层：WebUI 调试页也走同一个 `dispatch`，两处埋点
+   * 会漂移。钩子同步返回即可，不阻塞响应。
+   */
+  observer?(entry: {
+    ts: number;
+    action: string;
+    params: JsonObject;
+    retcode: number;
+    status: 'ok' | 'failed';
+    latencyMs: number;
+    transport: 'ws' | 'http' | 'webui';
+    client: string;
+  }): void;
 }
 
 /** 网络层拿到的分发函数：解析好的 action 名 + 参数 → OneBot 响应。 */
@@ -82,6 +116,22 @@ export interface CreateOneBotAdapterOptions {
     element: Record<string, unknown>,
     isGroup: boolean,
   ) => Promise<string> | string;
+  /**
+   * action 调用观测钩子（WebUI 的调试页 / 日志页）。
+   *
+   * 每条调用结束时回调一次，**包括** 1404（那说明客户端在调一个不存在的 action，
+   * 恰恰是需要看的）。不阻塞响应。
+   */
+  onActionCall?(entry: {
+    ts: number;
+    action: string;
+    params: JsonObject;
+    retcode: number;
+    status: 'ok' | 'failed';
+    latencyMs: number;
+    transport: 'ws' | 'http' | 'webui';
+    client: string;
+  }): void;
 }
 
 export interface OneBotAdapter {
@@ -90,6 +140,20 @@ export interface OneBotAdapter {
   actions(): string[];
   /** 被跳过（后端没实现 / 敏感能力）的 action 名。 */
   skipped(): string[];
+  /** 已注册 action 的文档元数据（含 `group` / `write`），WebUI 调试页分组用。 */
+  describe(): ActionDoc[];
+  /**
+   * 各网络适配器的运行快照（WebUI 总览 / 网络页）。
+   *
+   * 只读观测，不参与分发；顺序与配置里声明的顺序一致。
+   */
+  networks(): NetworkSnapshot[];
+  /**
+   * 直接从进程内分发一次 action（不经 OneBot 网络）。
+   *
+   * WebUI 调试页用。走的是同一个注册表，所以敏感能力 / 未注册能力照样 1404。
+   */
+  call(action: string, params: JsonObject): Promise<unknown>;
   start(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -194,7 +258,33 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
   const dispatch: ActionDispatcher = async (action, params, options) => {
     // 每个网络有自己的 messageFormat，ack 时用默认 array；事件已经各自处理。
     // echo 必须原样回传：客户端靠它把响应和请求配对。
-    return registry.call(action, params, context(), options?.echo as JsonValue | undefined);
+    const started = Date.now();
+    const response = registry.call(
+      action,
+      params,
+      context(),
+      options?.echo as JsonValue | undefined,
+    );
+    // action 调用流水：只记录**真实发生**的调用（1404 也记，那说明客户端在调一个
+    // 不存在的 action）。`dispatch` 是所有网络 + WebUI 调试页的唯一入口，埋点放
+    // 这里才不会两处漂移。
+    const observer = options?.observer ?? options?.onActionCall;
+    if (observer) {
+      const settled = await response;
+      const record = settled as { status?: string; retcode?: number };
+      observer({
+        ts: started,
+        action,
+        params,
+        retcode: record.retcode ?? -1,
+        status: record.status === 'ok' ? 'ok' : 'failed',
+        latencyMs: Date.now() - started,
+        transport: options?.transport ?? 'ws',
+        client: options?.client ?? 'unknown',
+      });
+      return settled;
+    }
+    return response;
   };
 
   /** 一个事件 → 所有连接（各连接自己决定格式）。 */
@@ -269,10 +359,25 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
     let firstPort: number | undefined;
     const { networks: config } = options.config;
 
+    /**
+     * 给每个网络适配器包一层，把 `transport` / `client` 与观测钩子带上。
+     * 网络层本身不需要知道「怎么记录」。
+     */
+    const dispatchFor =
+      (transport: 'ws' | 'http', client: string): ActionDispatcher =>
+      (action, params, dispatchOptions) =>
+        dispatch(action, params, {
+          ...dispatchOptions,
+          transport,
+          client,
+          ...(options.onActionCall ? { onActionCall: options.onActionCall } : {}),
+        });
+
     for (const server of config.httpServers) {
       if (server.enabled === false) continue;
       const adapter = new HttpServerAdapter(
         {
+          ...(server.name ? { name: server.name } : {}),
           host: server.host ?? '127.0.0.1',
           port: server.port,
           ...(server.path ? { path: server.path } : {}),
@@ -281,7 +386,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
           reportSelfMessage: server.reportSelfMessage,
           ...(server.enableWebSocket ? { enableWebSocket: true } : {}),
         },
-        dispatch,
+        dispatchFor('http', server.name),
       );
       const port = await adapter.start();
       firstPort ??= port;
@@ -293,6 +398,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
       if (server.enabled === false) continue;
       const adapter = new WsServerAdapter(
         {
+          ...(server.name ? { name: server.name } : {}),
           host: server.host ?? '127.0.0.1',
           port: server.port,
           ...(server.path ? { path: server.path } : {}),
@@ -301,7 +407,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
           messageFormat: server.messageFormat,
           reportSelfMessage: server.reportSelfMessage,
         },
-        dispatch,
+        dispatchFor('ws', server.name),
       );
       const port = await adapter.start();
       firstPort ??= port;
@@ -313,6 +419,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
       if (client.enabled === false) continue;
       const adapter = new WsClientAdapter(
         {
+          ...(client.name ? { name: client.name } : {}),
           url: client.url,
           ...(client.role ? { role: client.role } : {}),
           ...(client.accessToken ? { accessToken: client.accessToken } : {}),
@@ -323,7 +430,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
             : {}),
           selfId: options.selfId,
         },
-        dispatch,
+        dispatchFor('ws', client.name),
       );
       adapter.start();
       networks.push(adapter);
@@ -333,6 +440,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
     for (const client of config.httpClients) {
       if (client.enabled === false) continue;
       const adapter = new HttpClientAdapter({
+        ...(client.name ? { name: client.name } : {}),
         url: client.url,
         ...(client.accessToken ? { accessToken: client.accessToken } : {}),
         messageFormat: client.messageFormat,
@@ -350,6 +458,26 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
 
     actions: () => registered,
     skipped: () => skipped,
+    describe: () => registry.describe(),
+
+    networks: () =>
+      networks.map(
+        (network) =>
+          network.snapshot?.() ?? {
+            kind: 'http-client' as const,
+            name: 'unknown',
+            endpoint: '',
+            state: 'stopped' as const,
+            clients: 0,
+          },
+      ),
+
+    /**
+     * 进程内直接分发：与网络层走同一个注册表与 `dispatch`，因此鉴权 / 敏感
+     * action / 未注册能力的语义完全一致。`echo` 固定为 undefined（调用方是 WebUI，
+     * 拿的是返回值本身，不靠 echo 配对）。
+     */
+    call: (action, params) => dispatch(action, params, { transport: 'webui', client: 'webui' }),
 
     async start() {
       if (started) throw new Error('OneBot 适配器已经启动');

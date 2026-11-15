@@ -1,0 +1,324 @@
+/* ───────────────────────────── 调试页 ───────────────────────────── */
+
+.dbg {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 1fr) minmax(0, 1fr);
+  gap: 14px;
+  height: calc(100dvh - 56px - 60px);
+  min-height: 420px;
+}
+
+/* ───────────────────────────── Action 列表 ───────────────────────────── */
+
+.dbg-actions {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dbg-search {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 8px;
+  padding: 0 9px;
+  height: 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg);
+  color: var(--text-faint);
+}
+
+.dbg-search:focus-within {
+  border-color: var(--accent-border);
+}
+
+.dbg-search input {
+  width: 100%;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  font-size: var(--text-sm);
+  outline: none;
+}
+
+.dbg-action-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 0 6px 8px;
+}
+
+.dbg-empty {
+  margin: 0;
+  padding: 14px 10px;
+  color: var(--text-faint);
+  font-size: var(--text-sm);
+  line-height: 1.6;
+}
+
+.dbg-group h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 10px 6px 3px;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  font-weight: 500;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.dbg-group h3 span {
+  padding: 0 5px;
+  border-radius: var(--radius-full);
+  background: var(--bg-sunken);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+  text-transform: none;
+}
+
+.dbg-group ul {
+  display: grid;
+  gap: 1px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.dbg-action {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  width: 100%;
+  padding: 5px 8px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.dbg-action:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.dbg-action[aria-current="true"] {
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.dbg-action em {
+  flex: none;
+  margin-left: auto;
+  padding: 0 5px;
+  border-radius: var(--radius-xs);
+  background: color-mix(in oklch, var(--status-warning) 14%, transparent);
+  color: color-mix(in oklch, var(--status-warning) 82%, var(--text));
+  font-size: 10px;
+  font-style: normal;
+}
+
+/* ───────────────────────────── 编辑区 ───────────────────────────── */
+
+.dbg-editor,
+.dbg-result {
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dbg-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.dbg-head h2 {
+  margin: 0;
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.dbg-summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.dbg-badge {
+  padding: 1px 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-full);
+  color: var(--text-muted);
+  font-size: 10.5px;
+}
+
+.dbg-badge[data-tone="warning"] {
+  border-color: color-mix(in oklch, var(--status-warning) 40%, transparent);
+  color: color-mix(in oklch, var(--status-warning) 82%, var(--text));
+}
+
+.dbg-params {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.dbg-params textarea {
+  flex: 1;
+  width: 100%;
+  padding: 12px 14px;
+  border: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--text-xs);
+  line-height: 1.65;
+  resize: none;
+  outline: none;
+  tab-size: 2;
+}
+
+.dbg-parse-error {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  padding: 7px 14px;
+  border-top: 1px solid var(--status-critical-border);
+  background: var(--status-critical-soft);
+  color: var(--status-critical-text);
+  font-family: var(--font-mono);
+  font-size: var(--text-xs);
+}
+
+.dbg-footer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+}
+
+/* 写操作确认条：警告色 + 明确的文字，不是只靠按钮颜色。 */
+.dbg-confirm {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  flex-wrap: wrap;
+  color: var(--status-warning);
+  font-size: var(--text-sm);
+}
+
+.dbg-result-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.dbg-status {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--status-critical-soft);
+  color: var(--status-critical-text);
+  font-family: var(--font-mono);
+}
+
+.dbg-status[data-ok="true"] {
+  background: color-mix(in oklch, var(--status-good) 14%, transparent);
+  color: color-mix(in oklch, var(--status-good) 82%, var(--text));
+}
+
+.dbg-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  height: 24px;
+  padding: 0 8px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  cursor: pointer;
+}
+
+.dbg-copy:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+.dbg-json {
+  flex: 1;
+  margin: 0;
+  padding: 12px 14px;
+  overflow: auto;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.65;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.dbg-failure {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 12px 14px;
+  padding: 9px 11px;
+  border: 1px solid var(--status-critical-border);
+  border-radius: var(--radius-sm);
+  background: var(--status-critical-soft);
+  color: var(--status-critical-text);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.dbg-idle {
+  display: grid;
+  flex: 1;
+  place-items: center;
+  align-content: center;
+  gap: 8px;
+  color: var(--text-faint);
+}
+
+.dbg-idle p {
+  margin: 0;
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 1180px) {
+  .dbg {
+    grid-template-columns: 220px minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr) minmax(0, 1fr);
+    height: auto;
+  }
+
+  .dbg-actions {
+    grid-row: span 2;
+  }
+
+  .dbg-editor,
+  .dbg-result {
+    min-height: 300px;
+  }
+}

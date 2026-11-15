@@ -15,11 +15,14 @@ import {
   canReceiveEvent,
   isAuthorized,
   MAX_BUFFERED_BYTES,
+  type NetworkSnapshot,
 } from './index';
 import type { ActionDispatcher } from '../adapter';
 import type { JsonObject, MessageFormat, WsRole } from '../types';
 
 export interface WsServerOptions {
+  /** 配置里的名字，只用于状态快照展示。 */
+  name?: string;
   host?: string;
   /** 复用已有 HTTP server 时不需要（也不会被监听）。 */
   port?: number;
@@ -43,6 +46,8 @@ interface Connection {
 export class WsServerAdapter {
   private server: WsServer | undefined;
   private readonly connections = new Set<Connection>();
+  private listeningPort: number | undefined;
+  private lastError: string | undefined;
 
   constructor(
     private readonly options: WsServerOptions,
@@ -91,10 +96,32 @@ export class WsServerAdapter {
     return new Promise((resolve, reject) => {
       server.once('listening', () => {
         const address = server.address();
-        resolve(typeof address === 'object' && address ? address.port : (this.options.port ?? 0));
+        const port =
+          typeof address === 'object' && address ? address.port : (this.options.port ?? 0);
+        this.listeningPort = port;
+        this.lastError = undefined;
+        resolve(port);
       });
-      server.once('error', reject);
+      server.once('error', (cause) => {
+        this.lastError = cause.message;
+        reject(cause);
+      });
     });
+  }
+
+  /** 观测快照（WebUI 网络页 / 总览）。 */
+  snapshot(): NetworkSnapshot {
+    const host = this.options.host ?? '127.0.0.1';
+    const port = this.listeningPort ?? this.options.port;
+    return {
+      kind: 'ws-server',
+      name: this.options.name ?? `ws-server:${port ?? '?'}${this.path === '/' ? '' : this.path}`,
+      endpoint: `${host}:${port ?? '?'}${this.path}`,
+      state: this.lastError ? 'error' : this.server ? 'listening' : 'stopped',
+      ...(port !== undefined ? { port } : {}),
+      clients: this.connections.size,
+      ...(this.lastError ? { error: this.lastError } : {}),
+    };
   }
 
   private onConnection(socket: WsSocket, _request: IncomingMessage): void {
