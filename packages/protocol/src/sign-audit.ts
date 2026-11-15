@@ -126,19 +126,18 @@ export const MEASURED_COMMANDS: Readonly<Record<string, ReadonlyArray<keyof Sign
   'OidbSvcTrpcTcp.0x1255_0': ['linux', 'win32', 'darwin'],
   'OidbSvcTrpcTcp.0xf16_1': ['linux', 'win32', 'darwin'],
 
-  // 2026-11-15 Linux（QQ 3.2.35-54395）/ 2026-11-16 Windows（QQ 9.9.35-52892）
-  // probe-sign 实测，P8 新增的 8 条命令。正对照 `0x88d_0` 通过（它自己签名），
-  // 命中、0 丢帧 —— 因此「无 tag 24」是真的不签名。
-  // ⚠️ 正文是占位：签名决策看命令字，但真实业务正文未验收。
-  // macOS 待测；补测后把 'darwin' 追加进对应数组。
-  'OidbSvcTrpcTcp.0x88d_0': ['linux', 'win32'], // 签（两端）
-  'OidbSvcTrpcTcp.0x929d_0': ['linux', 'win32'], // 不签
-  'OidbSvcTrpcTcp.0x6d9_0': ['linux', 'win32'], // 不签
-  'OidbSvcTrpcTcp.0x93d4_1': ['linux', 'win32'], // 不签
-  'OidbSvcTrpcTcp.0x12a9_200': ['linux', 'win32'], // Linux 不签 / Windows 签
-  'OidbSvcTrpcTcp.0x9060_3': ['linux', 'win32'], // 不签
-  'LightAppSvc.mini_app_share.AdaptShareInfo': ['linux', 'win32'], // 不签
-  'MQUpdateSvc_com_qq_ti.web.OidbSvc.0xe17_0': ['linux', 'win32'], // 不签
+  // 2026-11-15/16 三端 probe-sign 实测，P8 新增的 8 条命令。
+  // Linux QQ 3.2.35-54395 / Windows QQ 9.9.35-52892 / macOS（与 Windows 一致）。
+  // 正对照 `0x88d_0` 通过（它自己签名），命中、0 丢帧 —— 因此「无 tag 24」是真的
+  // 不签名。⚠️ 正文是占位：签名决策看命令字，但真实业务正文未验收。
+  'OidbSvcTrpcTcp.0x88d_0': ['linux', 'win32', 'darwin'], // 三端都签
+  'OidbSvcTrpcTcp.0x929d_0': ['linux', 'win32', 'darwin'], // 不签
+  'OidbSvcTrpcTcp.0x6d9_0': ['linux', 'win32', 'darwin'], // 不签
+  'OidbSvcTrpcTcp.0x93d4_1': ['linux', 'win32', 'darwin'], // 不签
+  'OidbSvcTrpcTcp.0x12a9_200': ['linux', 'win32', 'darwin'], // Linux 不签 / Windows、macOS 签
+  'OidbSvcTrpcTcp.0x9060_3': ['linux', 'win32', 'darwin'], // 不签
+  'LightAppSvc.mini_app_share.AdaptShareInfo': ['linux', 'win32', 'darwin'], // 不签
+  'MQUpdateSvc_com_qq_ti.web.OidbSvc.0xe17_0': ['linux', 'win32', 'darwin'], // 不签
 };
 
 export interface SignAuditEntry {
