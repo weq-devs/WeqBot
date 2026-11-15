@@ -133,7 +133,7 @@ function overview(): Overview {
             device: {
               os: 'linux',
               appId: 1600001615,
-              subAppId: 5371,
+              subAppId: 537403759,
               qua: 'V1_LINUX_3.2.35',
               clientVersion: '3.2.35-54395',
             },

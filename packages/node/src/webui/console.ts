@@ -262,6 +262,8 @@ export class ConsoleRuntime {
     let stored = await this.options.vault.get(uin);
     if (!stored || stored.a1.length === 0) {
       stored = await this.accountFromLoginDb(uin, paths, environment);
+    } else {
+      stored = await this.refreshDevice(stored, environment);
     }
 
     this.phase = 'starting';
@@ -291,11 +293,52 @@ export class ConsoleRuntime {
     }
   }
 
+  /**
+   * 用当前 QQ 安装刷新 vault 里的设备档案。
+   *
+   * vault 存的是**上次登录时**的档案。QQ 升级后 `subAppId` / `clientVersion`
+   * 会变，继续用旧值会让 ECDH 被静默丢弃或 EasyLogin 报参数错误。
+   * 只刷新设备字段，凭据（a1 / guid / uid）原样保留。
+   */
+  private async refreshDevice(
+    stored: StoredAccount,
+    environment: LoginEnvironment,
+  ): Promise<StoredAccount> {
+    if (!environment.client) return stored; // 没有 major.node 就保持原样，交给上层报错
+    const device = deviceProfileOf(environment);
+    const changed =
+      device.appId !== stored.device.appId ||
+      device.subAppId !== stored.device.subAppId ||
+      device.clientVersion !== stored.device.clientVersion ||
+      device.qua !== stored.device.qua;
+    if (!changed) return stored;
+    const next: StoredAccount = { ...stored, device };
+    try {
+      await this.options.vault.put(next);
+      this.log.info('设备档案已随 QQ 版本更新', {
+        uin: stored.uin,
+        from: stored.device,
+        to: device,
+      });
+    } catch (cause) {
+      // 写回失败不阻塞登录：本次用新档案照样能上，只是下次还要再算一遍。
+      this.log.warn('设备档案写回 vault 失败（已忽略）', {
+        uin: stored.uin,
+        cause: messageOf(cause),
+      });
+    }
+    return next;
+  }
+
   private async accountFromLoginDb(
     uin: string,
     paths: QqPaths,
     environment: LoginEnvironment,
   ): Promise<StoredAccount> {
+    // `readLoginDbAccounts` 依赖 `probeCache` 里的 HMAC 算法（它自己是同步的，
+    // 拿不到 async 的探测结果）。用户可能没先打开登录页就调 startAccount，
+    // 所以这里必须自己预热一次，否则永远读不到 a1 并报 NO_CREDENTIAL。
+    await this.refreshLoginAccounts();
     const rows = this.readLoginDbAccounts();
     const row = rows.find((item) => item.uin === uin);
     if (!row?.a1Payload) {
@@ -315,13 +358,7 @@ export class ConsoleRuntime {
     const guid = row.guid ?? this.readGuid(paths.dataRoot);
     if (!guid) throw new HttpError(400, 'NO_GUID', '读不到设备 guid，无法用本机凭据登录');
 
-    const device: DeviceProfile = {
-      os: osOf(process.platform),
-      appId: Number(environment.client.appid),
-      subAppId: 5371,
-      qua: environment.client.qua ?? `V1_${environment.platform.toUpperCase()}_9.9.9`,
-      clientVersion: environment.client.version ?? '9.9.9',
-    };
+    const device = deviceProfileOf(environment);
     const stored: StoredAccount = {
       uin: row.uin,
       uid: row.uid,
@@ -376,6 +413,7 @@ export class ConsoleRuntime {
     guid: string,
   ): Promise<QrSnapshot> {
     const client = environment.client!;
+    const device = deviceProfileOf(environment);
     const update = (patch: Partial<QrSnapshot>): void => {
       Object.assign(snapshot, patch);
       this.emitQr(snapshot);
@@ -398,8 +436,9 @@ export class ConsoleRuntime {
           // napi 的 `Option<String>` 只认 `undefined`，传 `null` 会报
           // 「Failed to convert Null into rust type String」。
           uid: undefined,
-          appId: Number(client.appid),
-          subAppId: 5371,
+          // 两个 AppId 语义不同，见 `deviceProfileOf` 的注释。
+          appId: device.appId,
+          subAppId: device.subAppId,
           // 同样是 napi `Option<String>`：缺值传 `undefined`，不要传 `null`。
           wrapperPath: environment.wrapperNode ?? undefined,
           os: OS_NAME[osOf(process.platform)],
@@ -455,15 +494,8 @@ export class ConsoleRuntime {
     environment: LoginEnvironment,
     guid: string,
   ): Promise<void> {
-    const client = environment.client!;
     const existing = await this.options.vault.get(result.uin);
-    const device: DeviceProfile = {
-      os: osOf(process.platform),
-      appId: Number(client.appid),
-      subAppId: 5371,
-      qua: client.qua ?? `V1_${environment.platform.toUpperCase()}_9.9.9`,
-      clientVersion: client.version ?? '9.9.9',
-    };
+    const device = deviceProfileOf(environment);
     await this.options.vault.put({
       uin: result.uin,
       uid: result.uid ?? existing?.uid ?? '',
@@ -750,10 +782,75 @@ const OS_NAME: Record<DeviceProfile['os'], string> = {
 };
 const NATIVE_PLATFORM: Record<DeviceProfile['os'], number> = { linux: 7, darwin: 5, win32: 4 };
 
+/**
+ * EasyLogin `AppInfo.AppId`（**不是** SSO subAppId）。
+ *
+ * 两个 AppId 在协议里是不同字段，历史上这里混用过，务必分清：
+ *
+ * - 本表是 Lagrange `BotAppInfo` 的 `AppId`，协议固定的产品身份（Linux 是
+ *   `1600001615`），与 QQ 版本无关；
+ * - SSO 头的 `subAppId` 才随 QQ 构建变，取 `major.node` 的 appid
+ *   （本机 3.2.35-54395 是 `537403759`）。
+ *
+ * 写错的后果：ECDH 被服务端静默丢弃（20s 读超时），或 EasyLogin 回
+ * `140022001 参数错误`。
+ */
+const EASY_LOGIN_APP_ID: Record<DeviceProfile['os'], number> = {
+  linux: 1600001615,
+  darwin: 1600001602,
+  win32: 1600001604,
+};
+
 function osOf(platform: NodeJS.Platform): DeviceProfile['os'] {
   if (platform === 'darwin') return 'darwin';
   if (platform === 'win32') return 'win32';
   return 'linux';
+}
+
+/**
+ * SSO 头的 `subAppId`，取自 `major.node` 的 `QQAppId`。
+ *
+ * **必须等于当前 QQ 构建的 appid**（本机 3.2.35-54395 是 `537403759`）。
+ * 写死成别的值（历史上这里错写成 `5371`）会让服务端**静默丢弃** ECDH 请求：
+ * TCP 建连成功、只回 ACK、零应用层字节，20s 后表现为「读登录应答超时」，
+ * 看起来像网络问题或凭据问题，实际是应用身份不对。
+ */
+function subAppIdOf(environment: LoginEnvironment): number {
+  const appid = environment.client?.appid;
+  if (!appid) {
+    throw new HttpError(400, 'NO_CLIENT_META', '找不到可解析的 major.node，无法确定 SSO subAppId');
+  }
+  return Number(appid);
+}
+
+/**
+ * 从本机 QQ 安装构造设备档案。
+ *
+ * 三个字段各有来源，**不能互相顶替**：
+ *
+ * - `appId`：EasyLogin `AppInfo.AppId`，协议固定（见 `EASY_LOGIN_APP_ID`）；
+ * - `subAppId`：SSO 头字段，取 `major.node` 的 appid；
+ * - `clientVersion` / `qua`：取 `major.node`，版本号要带 build
+ *   （`3.2.35-54395`，不是 `3.2.35`），否则 EasyLogin 回 `140022001`。
+ */
+function deviceProfileOf(environment: LoginEnvironment): DeviceProfile {
+  const os = osOf(process.platform);
+  const client = environment.client;
+  if (!client) {
+    throw new HttpError(
+      400,
+      'NO_CLIENT_META',
+      '找不到可解析的 major.node，无法确定客户端身份；可用扫码登录',
+    );
+  }
+  return {
+    os,
+    appId: EASY_LOGIN_APP_ID[os],
+    subAppId: subAppIdOf(environment),
+    qua: client.qua ?? `V1_${environment.platform.toUpperCase()}_9.9.9`,
+    // build 必须拼上：只写 `3.2.35` 会被 EasyLogin 判成参数错误。
+    clientVersion: client.version && client.build ? `${client.version}-${client.build}` : '9.9.9',
+  };
 }
 
 function avatarUrlOf(uin: string): string {

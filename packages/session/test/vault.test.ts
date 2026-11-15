@@ -13,7 +13,7 @@ const account = {
   device: {
     os: 'linux' as const,
     appId: 1600001615,
-    subAppId: 5371,
+    subAppId: 537403759,
     qua: 'V1_LINUX_9.9.9',
     clientVersion: '9.9.9-1',
   },
