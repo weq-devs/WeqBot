@@ -1,13 +1,18 @@
 /**
- * 空间写操作（P8.5）：改说说权限 / 拉黑 / 回复评论。
+ * 空间写操作（P8.5）：改说说权限 / 拉黑 / 回复与转发说说。
  *
  * 搬运自 SnowLuma `protocol/src/web/qzone.ts` 的 `updateQzoneMsgRight` /
  * `setQzoneBlack` / `replyQzoneComment`，只把凭据参数换成 {@link WebCredential}、
  * 传输换成 `./http`。**写操作不做自动重试**（重放会产生重复回复或重复提交）。
+ *
+ * 2026-11-16 补齐 `forwardQzoneMsg`：来源 WeQ `account/web/qzone_write_actions.ts`。
+ * 那条链路刻意**不引** `@babel/parser` + `parse5`，回执解析换成
+ * {@link ./qzone-form-reply} 的零依赖词法扫描（行为按 WeQ 的 13 条用例对齐）。
  */
 
 import { computeBkn, cookieHeader, WebAuthError, type WebCredential } from './credential';
 import { webRequestText } from './http';
+import { assertQzoneWriteAccepted, parseQzoneFormReply } from './qzone-form-reply';
 import { parseQzoneJson } from './qzone';
 
 import type { QzoneUgcRight } from './qzone_publish';
@@ -321,4 +326,83 @@ export async function replyQzoneMsg(
     parent_comment_id: target.commentId,
     parent_comment_uin: Number(target.commentUin),
   };
+}
+
+// ─────────────── 整条说说转发 — emotion_cgi_forward_v6 ───────────────
+
+const FORM_CGI = 'https://h5.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin';
+const FORM_UA =
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/152.0.0.0 Safari/537.36';
+
+function assertQzoneIdentity(hostUin: string, tid: string): void {
+  if (!/^[1-9]\d{4,19}$/.test(hostUin) || !/^[A-Za-z0-9_-]{1,128}$/.test(tid)) {
+    throw new Error('空间动态身份无效。');
+  }
+}
+
+/**
+ * POST 到 taotao 的写 cgi 并解析回执。
+ *
+ * - 表单纯文本，UA 用浏览器串（这两条 cgi 是 h5 页面发的，不是 Kuikly）；
+ * - 不做网络重试 —— 写操作重放会造成重复转发 / 重复评论；
+ * - 回执既可能是 JSON / JSONP，也可能是官方 formSender 的 HTML
+ *   `frameElement.callback({...})`，统一交给 {@link parseQzoneFormReply}。
+ */
+async function postQzoneForm(
+  cred: WebCredential,
+  cgi: string,
+  params: Record<string, string>,
+): Promise<Record<string, unknown>> {
+  const text = await webRequestText(
+    `${FORM_CGI}/${cgi}?g_tk=${computeBkn(cred.pskey || cred.skey)}`,
+    {
+      method: 'POST',
+      cookie: cookieHeader(cred),
+      body: new URLSearchParams({
+        code_version: '1',
+        format: 'fs',
+        out_charset: 'UTF-8',
+        hostuin: cred.uin,
+        qzreferrer: `https://user.qzone.qq.com/${cred.uin}`,
+        ...params,
+      }).toString(),
+      headers: {
+        'User-Agent': FORM_UA,
+        Referer: `https://user.qzone.qq.com/${cred.uin}`,
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+    },
+  );
+  return parseQzoneFormReply(text);
+}
+
+/**
+ * 转发一条说说（`tid` 属于 `hostUin`）到本账号空间。
+ *
+ * 语义与 WeQ 一致：转发的是**当前这条动态**，不带原帖的 `t2_tid` / `fwdtype`
+ * （评论转发是另一条 cgi，本条刻意不夹带）。`reason` 为空表示不写转发语。
+ *
+ * `beforeSend` 由调用方注入（WeQ 用它记审计），抛错时不会发请求。
+ */
+export async function forwardQzoneMsg(
+  cred: WebCredential,
+  hostUin: string,
+  tid: string,
+  reason = '',
+  beforeSend?: () => void,
+): Promise<void> {
+  assertQzoneIdentity(hostUin, tid);
+  if (reason.length > 4096) throw new Error('转发语过长。');
+  beforeSend?.();
+  const response = await postQzoneForm(cred, 'emotion_cgi_forward_v6', {
+    tid,
+    t1_uin: hostUin,
+    t1_source: '1',
+    signin: '0',
+    con: reason,
+    with_cmt: '0',
+    fwdToWeibo: '0',
+    forward_source: '1',
+  });
+  assertQzoneWriteAccepted(response, '转发');
 }

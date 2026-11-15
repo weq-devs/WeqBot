@@ -70,6 +70,8 @@ export interface ActionSnapshotEntry {
   /** 是否属于敏感能力（红包 / 转账 / 支付）。这类**永不注册**，只在文档里列出以示边界。 */
   denied: boolean;
   capability: CapabilityGate;
+  /** 是否写操作（改变 QQ 侧状态）。调试页据此做二次确认。 */
+  write: boolean;
 }
 
 export interface ActionGroupSnapshot {
@@ -160,6 +162,8 @@ function entryOf(doc: ActionDoc, entry: ActionEntry): ActionSnapshotEntry {
     required,
     denied: isDeniedAction(doc.name),
     capability: gateOf(entry),
+    // 写标记参与「这是不是危险调用」的判断，文档站与 WebUI 调试页共用同一口径。
+    write: entry.definition.write ?? false,
   };
 }
 

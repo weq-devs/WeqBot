@@ -77,6 +77,19 @@ export class ParamError extends Error {}
 export interface ActionDefinition<Params = JsonObject, Result = JsonValue> {
   name: string;
   summary?: string;
+  /**
+   * 能力域（`message` / `group-admin` / `qzone` …），调试页按它分组。
+   *
+   * 一般是注册表在装配时按「来自哪个 `actions/*.ts` 文件」填的，单条 action
+   * 不需要自己写；显式写只用于跨文件的特例。
+   */
+  group?: string;
+  /**
+   * 是否为写操作（会改变 QQ 侧状态）。
+   *
+   * 调试页据此做二次确认；缺省按 `false` 处理，但分组装配会给整组写域打上标记。
+   */
+  write?: boolean;
   /** 比 summary 更长的文档说明；缺省时由 `ActionRegistry.describe()` 回退到 summary。 */
   description?: string;
   /** 入参 JSON Schema；缺省时由 `ActionRegistry.describe()` 从 action-metadata 取。 */
@@ -98,6 +111,10 @@ export interface ActionDoc {
   /** 始终非空：definition.description → metadata.description → summary。 */
   description: string;
   inputSchema: JsonSchema;
+  /** 能力域；缺省时上游按 `group` 的默认值处理。 */
+  group?: string;
+  /** 是否写操作（调试页二次确认用）。 */
+  write?: boolean;
 }
 
 const EMPTY_INPUT_SCHEMA: JsonSchema = {
@@ -117,6 +134,8 @@ export function describeAction(definition: {
   summary?: string;
   description?: string;
   inputSchema?: JsonSchema;
+  group?: string;
+  write?: boolean;
 }): ActionDoc {
   const metadata = actionMetadata(definition.name);
   return {
@@ -124,6 +143,8 @@ export function describeAction(definition: {
     ...(definition.summary ? { summary: definition.summary } : {}),
     description: definition.description ?? metadata?.description ?? definition.summary ?? '',
     inputSchema: definition.inputSchema ?? metadata?.inputSchema ?? EMPTY_INPUT_SCHEMA,
+    ...(definition.group ? { group: definition.group } : {}),
+    ...(definition.write !== undefined ? { write: definition.write } : {}),
   };
 }
 

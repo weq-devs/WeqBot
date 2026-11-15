@@ -10,7 +10,8 @@
  *   - `qzone*` / `group-*` / `dress-*` / `collection`：qq.com cgi（WeQ 与 SnowLuma
  *     能力的并集；搬运时只改 import 接缝）
  *
- * 不导出 `gift-mall`（它是 P1 搬来的 OIDB 侧文件，仍由 `../index` 单独 re-export）。
+ * `gift-mall` 是 P1 搬来的纯请求构造（由 `../index` 单独 re-export），执行层在
+ * `gift-mall-exec`（2026-11-16 从 WeQ `account/web/gift_mall.ts` 补入）。
  */
 
 export * from './credential';
@@ -47,6 +48,7 @@ export * from './dress-kind';
 export * from './dress-mall';
 export * from './friend-dress';
 export * from './friend-mutualmark';
+export * from './gift-mall-exec';
 export * from './self-dress';
 export * from './special-care';
 export * from './vip-info';

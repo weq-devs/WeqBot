@@ -297,6 +297,22 @@ const writeActions = [
   ),
   defineAction(
     {
+      name: 'forward_qzone_msg',
+      summary: '转发一条普通说说（可带转发语）',
+      parse: (raw) => ({
+        targetUin: optionalTarget(raw),
+        tid: requiredString(raw, 'tid'),
+        reason: optionalString(raw, 'reason') ?? '',
+      }),
+      run: async ({ targetUin, tid, reason }, ctx) => {
+        await ctx.backend.qzone!.forwardMsg!(targetUin, tid, reason);
+        return null;
+      },
+    },
+    { available: (backend) => typeof backend.qzone?.forwardMsg === 'function' },
+  ),
+  defineAction(
+    {
       name: 'set_qzone_ban',
       summary: '拉黑 / 解除拉黑（修改本账号空间黑名单）',
       parse: (raw) => ({

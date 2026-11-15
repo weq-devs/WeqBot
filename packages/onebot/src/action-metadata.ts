@@ -1224,6 +1224,72 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
       ['app_id', 'keyword'],
     ),
   },
+  get_gift_mall_home: {
+    inputSchema: input({ target_uin: userId('收礼人 QQ 号；不传表示自己') }),
+  },
+  get_gift_mall_list: {
+    inputSchema: input({
+      target_uin: userId('收礼人 QQ 号；不传表示自己'),
+      tab_name: enumOf('顶层页签', ['', '礼品卡', '个性化装扮']),
+      sub_tab_name: stringOrArray(
+        '子页签，可多选（最近上新 / 鲜花 / 玩偶摆件 / 礼品卡 / 蛋糕 / 主题 / 气泡 / 头像挂件等）',
+      ),
+      attach_info: str('分页游标，由上一页响应原样传回'),
+      batch_num: int('每页条数', { minimum: 1, default: 20 }),
+      crowd_tab: str('人群页签'),
+    }),
+  },
+  search_gift_mall: {
+    inputSchema: input(
+      {
+        keyword: str('搜索关键字'),
+        target_uin: userId('收礼人 QQ 号；不传表示自己'),
+        page_no: int('页码，从 1 开始', { minimum: 1, default: 1 }),
+        page_size: int('每页条数', { minimum: 1, default: 20 }),
+        attach_info: str('分页游标'),
+      },
+      ['keyword'],
+    ),
+  },
+  get_gift_mall_gift: {
+    inputSchema: input(
+      {
+        gift_id: str('礼物 id'),
+        target_uin: userId('收礼人 QQ 号；不传表示自己'),
+      },
+      ['gift_id'],
+    ),
+  },
+  get_gift_mall_vip: {
+    inputSchema: input({ gift_id: str('礼物 id') }, ['gift_id']),
+  },
+  get_gift_mall_wall: {
+    inputSchema: input(
+      {
+        is_send: bool('true 送出 / false 收到', { default: true }),
+        begin_time: int('服务端返回的 beginTime；首屏传 0（必填）'),
+        batch_info: str('服务端游标；翻页时原样传回'),
+      },
+      ['begin_time'],
+    ),
+  },
+  get_gift_mall_ai_disc_status: { inputSchema: EMPTY_INPUT },
+  send_gift: {
+    description:
+      '赠送礼物。**只下单，不付款**：返回的是支付参数（payMode / url_params 等），真正的支付须在客户端完成。写操作不重试。',
+    inputSchema: input(
+      {
+        gift_id: int('礼物 id', { minimum: 1 }),
+        gift_price: int('礼物原价，从列表 / 详情原样传回', { minimum: 1 }),
+        svip_discount: int('SVIP 折后价，从列表 / 详情原样传回', { minimum: 1 }),
+        to_uin: int('收礼人 QQ 号', { minimum: 1 }),
+        message: str('祝福语'),
+        need_anonymous: bool('是否匿名', { default: false }),
+        buy_num: int('购买数量', { minimum: 1, default: 1 }),
+      },
+      ['gift_id', 'gift_price', 'svip_discount', 'to_uin'],
+    ),
+  },
 
   // ─────────────────────────── 收藏 ───────────────────────────
   get_collection_list: {
@@ -1350,6 +1416,18 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     inputSchema: input(
       { user_id: userId(), enable: bool('true 拉黑 / false 解除', { default: true }) },
       ['user_id'],
+    ),
+  },
+  forward_qzone_msg: {
+    description:
+      '转发一条普通说说（emotion_cgi_forward_v6）。转发的是当前这条动态，不带原帖的 t2_tid / fwdtype；reason 为空表示不写转发语。',
+    inputSchema: input(
+      {
+        target_uin: userId('说说作者的 QQ 号；不传表示自己'),
+        tid: str('说说 id'),
+        reason: str('转发语'),
+      },
+      ['tid'],
     ),
   },
 

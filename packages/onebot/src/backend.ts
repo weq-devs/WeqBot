@@ -829,6 +829,44 @@ export interface AccountWebBackend {
     pageIndex?: number,
     pageSize?: number,
   ): Promise<{ items: unknown[]; total: number }>;
+  // ── 礼物商城（WeQ `account/web/gift_mall.ts`，2026-11-16 补齐执行层）──
+  /** 首页推荐 / 愿望单 / 服务端页签。 */
+  getGiftMallHome?: (toUin?: number) => Promise<unknown>;
+  /** 首页礼物列表；游标由上一页响应原样传回。 */
+  getGiftMallList?: (params: {
+    toUin?: number;
+    tabName?: string;
+    subTabName?: string[];
+    attachInfo?: string;
+    batchNum?: number;
+    crowdTab?: string;
+  }) => Promise<unknown>;
+  searchGiftMall?: (params: {
+    keyword: string;
+    toUin?: number;
+    pageNo?: number;
+    pageSize?: number;
+    attachInfo?: string;
+  }) => Promise<unknown>;
+  getGiftMallGift?: (giftId: string, toUin?: number) => Promise<unknown>;
+  getGiftMallVip?: (giftId: string) => Promise<unknown>;
+  getGiftMallWall?: (params: {
+    isSend: boolean;
+    beginTime: number;
+    batchInfo: string;
+  }) => Promise<unknown>;
+  getGiftMallAiDiscStatus?: () => Promise<unknown>;
+  /**
+   * 下单 / 赠送。返回的只是支付所需信息，**不代表已付款**。
+   * 写操作不重试；`gift` 里的 `svipDiscount` / `giftPrice` 来自列表或详情。
+   */
+  sendGift?: (params: {
+    gift: { giftId: number; giftPrice?: number; svipDiscount?: number };
+    toUin: number;
+    message?: string;
+    needAnonymous?: boolean;
+    buyNum?: number;
+  }) => Promise<unknown>;
 }
 
 /** 群策略 / @全体剩余次数（标签需要 groupClass，等真机核对后再加）。 */
@@ -974,6 +1012,8 @@ export interface QzoneBackend {
   ): Promise<void>;
   setPublicFollow(feed: Record<string, unknown>, enable: boolean): Promise<unknown>;
   forwardPublicFeed(feed: Record<string, unknown>, reason: string): Promise<unknown>;
+  /** 转发一条普通说说（`emotion_cgi_forward_v6`）；`reason` 为空表示不带转发语。 */
+  forwardMsg?: (targetUin: number | undefined, tid: string, reason: string) => Promise<void>;
 }
 
 /**
