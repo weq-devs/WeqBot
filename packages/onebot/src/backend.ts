@@ -126,6 +126,8 @@ export interface GroupMemberInfo {
   level: string;
   role: 'owner' | 'admin' | 'member';
   title: string;
+  /** 禁言到期时间戳（秒）；0 = 未禁言。 */
+  shutUpTime?: number;
 }
 
 export interface StrangerInfo {
@@ -194,6 +196,19 @@ export interface GroupFilePageResult {
 
 /** 群文件（`group-file.ts`）。 */
 export interface GroupFileBackend {
+  uploadGroupFile(params: {
+    groupId: number;
+    filePath: string;
+    fileName?: string;
+    folderId?: string;
+    publish: boolean;
+  }): Promise<{ fileId: string; fileName: string; fileSize: number }>;
+  uploadPrivateFile(params: {
+    userId: number;
+    filePath: string;
+    fileName?: string;
+    send: boolean;
+  }): Promise<{ fileId: string }>;
   listGroupFiles(
     groupId: number,
     directory: string,
@@ -206,6 +221,7 @@ export interface GroupFileBackend {
    * 实际以登录账号自己的 uid 取链接。
    */
   getPrivateFileUrl(userId: number | undefined, fileId: string, fileHash: string): Promise<string>;
+  transGroupFile(groupId: number, fileId: string): Promise<void>;
   getGroupFileCount(
     groupId: number,
   ): Promise<{ fileCount: number; maxCount: number; isFull: boolean }>;
@@ -235,6 +251,8 @@ export interface CustomFaceEntry {
 
 /** 收藏表情（`extended.ts` 的 `fetch_custom_face` 家族）。 */
 export interface CustomFaceBackend {
+  /** 上传一张图片到收藏表情，返回服务端分配的 emoji_id。 */
+  addCustomFace(image: string | Uint8Array): Promise<string>;
   listCustomFaces(): Promise<string[]>;
   getCustomFaceDetail(emojiIds: string[]): Promise<CustomFaceEntry[]>;
   modifyCustomFace(emojiId: string, desc: string): Promise<void>;
@@ -474,10 +492,126 @@ export interface GroupEssenceBackend {
   }): Promise<void>;
 }
 
-/** 群备注 / 扩展群资料（0xF16、0xFE5_2）。 */
+/** `get_group_system_msg` 的一条群系统消息（字段名对齐 SnowLuma）。 */
+/** 过滤收件箱里的一条入群请求（`get_group_ignored_notifies` / NapCat 别名）。 */
+export interface IgnoredGroupRequest {
+  groupId: number;
+  groupName: string;
+  sequence: number;
+  targetUin: number;
+  targetName: string;
+  invitorUin: number;
+  invitorName: string;
+  operatorUin: number;
+  operatorName: string;
+  comment: string;
+  checked: boolean;
+  flag: string;
+}
+
+export interface GroupSystemMessage {
+  group_id: number;
+  group_name: string;
+  request_id: number;
+  requester_uin: number;
+  requester_nick: string;
+  target_uin: number;
+  target_nick: string;
+  target_status: 'known' | 'unknown';
+  invitor_uin: number;
+  invitor_nick: string;
+  invitor_status: 'known' | 'unknown';
+  operator_uin: number;
+  operator_nick: string;
+  operator_status: 'known' | 'unknown';
+  message: string;
+  checked: boolean;
+  flag: string;
+}
+
+export type GroupMemberInvitePolicy =
+  | 'disabled'
+  | 'require_approval'
+  | 'no_approval'
+  | 'no_approval_under_100';
+
+/** `get_group_admin_settings` 的完整快照（字段名对齐 SnowLuma）。 */
+export interface GroupAdminSettings {
+  add_type: number;
+  group_question: string;
+  group_answer: string;
+  robot_member_switch: number;
+  robot_member_examine: number;
+  member_invite_policy: GroupMemberInvitePolicy;
+  allow_member_upload_album: boolean;
+  allow_member_temporary_session: boolean;
+  allow_member_create_group: boolean;
+  new_member_history_visible: boolean;
+  no_finger_open: number;
+  no_code_finger_open: number;
+}
+
+/** 管理员权限快照；`null` = 服务端未指定。 */
+export interface GroupAdminPermissions {
+  recall_member_message: boolean | null;
+  kick_member: boolean | null;
+  kick_member_per_day: number | null;
+}
+
+/** 群备注 / 群管理细项 / 扩展群资料（0xF16、0x89A、0x967C-E、0x9164、0x9C1C、0x904、0xF00、highway 3000、0x10C0）。 */
 export interface GroupAdminExtraBackend {
   setGroupRemark(groupId: number, remark: string): Promise<void>;
   getGroupInfoEx(groupId: number): Promise<GroupInfoEx>;
+  kickMembers(groupId: number, userIds: number[], reject: boolean): Promise<void>;
+  setAddOption(params: {
+    groupId: number;
+    addType: number;
+    groupQuestion?: string;
+    groupAnswer?: string;
+  }): Promise<void>;
+  listCategoryTags(
+    groupClass: number,
+  ): Promise<Array<{ id: number | null; name: string; type: number | null }>>;
+  addCategoryTag(groupClass: number, name: string): Promise<void>;
+  removeCategoryTag(groupClass: number, name: string): Promise<void>;
+  getAdminPermissions(groupId: number, userId: number): Promise<GroupAdminPermissions>;
+  setAdminPermissions(params: {
+    groupId: number;
+    userId: number;
+    recallMemberMessage?: boolean;
+    kickMember?: boolean;
+    kickMemberPerDay?: number;
+  }): Promise<void>;
+  setAdminReceiveVerify(groupId: number, userId: number, enable: boolean): Promise<void>;
+  setRobotAddOption(params: {
+    groupId: number;
+    robotMemberSwitch?: number;
+    robotMemberExamine?: number;
+  }): Promise<void>;
+  /** 群头像：本地路径 / `file://` / 内存字节。 */
+  setGroupAvatar(groupId: number, source: string | Uint8Array): Promise<void>;
+  getIgnoredGroupRequests(): Promise<IgnoredGroupRequest[]>;
+  getGroupSystemMessages(params?: {
+    groupId?: number;
+    onlyPending?: boolean;
+    count?: number;
+  }): Promise<GroupSystemMessage[]>;
+  setGroupSearch(params: {
+    groupId: number;
+    noFingerOpen?: number;
+    noCodeFingerOpen?: number;
+  }): Promise<void>;
+  setMemberInvitePolicy(groupId: number, policy: GroupMemberInvitePolicy): Promise<void>;
+  setNewMemberHistoryVisibility(groupId: number, visible: boolean): Promise<void>;
+  setMemberPermissions(
+    groupId: number,
+    patch: {
+      allowMemberUploadAlbum?: boolean;
+      allowMemberTemporarySession?: boolean;
+      allowMemberCreateGroup?: boolean;
+    },
+  ): Promise<void>;
+  getGroupAdminSettings(groupId: number): Promise<GroupAdminSettings>;
 }
 
 /** 资料点赞里的一个用户。 */
@@ -536,6 +670,10 @@ export interface ProfileBackend {
     batteryStatus: number;
   }): Promise<void>;
   setDiyOnlineStatus(params: { faceId: number; faceType: number; wording: string }): Promise<void>;
+  /** 只改个性签名（0x112A_2）。 */
+  setSelfLongNick(longNick: string): Promise<void>;
+  /** 好友会话的「正在输入 / 取消输入」（0xCD4_1）。 */
+  setInputStatus(userId: number, eventType: number): Promise<void>;
 }
 
 /** 闪传文件集里的一个文件。 */
@@ -549,6 +687,11 @@ export interface FlashFileItem {
   fileId: string;
   /** 0x93D3 回的缩略图链接；主文件直链需要 0x93D4/0x12A9_200（尚未搬）。 */
   downloadUrl: string;
+}
+
+/** QQ 收藏（微云 collector.fcg；只读）。 */
+export interface CollectionBackend {
+  list(category?: number, count?: number): Promise<unknown>;
 }
 
 /** 闪传（0x93CF / 0x93D0 / 0x93D1 / 0x93D2 / 0x93D3 / 0x93D7 / 0x9407 / 0x9427）。 */
@@ -566,6 +709,13 @@ export interface FlashTransferBackend {
   sendFlashMsg(filesetId: string, target: { userId?: number; groupId?: number }): Promise<void>;
   /** 从分享码 / 官方分享链接解析 fileset id（HTTP 分享页）。 */
   getFilesetIdByCode(shareCode: string): Promise<string>;
+  /** 0x93D4_1 + 0x12A9_200：按序号换主文件下载直链。 */
+  getFileUrl(filesetId: string, fileIndex?: number): Promise<string>;
+  /** 同 `getFileUrl`，额外返回文件名与大小。 */
+  downloadFileset(
+    filesetId: string,
+    fileIndex?: number,
+  ): Promise<{ url: string; fileName: string; fileSize: number }>;
 }
 
 /** 好友分组 / 推荐联系人卡片 / 图文 Ark。 */
@@ -589,6 +739,13 @@ export interface ContactsExtraBackend {
     kind: 'qq' | 'group';
     contactId: number;
     phoneNumber?: string;
+  }): Promise<string>;
+  /** 0x9060_3：群分享 / 邀请链接。 */
+  getGroupShareLink(params: {
+    groupId: number;
+    needShortUrl: boolean;
+    srcId: number;
+    additionalParam: string;
   }): Promise<string>;
   sendTuwenArk(params: {
     targetId: number;
@@ -633,10 +790,29 @@ export interface AiVoiceBackend {
   send(groupId: number, character: string, text: string, chatType: number): Promise<SendResult>;
 }
 
-/** 杂项：数据库解密密钥（0xCDE_2）。 */
+/** 杂项：数据库解密密钥（0xCDE_2）/ 小程序卡片。 */
 export interface MiscBackend {
   /** `dbPath` 指向账号数据库文件；盐取自 0x2f..0xaf。 */
   requestDecryptKey(dbPath: string): Promise<string>;
+  /** `LightAppSvc.mini_app_share.AdaptShareInfo`：只取卡不发送。 */
+  getMiniAppArk(params: {
+    type: string;
+    title: string;
+    desc: string;
+    picUrl: string;
+    jumpUrl: string;
+  }): Promise<unknown>;
+}
+
+/** 下载 rkey（0x9067_202）。 */
+export interface RkeyBackend {
+  getDownloadRkeys(): Promise<Array<{ type: number; rkey: string; ttlSeconds: number }>>;
+}
+
+/** 进程 / 会话控制。 */
+export interface BotControlBackend {
+  /** 优雅下线：teardown 会话、触发 offline；**不退出进程**。 */
+  shutdown(reason: string): Promise<void>;
 }
 
 /** 账号侧 web 能力（装扮 / 会员 / 特别关心 / 好友互动标记）。 */
@@ -689,6 +865,13 @@ export interface InteractionExtraBackend {
   listSystemFaces(): Promise<SystemFaceInfo[]>;
   getSystemFace(faceId: number): Promise<SystemFaceInfo | null>;
   translateEn2Zh(words: string[]): Promise<string[]>;
+  clickInlineButton(params: {
+    groupId: number;
+    botAppid: number;
+    msgSeq: number;
+    buttonId: string;
+    callbackData: string;
+  }): Promise<{ result: number; errMsg: string; promptText: string }>;
 }
 
 /** 系统表情目录里的一项（已从服务端分组拍平）。 */
@@ -717,6 +900,17 @@ export interface QzoneBackend {
     pos: number,
     num: number,
   ): Promise<unknown>;
+  /** 空间主页完整动态（自己或他人），cursor 来自上一页 `next_cursor`。 */
+  getHomeFeeds(
+    targetUin: number | undefined,
+    cursor?: string,
+  ): Promise<{ feeds: unknown[]; has_more: boolean; next_cursor: string | null }>;
+  getFeedDetail(tid: string): Promise<{ feed: unknown; attach_info: string | null }>;
+  getShareArk(feed: Record<string, unknown>): Promise<{
+    ark: string;
+    requires_confirmation: boolean;
+    notice: string | null;
+  }>;
   getFeeds(
     pageNum: number,
     count: number,
@@ -820,10 +1014,16 @@ export interface OneBotBackend {
   profile?: ProfileBackend;
   /** 好友分组 / 推荐联系人卡片 / 图文 Ark。 */
   contactsExtra?: ContactsExtraBackend;
-  /** 数据库解密密钥。 */
+  /** 数据库解密密钥 / 小程序卡片。 */
   misc?: MiscBackend;
+  /** 下载 rkey。 */
+  rkey?: RkeyBackend;
+  /** bot 下线控制。 */
+  botControl?: BotControlBackend;
   /** AI 声聊（仅群聊）。 */
   aiVoice?: AiVoiceBackend;
+  /** 收藏列表。 */
+  collection?: CollectionBackend;
   /** 闪传文件集。 */
   flashTransfer?: FlashTransferBackend;
   /** 账号侧 web 能力（装扮 / 会员 / 特别关心）。 */

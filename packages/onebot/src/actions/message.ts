@@ -863,6 +863,15 @@ const sendCustomFace = defineAction(
 );
 
 /** 消息类 action。每条声明它需要哪些后端方法。 */
+/** SnowLuma 的拼写别名（`upload_foward_msg`），与 `upload_forward_msg` 同形。 */
+const uploadFowardMsg: ActionEntry = {
+  ...uploadForwardMsg,
+  definition: {
+    ...uploadForwardMsg.definition,
+    name: 'upload_foward_msg',
+  } as ActionDefinition<never, never>,
+};
+
 export const MESSAGE_ACTIONS: ActionEntry[] = [
   { definition: sendGroupMsg as ActionDefinition<never, never>, requires: ['sendGroupMessage'] },
   {
@@ -883,6 +892,7 @@ export const MESSAGE_ACTIONS: ActionEntry[] = [
   getFriendMsgHistory,
   getForwardMsg,
   uploadForwardMsg,
+  uploadFowardMsg,
   sendForwardMsg,
   sendGroupForwardMsg,
   sendPrivateForwardMsg,

@@ -34,6 +34,8 @@ export type OfflineReason =
   | 'network'
   /** 主动下线（用户关账号 / bot 停止）。 */
   | 'closed'
+  /** OneBot `bot_exit` 主动下线。 */
+  | 'bot-exit'
   /** 重登失败次数耗尽。 */
   | 'relogin-failed'
   /** 注册阶段就被拒（凭据失效 / 风控）。 */

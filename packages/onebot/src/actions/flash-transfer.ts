@@ -170,6 +170,35 @@ export const FLASH_TRANSFER_ACTIONS = [
   ),
   defineAction(
     {
+      name: 'get_flash_file_url',
+      summary: '获取闪传主文件直链',
+      parse: (raw) => ({
+        filesetId: filesetId(raw),
+        fileIndex: optionalPositiveInt(raw, 'file_index') ?? 1,
+      }),
+      run: async ({ filesetId: id, fileIndex }, ctx) => ({
+        url: await ctx.backend.flashTransfer!.getFileUrl(id, fileIndex),
+      }),
+    },
+    { available: (backend) => typeof backend.flashTransfer?.getFileUrl === 'function' },
+  ),
+  defineAction(
+    {
+      name: 'download_fileset',
+      summary: '解析闪传主文件直链（不下载字节）',
+      parse: (raw) => ({
+        filesetId: filesetId(raw),
+        fileIndex: optionalPositiveInt(raw, 'file_index') ?? 1,
+      }),
+      run: async ({ filesetId: id, fileIndex }, ctx) => {
+        const file = await ctx.backend.flashTransfer!.downloadFileset(id, fileIndex);
+        return { url: file.url, file_name: file.fileName, file_size: file.fileSize };
+      },
+    },
+    { available: (backend) => typeof backend.flashTransfer?.downloadFileset === 'function' },
+  ),
+  defineAction(
+    {
       name: 'get_fileset_id',
       summary: '从闪传分享码 / 链接解析文件集 id',
       parse: (raw) => {

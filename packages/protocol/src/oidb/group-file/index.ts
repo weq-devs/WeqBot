@@ -9,6 +9,11 @@ export {
 export type { GroupFileDownload } from './get-file-url';
 export { GetGroupPttUrl, GetPrivatePttUrl } from './get-ptt-url';
 export { GetGroupVideoUrl, GetPrivateVideoUrl } from './get-video-url';
+export { TransGroupFile } from './trans-group-file';
+export type {
+  TransGroupFileParams,
+  TransGroupFileResult,
+} from './trans-group-file';
 
 export {
   DeleteGroupFile,

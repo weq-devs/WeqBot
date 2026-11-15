@@ -450,4 +450,42 @@ const publicWriteActions = [
   ),
 ];
 
-export const QZONE_ACTIONS = [...readActions, ...writeActions, ...publicWriteActions];
+const feedActions = [
+  defineAction(
+    {
+      name: 'get_qzone_home_feeds',
+      summary: '读取空间主页完整动态',
+      parse: (raw) => ({
+        targetUin: optionalTarget(raw),
+        cursor: optionalString(raw, 'cursor'),
+      }),
+      run: async ({ targetUin, cursor }, ctx) => ctx.backend.qzone!.getHomeFeeds(targetUin, cursor),
+    },
+    { available: (backend) => typeof backend.qzone?.getHomeFeeds === 'function' },
+  ),
+  defineAction(
+    {
+      name: 'get_qzone_feed_detail',
+      summary: '按 tid 读取完整空间动态',
+      parse: (raw) => ({ tid: requiredString(raw, 'tid') }),
+      run: async ({ tid }, ctx) => ctx.backend.qzone!.getFeedDetail(tid),
+    },
+    { available: (backend) => typeof backend.qzone?.getFeedDetail === 'function' },
+  ),
+  defineAction(
+    {
+      name: 'get_qzone_share_ark',
+      summary: '用完整空间动态生成分享卡片',
+      parse: (raw) => ({ feed: requiredObject(raw, 'feed') }),
+      run: async ({ feed }, ctx) => ctx.backend.qzone!.getShareArk(feed),
+    },
+    { available: (backend) => typeof backend.qzone?.getShareArk === 'function' },
+  ),
+];
+
+export const QZONE_ACTIONS = [
+  ...readActions,
+  ...writeActions,
+  ...publicWriteActions,
+  ...feedActions,
+];

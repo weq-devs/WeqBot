@@ -67,6 +67,31 @@ export type {
   SetAdminPermissionsParams,
 } from './admin-permissions';
 
+export {
+  FetchGroupDetail,
+  SetGroupSearch,
+  SetGroupInvitePolicy,
+  SetGroupHistoryVisibility,
+  SetGroupMemberPermission,
+  MEMBER_INVITE_PRIVILEGE_MASK,
+  GROUP_HISTORY_VISIBILITY_MASK,
+  GROUP_MEMBER_PERMISSION_MASKS,
+  mergeMemberInvitePrivilegeFlag,
+  decodeMemberInvitePolicy,
+  decodeGroupHistoryVisibility,
+  mergeGroupMemberPermission,
+  decodeGroupMemberPermissions,
+} from './group-admin-settings';
+export type {
+  GroupDetailInfo,
+  SetGroupSearchParams,
+  GroupMemberInvitePolicy,
+  SetGroupInvitePolicyParams,
+  SetGroupHistoryVisibilityParams,
+  GroupMemberPermission,
+  SetGroupMemberPermissionParams,
+} from './group-admin-settings';
+
 export { GetAdminReceiveVerify, SetAdminReceiveVerify } from './receive-verify';
 export type {
   GetAdminReceiveVerifyParams,

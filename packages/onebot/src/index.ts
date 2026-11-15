@@ -61,7 +61,10 @@ export {
   type FriendInfo,
   type FriendProfile,
   type GroupAdminExtraBackend,
+  type GroupAdminPermissions,
+  type GroupAdminSettings,
   type GroupInfo,
+  type GroupMemberInvitePolicy,
   type GroupInfoEx,
   type GroupMemberInfo,
   type HistoryMessage,
@@ -76,6 +79,7 @@ export {
   type RecallTarget,
   type SendResult,
   type StrangerInfo,
+  type GroupSystemMessage,
 } from './backend';
 export { cqEscape, cqUnescape, parseCQString, segmentToCQ, segmentsToRawMessage } from './cq';
 export {

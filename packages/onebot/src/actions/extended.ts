@@ -14,9 +14,12 @@ import {
   ParamError,
   requiredPositiveInt,
   requiredString,
+  type ActionDefinition,
+  type ActionEntry,
   type ActionContext,
 } from '../action-registry';
 import type { SystemFaceInfo } from '../backend';
+import { decodeInlineMedia, isInlineMediaSource } from '../segments';
 import type { JsonObject } from '../types';
 
 function emojiIds(raw: JsonObject, key: string): string[] {
@@ -53,6 +56,25 @@ const face = (item: SystemFaceInfo) => ({
 });
 
 const customFaceActions = [
+  defineAction(
+    {
+      name: 'add_custom_face',
+      summary: '添加收藏表情',
+      parse: (raw) => {
+        const file = requiredString(raw, 'file').trim();
+        if (!file) throw new ParamError('file 不能为空');
+        const inline = isInlineMediaSource(file) ? decodeInlineMedia(file) : undefined;
+        if (isInlineMediaSource(file) && !inline) {
+          throw new ParamError('file 不是合法的 base64 数据');
+        }
+        return { file, inline };
+      },
+      run: async ({ file, inline }, ctx) => ({
+        emoji_id: await ctx.backend.customFace!.addCustomFace(inline ?? file),
+      }),
+    },
+    { available: (backend) => typeof backend.customFace?.addCustomFace === 'function' },
+  ),
   defineAction(
     {
       name: 'fetch_custom_face',
@@ -377,6 +399,15 @@ const sendGroupArkShare = defineAction(
   { available: (backend) => typeof backend.contactsExtra?.getRecommendArk === 'function' },
 );
 
+/** SnowLuma 旧名；与 `send_group_ark_share` 同形。 */
+const shareGroupEx: ActionEntry = {
+  ...sendGroupArkShare,
+  definition: {
+    ...sendGroupArkShare.definition,
+    name: 'share_group_ex',
+  } as ActionDefinition<never, never>,
+};
+
 const sendTuwenArk = defineAction(
   {
     name: 'send_tuwen_ark',
@@ -570,6 +601,7 @@ export const EXTENDED_ACTIONS = [
   ...todoActions,
   ...miscActions,
   ...arkActions,
+  shareGroupEx,
   ...aiVoiceActions,
   ...friendActions,
 ];

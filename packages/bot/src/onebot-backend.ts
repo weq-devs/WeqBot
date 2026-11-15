@@ -28,7 +28,9 @@ import type {
 import { elementsToSegments, segmentsToElements } from '@weqbot/onebot';
 import type { ProtocolClient } from '@weqbot/protocol';
 import {
+  AddCustomFace,
   ApproveDoubtFriendRequest,
+  ClickInlineKeyboardButton,
   CommentGroupAlbumMedia,
   decodeMessageBody,
   fetchC2cHistoryRaw,
@@ -36,6 +38,8 @@ import {
   fetchGroupHistoryRaw,
   ReadedReport,
   sendForward as sendLongMessage,
+  sendGroupFile,
+  sendPrivateFile,
   type ForwardNode as ProtocolForwardNode,
   type RawMessageBody,
   composeGroupFileDownloadUrl,
@@ -47,11 +51,36 @@ import {
   DeleteGroupFile,
   DeleteGroupFolder,
   FetchAiVoiceList,
+  cleanNtLocalPath,
+  SetInputStatus,
+  SetSelfLongNick,
   FetchCustomFaceDetail,
   FetchCustomFaceList,
   FetchDoubtFriendRequests,
+  AddGroupCategoryTag,
+  DeleteGroupCategoryTag,
+  FetchFilteredGroupRequests,
+  FetchGroupDetail,
+  FetchGroupExtInfo,
   FetchGroupList,
+  FetchGroupRequests,
   FetchSysFace,
+  GetAdminPermissions,
+  GetGroupCategoryTags,
+  ModifyGroupExtInfo,
+  SetAdminPermissions,
+  SetAdminReceiveVerify,
+  SetGroupAddOption,
+  SetGroupInvitePolicy,
+  SetGroupHistoryVisibility,
+  SetGroupMemberPermission,
+  SetGroupSearch,
+  TransGroupFile,
+  decodeGroupHistoryVisibility,
+  decodeGroupMemberPermissions,
+  decodeMemberInvitePolicy,
+  setGroupAvatar,
+  FetchDownloadRkeys,
   FetchSysFaces,
   FetchUserProfile,
   GetAlbumMediaList,
@@ -61,6 +90,8 @@ import {
   GetGroupRecommendArk,
   GetGroupAtAllRemain,
   GetGroupFileCount,
+  GetGroupShareLink,
+  GetMiniAppArk,
   GetGroupFileSpace,
   GetGroupMessagePolicies,
   GetGroupPttUrl,
@@ -69,11 +100,14 @@ import {
   GetPrivateFileUrl,
   GetProfileLike,
   GetFilesetDetail,
+  GetFlashDownload,
+  GetFlashDownloadUrl,
   GetUnidirectionalFriendList,
   GroupTodo,
   getDressRank,
   getFriendDress,
   getFriendMutualMark,
+  getCollectionList,
   getGroupAlbumList,
   getGroupEssencePage,
   getGroupNotice,
@@ -143,8 +177,11 @@ import {
   setSelfAvatar,
   SetGroupSpecialTitle,
   TranslateEnToZh,
+  getQzoneFeedDetail,
   getQzoneFeeds,
+  getQzoneHomeFeeds,
   getQzoneMsgDetail,
+  getQzoneShareArk,
   getQzoneMsgList,
   getQzoneProfile,
   getQzonePublicCapabilities,
@@ -200,6 +237,8 @@ export interface ProtocolBackendOptions {
   webCredentials?: WebCredentialSource;
   /** qzone cgi 的域，默认 `qzone.qq.com`。 */
   qzoneDomain?: string;
+  /** `bot_exit` 的优雅下线回调；由 `createBot` 注入。 */
+  shutdown?: (reason: string) => Promise<void>;
 }
 
 /**
@@ -530,6 +569,32 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       ttl: node.ttlSeconds,
       subType: node.subType,
     };
+  }
+
+  /** 主文件直链：0x93D4_1 取 fileId，再 0x12A9_200 换 URL。 */
+  async function resolveFlashDownload(
+    filesetId: string,
+    fileIndex = 1,
+  ): Promise<{ url: string; fileName: string; fileSize: number }> {
+    const delays = [0, 1000, 2000, 4000, 4000];
+    for (let attempt = 0; attempt < delays.length; attempt++) {
+      if (delays[attempt]) {
+        await new Promise((resolve) => setTimeout(resolve, delays[attempt]));
+      }
+      const metas = await GetFlashDownloadUrl.invoke(nt, sessionId, { filesetUuid: filesetId });
+      const meta = metas.find((item) => item.fileIndex === fileIndex);
+      if (!meta) continue;
+      if (!meta.fileId) continue;
+      const url = await GetFlashDownload.invoke(nt, sessionId, {
+        filesetUuid: meta.filesetUuid || filesetId,
+        fileUuid: meta.fileUuid,
+        fileId: meta.fileId,
+        fileName: meta.fileName,
+      });
+      if (!url) throw new Error('闪传主文件直链为空');
+      return { url, fileName: meta.fileName, fileSize: meta.fileSize };
+    }
+    throw new Error(`闪传文件集 ${filesetId} 的第 ${fileIndex} 个文件没有可用直链`);
   }
 
   async function waitAiVoiceReceipt(groupId: number, fileName: string): Promise<HistoryMessage> {
@@ -1042,6 +1107,35 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
     // ─────────────────────── 群文件（P8.2） ───────────────────────
 
     groupFile: {
+      async uploadGroupFile(params) {
+        const result = await sendGroupFile(nt, sessionId, {
+          groupId: params.groupId,
+          filePath: params.filePath,
+          ...(params.fileName ? { fileName: params.fileName } : {}),
+          ...(params.folderId ? { folderId: params.folderId } : {}),
+          selfUin,
+          publish: params.publish,
+        });
+        return {
+          fileId: result.fileId,
+          fileName: result.fileName,
+          fileSize: result.fileSize,
+        };
+      },
+      async uploadPrivateFile(params) {
+        if (!selfUid) throw new Error('私聊文件需要自己的 uid（登录票据里没有）');
+        const targetUid = options.resolveUidUin?.uidByUin(String(params.userId));
+        if (!targetUid) throw new Error(`私聊文件需要对方 uid（${params.userId} 未观测到）`);
+        const result = await sendPrivateFile(nt, sessionId, {
+          userUid: targetUid,
+          selfUid,
+          selfUin,
+          filePath: params.filePath,
+          ...(params.fileName ? { fileName: params.fileName } : {}),
+          send: params.send,
+        });
+        return { fileId: result.fileId };
+      },
       listGroupFiles: async (groupId, directory, startIndex, pageSize) => {
         const page = await ListGroupFiles.invoke(nt, sessionId, {
           groupId,
@@ -1054,6 +1148,9 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       getGroupFileUrl: async (groupId, fileId, busId) => {
         const download = await GetGroupFileUrl.invoke(nt, sessionId, { groupId, fileId, busId });
         return composeGroupFileDownloadUrl(download);
+      },
+      transGroupFile: async (groupId, fileId) => {
+        await TransGroupFile.invoke(nt, sessionId, { groupId, fileId });
       },
       getGroupFileCount: (groupId) => GetGroupFileCount.invoke(nt, sessionId, { groupId }),
       getGroupFileSpace: (groupId) => GetGroupFileSpace.invoke(nt, sessionId, { groupId }),
@@ -1094,6 +1191,13 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
     // ─────────────────────── 收藏表情 ───────────────────────
 
     customFace: {
+      async addCustomFace(source) {
+        const bytes =
+          typeof source === 'string'
+            ? new Uint8Array(await readFile(cleanNtLocalPath(source)))
+            : source;
+        return AddCustomFace.invoke(nt, sessionId, { selfUin, imageBytes: bytes });
+      },
       listCustomFaces: () => FetchCustomFaceList.invoke(nt, sessionId, { selfUin }),
       getCustomFaceDetail: async (emojiIds) => {
         const refs = emojiIds.map((emojiId) => parseCustomFaceId(emojiId));
@@ -1215,12 +1319,214 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
           ...(entry.emCode ? { emojiId: entry.emCode } : {}),
         };
       },
+      clickInlineButton: (params) =>
+        ClickInlineKeyboardButton.invoke(nt, sessionId, {
+          groupId: params.groupId,
+          botAppid: params.botAppid,
+          msgSeq: params.msgSeq,
+          buttonId: params.buttonId,
+          callbackData: params.callbackData,
+        }),
       translateEn2Zh: (words) => TranslateEnToZh.invoke(nt, sessionId, { words }),
     },
 
     groupAdminExtra: {
       async setGroupRemark(groupId: number, remark: string): Promise<void> {
         await SetGroupRemark.invoke(nt, sessionId, { groupId, remark });
+      },
+      async kickMembers(groupId, userIds, reject) {
+        for (const userId of userIds) {
+          const targetUid = options.resolveUidUin?.uidByUin(String(userId));
+          if (!targetUid) throw new Error(`踢人需要对方 uid（${userId} 未观测到）`);
+          await KickGroupMember.invoke(nt, sessionId, { groupId, targetUid, reject });
+        }
+      },
+      async setAddOption(params) {
+        await SetGroupAddOption.invoke(nt, sessionId, params);
+      },
+      listCategoryTags: (groupClass) => GetGroupCategoryTags.invoke(nt, sessionId, { groupClass }),
+      async addCategoryTag(groupClass, name) {
+        await AddGroupCategoryTag.invoke(nt, sessionId, { groupClass, name });
+      },
+      async removeCategoryTag(groupClass, name) {
+        await DeleteGroupCategoryTag.invoke(nt, sessionId, { groupClass, name });
+      },
+      async getAdminPermissions(groupId, userId) {
+        const snapshot = await GetAdminPermissions.invoke(nt, sessionId, { groupId, userId });
+        return {
+          recall_member_message: snapshot.recallMemberMessage,
+          kick_member: snapshot.kickMember,
+          kick_member_per_day: snapshot.kickMemberPerDay,
+        };
+      },
+      async setAdminPermissions(params) {
+        await SetAdminPermissions.invoke(nt, sessionId, params);
+      },
+      async setAdminReceiveVerify(groupId, userId, enable) {
+        await SetAdminReceiveVerify.invoke(nt, sessionId, { groupId, userId, enable });
+      },
+      async setRobotAddOption(params) {
+        await ModifyGroupExtInfo.invoke(nt, sessionId, {
+          groupId: params.groupId,
+          ...(params.robotMemberSwitch !== undefined
+            ? { robotMemberSwitch: params.robotMemberSwitch }
+            : {}),
+          ...(params.robotMemberExamine !== undefined
+            ? { robotMemberExamine: params.robotMemberExamine }
+            : {}),
+        });
+      },
+      async setGroupAvatar(groupId, source) {
+        await setGroupAvatar(nt, sessionId, { groupId, uin: selfUin, source });
+      },
+      async getIgnoredGroupRequests() {
+        const page = await FetchFilteredGroupRequests.invoke(nt, sessionId, { count: 50 });
+        const person = (actor: { uid: string; uin: number; name: string }): number =>
+          actor.uin || Number(options.resolveUidUin?.uinByUid(actor.uid) ?? 0);
+        return page.requests
+          .filter(
+            (request) =>
+              request.eventType === 1 || request.eventType === 2 || request.eventType === 22,
+          )
+          .map((request) => ({
+            groupId: request.groupId,
+            groupName: request.groupName,
+            sequence: request.sequence,
+            targetUin: person(request.target),
+            targetName: request.target.name,
+            invitorUin: person(request.invitor),
+            invitorName: request.invitor.name,
+            operatorUin: person(request.operator),
+            operatorName: request.operator.name,
+            comment: request.comment,
+            checked: request.state !== 1,
+            flag: [
+              'slreq',
+              '1',
+              request.sequence,
+              request.groupId,
+              request.eventType,
+              request.filtered ? 1 : 0,
+            ].join(':'),
+          }));
+      },
+      async getGroupSystemMessages(query = {}) {
+        const count = query.count ?? 50;
+        const [main, filtered] = await Promise.all([
+          FetchGroupRequests.invoke(nt, sessionId, { count }),
+          FetchFilteredGroupRequests.invoke(nt, sessionId, { count }),
+        ]);
+        const unique = new Map<string, (typeof main.requests)[number]>();
+        for (const request of [...main.requests, ...filtered.requests]) {
+          if (request.eventType !== 1 && request.eventType !== 2 && request.eventType !== 22) {
+            continue;
+          }
+          const flag = [
+            'slreq',
+            '1',
+            request.sequence,
+            request.groupId,
+            request.eventType,
+            request.filtered ? 1 : 0,
+          ].join(':');
+          if (!unique.has(flag)) unique.set(flag, request);
+        }
+        const person = (actor: { uid: string; uin: number; name: string }) => {
+          const uin = actor.uin || Number(options.resolveUidUin?.uinByUid(actor.uid) ?? 0);
+          return {
+            uin,
+            name: actor.name,
+            status: uin > 0 ? ('known' as const) : ('unknown' as const),
+          };
+        };
+        return [...unique.entries()]
+          .map(([flag, request]) => ({ flag, request }))
+          .filter(({ request }) => {
+            if (query.groupId !== undefined && request.groupId !== query.groupId) return false;
+            if (query.onlyPending && request.state !== 1) return false;
+            return true;
+          })
+          .map(({ flag, request }) => {
+            const target = person(request.target);
+            const invitor = person(request.invitor);
+            const operator = person(request.operator);
+            const requester = request.eventType === 2 ? invitor : target;
+            return {
+              group_id: request.groupId,
+              group_name: request.groupName,
+              request_id: request.sequence,
+              requester_uin: requester.uin,
+              requester_nick: requester.name,
+              target_uin: target.uin,
+              target_nick: target.name,
+              target_status: target.status,
+              invitor_uin: invitor.uin,
+              invitor_nick: invitor.name,
+              invitor_status: invitor.status,
+              operator_uin: operator.uin,
+              operator_nick: operator.name,
+              operator_status: operator.status,
+              message: request.comment,
+              checked: request.state !== 1,
+              flag,
+            };
+          });
+      },
+      async setGroupSearch(params) {
+        await SetGroupSearch.invoke(nt, sessionId, params);
+      },
+      async setMemberInvitePolicy(groupId, policy) {
+        const detail = await FetchGroupDetail.invoke(nt, sessionId, { groupId });
+        await SetGroupInvitePolicy.invoke(nt, sessionId, {
+          groupId,
+          currentPrivilegeFlag: detail.privilegeFlag,
+          policy,
+        });
+      },
+      async setNewMemberHistoryVisibility(groupId, visible) {
+        await SetGroupHistoryVisibility.invoke(nt, sessionId, { groupId, visible });
+      },
+      async setMemberPermissions(groupId, patch) {
+        const changes: Array<['upload_album' | 'temporary_session' | 'create_group', boolean]> = [];
+        if (patch.allowMemberUploadAlbum !== undefined) {
+          changes.push(['upload_album', patch.allowMemberUploadAlbum]);
+        }
+        if (patch.allowMemberTemporarySession !== undefined) {
+          changes.push(['temporary_session', patch.allowMemberTemporarySession]);
+        }
+        if (patch.allowMemberCreateGroup !== undefined) {
+          changes.push(['create_group', patch.allowMemberCreateGroup]);
+        }
+        for (const [permission, allow] of changes) {
+          const detail = await FetchGroupDetail.invoke(nt, sessionId, { groupId });
+          await SetGroupMemberPermission.invoke(nt, sessionId, {
+            groupId,
+            currentPrivilegeFlag: detail.privilegeFlag,
+            permission,
+            allow,
+          });
+        }
+      },
+      async getGroupAdminSettings(groupId) {
+        const [detail, robot] = await Promise.all([
+          FetchGroupDetail.invoke(nt, sessionId, { groupId }),
+          FetchGroupExtInfo.invoke(nt, sessionId, { groupId }),
+        ]);
+        const permissions = decodeGroupMemberPermissions(detail.privilegeFlag);
+        return {
+          add_type: detail.addType,
+          group_question: detail.question,
+          group_answer: detail.answer,
+          robot_member_switch: robot.robotMemberSwitch,
+          robot_member_examine: robot.robotMemberExamine,
+          member_invite_policy: decodeMemberInvitePolicy(detail.privilegeFlag),
+          allow_member_upload_album: permissions.allowMemberUploadAlbum,
+          allow_member_temporary_session: permissions.allowMemberTemporarySession,
+          allow_member_create_group: permissions.allowMemberCreateGroup,
+          new_member_history_visible: decodeGroupHistoryVisibility(detail.groupFlagExt4),
+          no_finger_open: detail.noFingerOpen,
+          no_code_finger_open: detail.noCodeFingerOpen,
+        };
       },
       async getGroupInfoEx(groupId: number) {
         const groups = await FetchGroupList.invoke(nt, sessionId);
@@ -1253,6 +1559,14 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       },
       async setAvatar(source): Promise<void> {
         await setSelfAvatar(nt, sessionId, { uin: selfUin, source });
+      },
+      async setSelfLongNick(longNick) {
+        await SetSelfLongNick.invoke(nt, sessionId, { selfUin, longNick });
+      },
+      async setInputStatus(userId, eventType) {
+        const targetUid = options.resolveUidUin?.uidByUin(String(userId));
+        if (!targetUid) throw new Error(`设置输入状态需要对方 uid（${userId} 未观测到）`);
+        await SetInputStatus.invoke(nt, sessionId, { targetUid, eventType });
       },
       async getProfileLike(params) {
         const self = !params.userId || params.userId === selfId;
@@ -1339,6 +1653,12 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
               ...(params.phoneNumber !== undefined ? { phoneNumber: params.phoneNumber } : {}),
             })
           : GetGroupRecommendArk.invoke(nt, sessionId, { groupId: params.contactId }),
+      getGroupShareLink: (params) =>
+        GetGroupShareLink.invoke(nt, sessionId, {
+          groupId: params.groupId,
+          needShortUrl: params.needShortUrl,
+          additionalParam: params.additionalParam,
+        }),
       async sendTuwenArk(params) {
         const result = await SendTuwenArk.invoke(nt, sessionId, params);
         // 外层 OIDB errorCode=0 也可能下发失败，必须看 result.errorCode。
@@ -1420,6 +1740,12 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
         }
         await SendFlashMsg.invoke(nt, sessionId, { targetUid, filesetUuid: filesetId });
       },
+      async getFileUrl(filesetId, fileIndex) {
+        return (await resolveFlashDownload(filesetId, fileIndex)).url;
+      },
+      async downloadFileset(filesetId, fileIndex) {
+        return resolveFlashDownload(filesetId, fileIndex);
+      },
       async getFilesetIdByCode(shareCode) {
         const url = flashShareUrl(shareCode);
         const response = await fetch(url, {
@@ -1480,7 +1806,44 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       },
     },
 
+    // 收藏走微云 collector，需要 weiyun.com 的 p_skey。
+    ...(options.webCredentials
+      ? {
+          collection: {
+            list: (category?: number, count?: number) =>
+              withRetry(options.webCredentials!, 'weiyun.com', (cred) =>
+                getCollectionList({
+                  uin: cred.uin,
+                  pskey: cred.pskey,
+                  category: category ?? 0,
+                  count: count ?? 50,
+                }),
+              ),
+          },
+        }
+      : {}),
+
+    ...(options.shutdown
+      ? {
+          botControl: {
+            shutdown: (reason: string) => options.shutdown!(reason),
+          },
+        }
+      : {}),
+
+    rkey: {
+      async getDownloadRkeys() {
+        const entries = await FetchDownloadRkeys.invoke(nt, sessionId, { types: [10, 20] });
+        return entries.map((entry) => ({
+          type: entry.type,
+          rkey: entry.rkey,
+          ttlSeconds: entry.ttlSeconds,
+        }));
+      },
+    },
+
     misc: {
+      getMiniAppArk: (params) => GetMiniAppArk.invoke(nt, sessionId, params) as Promise<unknown>,
       async requestDecryptKey(dbPath: string): Promise<string> {
         const bytes = await readFile(dbPath);
         if (bytes.length < 0xaf) throw new Error('数据库文件过短，读不到 128 字符盐');
@@ -1968,6 +2331,12 @@ function createQzoneBackend(options: {
         getQzoneMsgDetail(cred, target(uin), tid, pos, num),
       );
     },
+    getHomeFeeds: (uin?: number, cursor?: string) =>
+      withRetry(source, domain, (cred) => getQzoneHomeFeeds(cred, target(uin), cursor)),
+    getFeedDetail: (tid: string) =>
+      withRetry(source, domain, (cred) => getQzoneFeedDetail(cred, tid)),
+    getShareArk: (feed: Record<string, unknown>) =>
+      withRetry(source, domain, (cred) => getQzoneShareArk(cred, feed as never)),
     async getFeeds(pageNum: number, count: number, cursor?: string) {
       return withRetry(source, domain, (cred) =>
         getQzoneFeeds(cred, selfUin, pageNum, count, undefined, cursor),
@@ -2225,5 +2594,6 @@ function mapMember(groupId: number, member: GroupMemberListItem): GroupMemberInf
     level: String(member.level),
     role: member.permission === 1 ? 'owner' : member.permission === 2 ? 'admin' : 'member',
     title: member.specialTitle,
+    shutUpTime: member.shutUpTime,
   };
 }

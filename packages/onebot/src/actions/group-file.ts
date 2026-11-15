@@ -7,12 +7,25 @@
 
 import {
   defineAction,
+  optionalBool,
   optionalPositiveInt,
   optionalString,
+  ParamError,
   requiredPositiveInt,
   requiredString,
 } from '../action-registry';
 import type { GroupFilePageResult } from '../backend';
+import type { JsonObject } from '../types';
+
+/** `file` 只接受本机路径；`file://` 前缀剥掉，base64 / http 交给后端会读不了，直接 1400。 */
+function localFilePath(raw: JsonObject, key: string): string {
+  const file = requiredString(raw, key).trim();
+  if (!file) throw new ParamError(`${key} 不能为空`);
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(file) && !file.startsWith('file://')) {
+    throw new ParamError(`${key} 只支持本机路径，不支持远程 URL`);
+  }
+  return file.startsWith('file://') ? decodeURIComponent(file.slice('file://'.length)) : file;
+}
 
 function mapPage(groupId: number, page: GroupFilePageResult) {
   return {
@@ -248,5 +261,68 @@ export const GROUP_FILE_ACTIONS = [
       },
     },
     { available: (backend) => typeof backend.groupFile?.renameGroupFolder === 'function' },
+  ),
+  defineAction(
+    {
+      name: 'delete_group_folder',
+      summary: '删除群文件夹（NapCat 别名）',
+      parse: (raw) => ({
+        groupId: requiredPositiveInt(raw, 'group_id'),
+        folderId: requiredString(raw, 'folder_id'),
+      }),
+      run: async ({ groupId, folderId }, ctx) => {
+        await ctx.backend.groupFile!.deleteGroupFolder(groupId, folderId);
+        return null;
+      },
+    },
+    { available: (backend) => typeof backend.groupFile?.deleteGroupFolder === 'function' },
+  ),
+  defineAction(
+    {
+      name: 'trans_group_file',
+      summary: '转存群文件',
+      parse: (raw) => ({
+        groupId: requiredPositiveInt(raw, 'group_id'),
+        fileId: requiredString(raw, 'file_id'),
+      }),
+      run: async ({ groupId, fileId }, ctx) => {
+        await ctx.backend.groupFile!.transGroupFile(groupId, fileId);
+        return { ok: true };
+      },
+    },
+    { available: (backend) => typeof backend.groupFile?.transGroupFile === 'function' },
+  ),
+  defineAction(
+    {
+      name: 'upload_group_file',
+      summary: '上传群文件',
+      parse: (raw) => ({
+        groupId: requiredPositiveInt(raw, 'group_id'),
+        filePath: localFilePath(raw, 'file'),
+        fileName: optionalString(raw, 'name') || undefined,
+        folderId: optionalString(raw, 'folder') || optionalString(raw, 'folder_id') || '/',
+        publish: optionalBool(raw, 'upload_file', true),
+      }),
+      run: async (params, ctx) => ({
+        file_id: (await ctx.backend.groupFile!.uploadGroupFile(params)).fileId,
+      }),
+    },
+    { available: (backend) => typeof backend.groupFile?.uploadGroupFile === 'function' },
+  ),
+  defineAction(
+    {
+      name: 'upload_private_file',
+      summary: '上传私聊文件并发送',
+      parse: (raw) => ({
+        userId: requiredPositiveInt(raw, 'user_id'),
+        filePath: localFilePath(raw, 'file'),
+        fileName: optionalString(raw, 'name') || undefined,
+        send: optionalBool(raw, 'upload_file', true),
+      }),
+      run: async (params, ctx) => ({
+        file_id: (await ctx.backend.groupFile!.uploadPrivateFile(params)).fileId,
+      }),
+    },
+    { available: (backend) => typeof backend.groupFile?.uploadPrivateFile === 'function' },
   ),
 ];

@@ -264,6 +264,12 @@ export const SIGN_RULES = {
 export const UNCONFIRMED_SIGN_COMMANDS: Readonly<Record<string, string>> = {
   'MQUpdateSvc_com_qq_ti.web.OidbSvc.0xe17_0': '单向好友：JSON 自定义传输，三端签名未实测',
   'OidbSvcTrpcTcp.0x929d_0': 'AI 声线目录：仅 SnowLuma 文档记录过，三端签名未实测',
+  'OidbSvcTrpcTcp.0x88d_0': '单群详情：从 SnowLuma 搬运，三端签名未实测',
+  'OidbSvcTrpcTcp.0x6d9_0': '群文件转存：从 SnowLuma 搬运，三端签名未实测',
+  'OidbSvcTrpcTcp.0x93d4_1': '闪传主文件元信息：从 SnowLuma 搬运，三端签名未实测',
+  'OidbSvcTrpcTcp.0x12a9_200': '闪传主文件直链：从 SnowLuma 搬运，三端签名未实测',
+  'OidbSvcTrpcTcp.0x9060_3': '群分享链接：从 SnowLuma 搬运，三端签名未实测',
+  'LightAppSvc.mini_app_share.AdaptShareInfo': '小程序分享卡片：从 SnowLuma 搬运，三端签名未实测',
 };
 
 /** 表里出现过的 wire 命令。 */

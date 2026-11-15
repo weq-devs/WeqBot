@@ -292,6 +292,39 @@ const setFriendsCategory = defineAction(
   { available: (backend) => typeof backend.contactsExtra?.setFriendCategory === 'function' },
 );
 
+const setSelfLongNick = defineAction(
+  {
+    name: 'set_self_longnick',
+    summary: '设置个性签名',
+    parse: (raw) => {
+      const value = raw.longNick ?? raw.long_nick;
+      if (typeof value !== 'string') throw new ParamError('longNick / long_nick 必须是字符串');
+      return { longNick: value };
+    },
+    run: async ({ longNick }, ctx) => {
+      await ctx.backend.profile!.setSelfLongNick(longNick);
+      return {};
+    },
+  },
+  { available: (backend) => typeof backend.profile?.setSelfLongNick === 'function' },
+);
+
+const setInputStatus = defineAction(
+  {
+    name: 'set_input_status',
+    summary: '设置好友会话输入状态',
+    parse: (raw) => ({
+      userId: requiredPositiveInt(raw, 'user_id'),
+      eventType: optionalNonNegativeInt(raw, 'event_type') ?? 0,
+    }),
+    run: async ({ userId, eventType }, ctx) => {
+      await ctx.backend.profile!.setInputStatus(userId, eventType);
+      return {};
+    },
+  },
+  { available: (backend) => typeof backend.profile?.setInputStatus === 'function' },
+);
+
 export const ACCOUNT_ACTIONS = [
   getProfileLike,
   setQqProfile,
@@ -301,4 +334,6 @@ export const ACCOUNT_ACTIONS = [
   requestDecryptKey,
   getFriendsWithCategory,
   setFriendsCategory,
+  setSelfLongNick,
+  setInputStatus,
 ];

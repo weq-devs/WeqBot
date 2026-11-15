@@ -18,6 +18,7 @@ export {
   type FriendListEntry,
 } from './friend-list';
 export { FetchGroupList, type GroupInfo } from './group-list';
+export { GetGroupShareLink, type GroupShareLinkParams } from './group-share-link';
 export {
   fetchAllGroupMembers,
   type FetchAllGroupMembersOptions,

@@ -45,6 +45,8 @@ export type {
   SendContactArkResult,
 } from './send-contact-ark';
 export { SendLocationArk, LOCATION_ARK_CMD } from './send-location-ark';
+export { GetMiniAppArk, MINI_APP_SHARE_CMD } from './mini-app-ark';
+export type { MiniAppArkParams, MiniAppArkResult } from './mini-app-ark';
 export type { SendLocationArkParams } from './send-location-ark';
 export { SendAiVoice } from './send-ai-voice';
 export { FetchAiVoiceList } from './fetch-ai-voice-list';

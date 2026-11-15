@@ -9,6 +9,7 @@
  * `get_group_album_media_list` 的条目（`batchId` / `image.lloc` 或 `video.id`）。
  */
 
+import { readFile } from 'node:fs/promises';
 import {
   defineAction,
   optionalPositiveInt,
@@ -50,6 +51,30 @@ async function fileBytes(value: string): Promise<Uint8Array> {
   if (bytes.length === 0) throw new ParamError('文件内容为空或不是合法 base64');
   return bytes;
 }
+
+function localPath(value: string): string {
+  return value.startsWith('file://') ? decodeURIComponent(value.slice('file://'.length)) : value;
+}
+
+/** 封面：base64 / data: / 本机路径。 */
+async function coverBytes(value: string): Promise<Uint8Array> {
+  if (
+    value.startsWith('data:') ||
+    !/^(?:[a-z][a-z0-9+.-]*:\/\/|\/|[A-Za-z]:\\|\.[/\\])/i.test(value)
+  ) {
+    return fileBytes(value);
+  }
+  if (/^https?:\/\//i.test(value)) return fileBytes(value);
+  return new Uint8Array(await readFile(localPath(value)));
+}
+
+/** 1×1 白色 JPEG，视频封面缺省占位（SnowLuma 用 ffmpeg 抽帧，WeqBot 不引）。 */
+const PLACEHOLDER_JPEG = Uint8Array.from(
+  Buffer.from(
+    '/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAABAAEDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwD3+iiigD//2Q==',
+    'base64',
+  ),
+);
 
 function honorType(raw: JsonObject): 'all' | 'talkative' | 'performer' | 'legend' | 'emotion' {
   const value = raw.type ?? 'all';
@@ -283,6 +308,90 @@ export const GROUP_WEB_ACTIONS = [
         ctx.backend.groupAlbum!.setLike({ groupId, albumId, batchId, lloc, like: false }),
     },
     { available: (backend) => typeof backend.groupAlbum?.setLike === 'function' },
+  ),
+
+  defineAction(
+    {
+      name: 'get_qun_album_list',
+      summary: '获取群相册列表（NapCat 封套）',
+      parse: (raw) => ({ groupId: requiredPositiveInt(raw, 'group_id') }),
+      run: async ({ groupId }, ctx) => {
+        const list = (await ctx.backend.groupAlbum!.listAlbums(groupId)) as Array<
+          Record<string, unknown>
+        >;
+        return {
+          album_list: list.map((album) => ({
+            album_id: String(album.id ?? ''),
+            name: String(album.name ?? ''),
+            create_time: String(album.createTime ?? 0),
+            last_upload_time: String(album.last_upload_time ?? 0),
+            upload_number: String(album.picNum ?? album.upload_number ?? 0),
+            cover: album.cover ?? null,
+            creator: {
+              uin: String(album.createuin ?? ''),
+              uid: String(album.createuid ?? ''),
+              nick: String(album.createnickname ?? ''),
+            },
+          })),
+          attach_info: '',
+          has_more: false,
+        };
+      },
+    },
+    { available: (backend) => typeof backend.groupAlbum?.listAlbums === 'function' },
+  ),
+
+  defineAction(
+    {
+      name: 'upload_video_to_qun_album',
+      summary: '上传视频到群相册',
+      parse: (raw) => {
+        const file = requiredString(raw, 'file').trim();
+        if (!file) throw new ParamError('file 不能为空');
+        const albumId = requiredString(raw, 'album_id');
+        const albumName = requiredString(raw, 'album_name');
+        if (!albumId.trim() || !albumName.trim()) {
+          throw new ParamError('album_id / album_name 不能为空');
+        }
+        return {
+          groupId: requiredPositiveInt(raw, 'group_id'),
+          albumId,
+          albumName,
+          file,
+          fileName: optionalString(raw, 'file_name'),
+          cover: optionalString(raw, 'cover'),
+          duration: optionalInt(raw, 'duration'),
+          width: optionalInt(raw, 'width'),
+          height: optionalInt(raw, 'height'),
+        };
+      },
+      run: async (
+        { groupId, albumId, albumName, file, fileName, cover, duration, width, height },
+        ctx,
+      ) => {
+        const video = /^(?:data:|https?:\/\/)/i.test(file)
+          ? await fileBytes(file)
+          : localPath(file);
+        const coverBytesValue = cover ? await coverBytes(cover) : PLACEHOLDER_JPEG;
+        const result = (await ctx.backend.groupAlbum!.uploadVideo({
+          groupId,
+          albumId,
+          albumName,
+          video,
+          cover: coverBytesValue,
+          durationMs: duration && duration > 0 ? duration : 1000,
+          width: width && width > 0 ? width : 1,
+          height: height && height > 0 ? height : 1,
+          fileName:
+            fileName ||
+            (file.startsWith('data:') || /^https?:\/\//i.test(file)
+              ? 'video.mp4'
+              : localPath(file).split('/').pop()?.split('\\').pop() || 'video.mp4'),
+        })) as { videoId?: string; id?: string };
+        return { id: String(result.videoId ?? result.id ?? '') };
+      },
+    },
+    { available: (backend) => typeof backend.groupAlbum?.uploadVideo === 'function' },
   ),
 
   defineAction(

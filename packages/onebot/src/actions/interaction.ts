@@ -7,6 +7,7 @@
  */
 
 import {
+  defineAction,
   optionalString,
   ParamError,
   requiredPositiveInt,
@@ -147,11 +148,38 @@ const setGroupAddRequest = define(
   ['setGroupAddRequest'],
 );
 
+const clickInlineKeyboardButton = defineAction(
+  {
+    name: 'click_inline_keyboard_button',
+    summary: '点击机器人消息的内联键盘按钮',
+    parse: (raw) => ({
+      groupId: requiredPositiveInt(raw, 'group_id'),
+      botAppid: requiredPositiveInt(raw, 'bot_appid'),
+      msgSeq: requiredPositiveInt(raw, 'msg_seq'),
+      buttonId: requiredString(raw, 'button_id'),
+      callbackData: optionalString(raw, 'callback_data') ?? '',
+    }),
+    run: async (params, ctx) => {
+      const result = await ctx.backend.interactionExtra!.clickInlineButton(params);
+      return {
+        ...result,
+        status: 0,
+        promptType: 0,
+        promptIcon: 0,
+      };
+    },
+  },
+  {
+    available: (backend) => typeof backend.interactionExtra?.clickInlineButton === 'function',
+  },
+);
+
 export const INTERACTION_ACTIONS = [
   sendLike,
   sendPoke,
   friendPoke,
   groupPoke,
+  clickInlineKeyboardButton,
   setFriendAddRequest,
   setGroupAddRequest,
 ];

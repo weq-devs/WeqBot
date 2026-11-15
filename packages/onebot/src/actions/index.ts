@@ -16,6 +16,7 @@ import { isDeniedAction, type ActionDefinition, type ActionRegistry } from '../a
 import type { OneBotBackend } from '../backend';
 import { ACCOUNT_ACTIONS } from './account';
 import { ACCOUNT_WEB_ACTIONS } from './account-web';
+import { COLLECTION_ACTIONS } from './collection';
 import { CONTACT_ACTIONS } from './contact';
 import { GROUP_ADMIN_ACTIONS } from './group-admin';
 import { GROUP_WEB_ACTIONS } from './group-web';
@@ -24,6 +25,7 @@ import { INTERACTION_ACTIONS } from './interaction';
 import { MESSAGE_ACTIONS } from './message';
 import { EXTENDED_ACTIONS } from './extended';
 import { FLASH_TRANSFER_ACTIONS } from './flash-transfer';
+import { L2_EXTRA_ACTIONS } from './l2-extra';
 import { QZONE_ACTIONS } from './qzone';
 
 export type { ActionEntry } from '../action-registry';
@@ -36,9 +38,11 @@ export const ALL_ACTIONS: ActionEntry[] = [
   ...GROUP_FILE_ACTIONS,
   ...EXTENDED_ACTIONS,
   ...FLASH_TRANSFER_ACTIONS,
+  ...L2_EXTRA_ACTIONS,
   ...ACCOUNT_ACTIONS,
   ...GROUP_WEB_ACTIONS,
   ...ACCOUNT_WEB_ACTIONS,
+  ...COLLECTION_ACTIONS,
   ...QZONE_ACTIONS,
 ];
 
@@ -81,6 +85,7 @@ export function registerActions(
 
 export { ACCOUNT_ACTIONS } from './account';
 export { ACCOUNT_WEB_ACTIONS } from './account-web';
+export { COLLECTION_ACTIONS } from './collection';
 export { CONTACT_ACTIONS } from './contact';
 export { GROUP_ADMIN_ACTIONS } from './group-admin';
 export { GROUP_FILE_ACTIONS } from './group-file';
@@ -89,6 +94,7 @@ export { INTERACTION_ACTIONS } from './interaction';
 export { MESSAGE_ACTIONS } from './message';
 export { EXTENDED_ACTIONS } from './extended';
 export { FLASH_TRANSFER_ACTIONS } from './flash-transfer';
+export { L2_EXTRA_ACTIONS } from './l2-extra';
 export { QZONE_ACTIONS } from './qzone';
 
 // 供仍在使用旧形状的调用方（`ActionDefinition` 泛型）引用。

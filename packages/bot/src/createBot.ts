@@ -435,6 +435,7 @@ export function createBot(options: CreateBotOptions): Bot {
         ...(config.onebot.qzoneDomain ? { qzoneDomain: config.onebot.qzoneDomain } : {}),
         imageUrlResolver: (element, isGroup) => media.imageUrl(element, isGroup),
         mediaUrlResolver: (element, isGroup) => media.mediaUrl(element, isGroup),
+        shutdown: (reason) => stop(reason === 'bot-exit' ? 'bot-exit' : 'closed'),
         resolveUidUin: {
           uinByUid: (targetUid: string) => identity.uinOf(targetUid),
           uidByUin: (targetUin: string) => identity.uidOf(targetUin),

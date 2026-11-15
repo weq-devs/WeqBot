@@ -19,6 +19,8 @@ export { SendFlashMsg } from './send-flash';
 export type { SendFlashMsgParams } from './send-flash';
 export { GetFilesetDetail } from './get-fileset-detail';
 export type { FlashFileInfo } from './get-fileset-detail';
+export { GetFlashDownload, GetFlashDownloadUrl } from './download-url';
+export type { FlashDownloadFileMeta, FlashDownloadParams } from './download-url';
 export {
   createFlashFileset,
   commitFlashFileset,
