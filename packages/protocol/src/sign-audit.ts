@@ -125,6 +125,19 @@ export const MEASURED_COMMANDS: Readonly<Record<string, ReadonlyArray<keyof Sign
   // 这两条 Linux 侧早前已实测（见上），三端证据齐全。
   'OidbSvcTrpcTcp.0x1255_0': ['linux', 'win32', 'darwin'],
   'OidbSvcTrpcTcp.0xf16_1': ['linux', 'win32', 'darwin'],
+
+  // 2026-11-15 Linux（QQ 3.2.35-54395）probe-sign 实测，P8 新增的 8 条命令。
+  // 正对照 `0x88d_0` 通过（它自己签名），8/8 命中、0 丢帧 —— 因此「无 tag 24」
+  // 是真的不签名。⚠️ 正文是占位：签名决策看命令字，但真实业务正文未验收。
+  // Windows / macOS 待测；补测后把平台追加进对应数组。
+  'OidbSvcTrpcTcp.0x88d_0': ['linux'], // 签
+  'OidbSvcTrpcTcp.0x929d_0': ['linux'], // 不签
+  'OidbSvcTrpcTcp.0x6d9_0': ['linux'], // 不签
+  'OidbSvcTrpcTcp.0x93d4_1': ['linux'], // 不签
+  'OidbSvcTrpcTcp.0x12a9_200': ['linux'], // 不签
+  'OidbSvcTrpcTcp.0x9060_3': ['linux'], // 不签
+  'LightAppSvc.mini_app_share.AdaptShareInfo': ['linux'], // 不签
+  'MQUpdateSvc_com_qq_ti.web.OidbSvc.0xe17_0': ['linux'], // 不签
 };
 
 export interface SignAuditEntry {

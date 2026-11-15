@@ -252,25 +252,46 @@ export const SIGN_RULES = {
   'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoQueryRoom': { sign: 'none' },
   'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoMultiTerminalSync': { sign: 'none' },
   'trpc.qqva.gift_midground_panel.GiftMidgroundPanel.SsoGetSceneItem': { sign: 'none' },
+
+  // ─── 2026-11-15 Linux 真机实测（WeQ `scripts/probe-sign.ts`，QQ 3.2.35-54395）──
+  // 这批是 §12.8.5 台账里挂「需三端真机验证签名」的 8 条新命令（P8 补进来的）。
+  // 方法：probe-sign 走 hook 的 control pipe 让 **QQ 本体**组帧发出，同时抓网卡解
+  // SSO reserved 看有没有 tag 24（`SecInfo`）。正对照 = `0x88d_0`（它签名），
+  // `controlPassed: true`，8/8 命中、0 丢帧、0 解析错误 —— 所以「不签名」是真的
+  // 没带 SecInfo，不是没抓到。
+  //
+  // ⚠️ 正文是占位（`bodySource: 'placeholder'`，空 OIDB body）。签名决策看的是
+  // 命令字，不依赖正文，但**真实业务正文的成功率仍未验收**（P8.6）。
+  //
+  // Windows / macOS 尚未测，这三条用逐端声明而不是 `'none'`，避免把 Linux 的
+  // 结论当成三端结论 —— 两端的实测结论补进来时把对应的 `false` 改掉即可。
+  'OidbSvcTrpcTcp.0x88d_0': { sign: { linux: true, win32: false, darwin: false } }, // 单群详情：Linux 签
+  'OidbSvcTrpcTcp.0x929d_0': { sign: { linux: false, win32: false, darwin: false } }, // AI 声线目录
+  'OidbSvcTrpcTcp.0x6d9_0': { sign: { linux: false, win32: false, darwin: false } }, // 群文件转存（0x6d9_4 是另一条）
+  'OidbSvcTrpcTcp.0x93d4_1': { sign: { linux: false, win32: false, darwin: false } }, // 闪传主文件元信息
+  'OidbSvcTrpcTcp.0x12a9_200': { sign: { linux: false, win32: false, darwin: false } }, // 闪传主文件直链（_100/_103 是上传）
+  'OidbSvcTrpcTcp.0x9060_3': { sign: { linux: false, win32: false, darwin: false } }, // 群分享链接
+  'LightAppSvc.mini_app_share.AdaptShareInfo': {
+    // 小程序分享卡片（raw SSO，不套 OIDB 信封）。
+    sign: { linux: false, win32: false, darwin: false },
+  },
+  'MQUpdateSvc_com_qq_ti.web.OidbSvc.0xe17_0': {
+    // 单向好友（raw JSON 传输）。
+    sign: { linux: false, win32: false, darwin: false },
+  },
 } as const satisfies Record<string, SignRule>;
 
 /**
  * 无逐命令签名依据的现有入口；不把默认 false 登记成已确认的不签名策略。
  *
  * 2026-11-14 起原先 20 条「未实测」命令在 Windows / macOS 实测后全部转入
- * `SIGN_RULES` 的 `sign: 'none'`；仅剩单向好友仍缺三端实测依据。
- * 新增入口若缺依据，仍登记到这里。
+ * `SIGN_RULES` 的 `sign: 'none'`。
+ *
+ * 2026-11-15：最后 8 条（P8 新增命令）在 Linux 实测后也全部转入 `SIGN_RULES`
+ * 的逐端声明 —— 其中 `0x88d_0` **要签名**，其余 7 条不签。表现在是空的：
+ * 只有「新加的 spec 忘了登记」才会落进来，`sign-coverage.test.ts` 兜底。
  */
-export const UNCONFIRMED_SIGN_COMMANDS: Readonly<Record<string, string>> = {
-  'MQUpdateSvc_com_qq_ti.web.OidbSvc.0xe17_0': '单向好友：JSON 自定义传输，三端签名未实测',
-  'OidbSvcTrpcTcp.0x929d_0': 'AI 声线目录：仅 SnowLuma 文档记录过，三端签名未实测',
-  'OidbSvcTrpcTcp.0x88d_0': '单群详情：从 SnowLuma 搬运，三端签名未实测',
-  'OidbSvcTrpcTcp.0x6d9_0': '群文件转存：从 SnowLuma 搬运，三端签名未实测',
-  'OidbSvcTrpcTcp.0x93d4_1': '闪传主文件元信息：从 SnowLuma 搬运，三端签名未实测',
-  'OidbSvcTrpcTcp.0x12a9_200': '闪传主文件直链：从 SnowLuma 搬运，三端签名未实测',
-  'OidbSvcTrpcTcp.0x9060_3': '群分享链接：从 SnowLuma 搬运，三端签名未实测',
-  'LightAppSvc.mini_app_share.AdaptShareInfo': '小程序分享卡片：从 SnowLuma 搬运，三端签名未实测',
-};
+export const UNCONFIRMED_SIGN_COMMANDS: Readonly<Record<string, string>> = {};
 
 /** 表里出现过的 wire 命令。 */
 export type SignedCommand = keyof typeof SIGN_RULES;
