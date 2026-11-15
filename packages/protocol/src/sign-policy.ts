@@ -253,23 +253,31 @@ export const SIGN_RULES = {
   'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoMultiTerminalSync': { sign: 'none' },
   'trpc.qqva.gift_midground_panel.GiftMidgroundPanel.SsoGetSceneItem': { sign: 'none' },
 
-  // ─── 2026-11-15 Linux 真机实测（WeQ `scripts/probe-sign.ts`，QQ 3.2.35-54395）──
+  // ─── 2026-11-15/16 Linux + Windows 真机实测（WeQ `scripts/probe-sign.ts`）──
   // 这批是 §12.8.5 台账里挂「需三端真机验证签名」的 8 条新命令（P8 补进来的）。
   // 方法：probe-sign 走 hook 的 control pipe 让 **QQ 本体**组帧发出，同时抓网卡解
   // SSO reserved 看有没有 tag 24（`SecInfo`）。正对照 = `0x88d_0`（它签名），
-  // `controlPassed: true`，8/8 命中、0 丢帧、0 解析错误 —— 所以「不签名」是真的
-  // 没带 SecInfo，不是没抓到。
+  // 命中、0 丢帧、0 解析错误 —— 所以「不签名」是真的没带 SecInfo，不是没抓到。
+  //
+  // 平台：Linux QQ 3.2.35-54395；Windows QQ 9.9.35-52892。
+  //
+  // **两端结论有一处不同**：`0x12a9_200` 在 Linux 不签、在 Windows 签。逐端声明
+  // 存在的理由就是这种差异，不能写成 `'none'` 或 `'all'`。
+  //
+  // mode：Windows 实测 sign=96 是完整签名（mode2），sign=28 是精简签名（mode3）。
+  // 同批对照 `0x112a_2` / `MessageSvc.PbSendMsg`（登记 mode2）= 96，
+  // `0xfe1_2`（精简）= 28。`0x88d_0` 与 `0x12a9_200` 都测到 28 → **不需要 mode2**。
   //
   // ⚠️ 正文是占位（`bodySource: 'placeholder'`，空 OIDB body）。签名决策看的是
   // 命令字，不依赖正文，但**真实业务正文的成功率仍未验收**（P8.6）。
   //
-  // Windows / macOS 尚未测，这三条用逐端声明而不是 `'none'`，避免把 Linux 的
-  // 结论当成三端结论 —— 两端的实测结论补进来时把对应的 `false` 改掉即可。
-  'OidbSvcTrpcTcp.0x88d_0': { sign: { linux: true, win32: false, darwin: false } }, // 单群详情：Linux 签
+  // macOS 尚未测，各条 `darwin` 保持 false 占位 —— 补测后改对应值即可。
+  'OidbSvcTrpcTcp.0x88d_0': { sign: { linux: true, win32: true, darwin: false } }, // 单群详情：两端都签
   'OidbSvcTrpcTcp.0x929d_0': { sign: { linux: false, win32: false, darwin: false } }, // AI 声线目录
   'OidbSvcTrpcTcp.0x6d9_0': { sign: { linux: false, win32: false, darwin: false } }, // 群文件转存（0x6d9_4 是另一条）
   'OidbSvcTrpcTcp.0x93d4_1': { sign: { linux: false, win32: false, darwin: false } }, // 闪传主文件元信息
-  'OidbSvcTrpcTcp.0x12a9_200': { sign: { linux: false, win32: false, darwin: false } }, // 闪传主文件直链（_100/_103 是上传）
+  // 闪传主文件直链（_100/_103 是上传）：Linux 不签，Windows 签。
+  'OidbSvcTrpcTcp.0x12a9_200': { sign: { linux: false, win32: true, darwin: false } },
   'OidbSvcTrpcTcp.0x9060_3': { sign: { linux: false, win32: false, darwin: false } }, // 群分享链接
   'LightAppSvc.mini_app_share.AdaptShareInfo': {
     // 小程序分享卡片（raw SSO，不套 OIDB 信封）。
