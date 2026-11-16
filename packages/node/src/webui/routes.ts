@@ -12,7 +12,7 @@
  * - 其余 `/api/*`：必须带有效会话 cookie，否则 401。
  */
 
-import { readdirSync, statSync } from 'node:fs';
+import { existsSync, readdirSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import { join } from 'node:path';
 import type { BotOneBotConfig } from '@weqbot/bot';
@@ -40,7 +40,14 @@ import {
   requireMethod,
 } from './http-util';
 import type { Observability, StreamName } from './observability';
+import { looksAbsolutePath, normalizeQqDataRoot, normalizeQqInstallDir } from './qq-normalize';
 import { openSse } from './sse';
+
+/** `qq.installDir` / `qq.dataDir` 的补丁：`null` 表示清除覆盖、回到自动探测。 */
+export interface QqPathOverridesPatch {
+  installDir?: string | null;
+  dataDir?: string | null;
+}
 
 export interface WebUiRouteOptions {
   auth: WebUiAuth;
@@ -49,6 +56,8 @@ export interface WebUiRouteOptions {
   logger?: Logger;
   /** 保存 OneBot 配置的落盘点（`--config` 文件）。没有时配置只在内存生效。 */
   saveConfig?: (config: BotOneBotConfig) => Promise<void>;
+  /** 保存手动指定的 QQ 路径（`qq.installDir` / `qq.dataDir`）。没有时只在内存生效。 */
+  saveQqPaths?: (patch: QqPathOverridesPatch) => Promise<void>;
   /** 读取当前 OneBot 配置（给网络页）。 */
   readConfig: () => BotOneBotConfig | undefined;
   /** `--config` 路径；设置页只展示，不在这里写。 */
@@ -111,7 +120,7 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
 
       if (path === '/api/login/environment') {
         requireMethod(request, 'GET');
-        return ok(response, await runtime.environment());
+        return ok(response, await runtime.environment(wantsRefresh(url)));
       }
 
       if (path === '/api/login/accounts') {
@@ -143,12 +152,16 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
       }
 
       if (path === '/api/settings') {
-        if (request.method === 'GET') return ok(response, await settingsSnapshot());
+        if (request.method === 'GET') {
+          return ok(response, await settingsSnapshot(wantsRefresh(url)));
+        }
         if (request.method === 'PUT') {
           const body = await readJson<{
             logDir?: unknown;
             level?: unknown;
             qzone?: unknown;
+            qqPaths?: unknown;
+            refresh?: unknown;
           }>(request);
           if (body.logDir !== undefined) {
             if (body.logDir !== null && typeof body.logDir !== 'string') {
@@ -177,7 +190,16 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
             await options.saveConfig?.(next);
             log.info('QQ 空间能力已切换', { qzone: body.qzone });
           }
-          return ok(response, await settingsSnapshot());
+          if (body.qqPaths !== undefined) {
+            const patch = parseQqPathsPatch(body.qqPaths);
+            // 先落盘再改内存：写文件失败时运行时保持原样，否则用户会看到
+            // 「设置生效了」但重启后又变回去。
+            await options.saveQqPaths?.(patch);
+            runtime.setQqPathOverrides(mergeQqPathOverrides(runtime, patch));
+            log.info('QQ 路径已更新', { installDir: patch.installDir, dataDir: patch.dataDir });
+          }
+          const refresh = body.refresh === true;
+          return ok(response, await settingsSnapshot(refresh));
         }
         throw new HttpError(405, 'METHOD_NOT_ALLOWED');
       }
@@ -242,10 +264,12 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
     });
   }
 
-  async function settingsSnapshot(): Promise<{
+  async function settingsSnapshot(refresh = false): Promise<{
     environment: Awaited<ReturnType<ConsoleRuntime['environment']>>;
     account: { uin: string } | null;
     onebot: { qzone: boolean };
+    /** 当前生效的手动路径（设置页预填输入框）；没设就是 null。 */
+    qqPaths: { installDir: string | null; dataDir: string | null };
     logging: {
       dir: string | null;
       level: LogLevel;
@@ -262,10 +286,15 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
     };
   }> {
     const dir = getLogDirectory();
+    const overrides = runtime.qqPathOverrides ?? {};
     return {
-      environment: await runtime.environment(),
+      environment: await runtime.environment(refresh),
       account: runtime.boundUin ? { uin: runtime.boundUin } : null,
       onebot: { qzone: options.readConfig()?.qzone !== false },
+      qqPaths: {
+        installDir: overrides.installDir ?? null,
+        dataDir: overrides.dataDir ?? null,
+      },
       logging: {
         dir,
         level: getLogLevel(),
@@ -281,6 +310,89 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
         configPath: options.configPath ?? null,
       },
     };
+  }
+
+  // ─────────────────────────── QQ 路径 ───────────────────────────
+
+  /** `?refresh=1` / `?refresh=true`：跳过路径缓存。 */
+  function wantsRefresh(url: URL): boolean {
+    const value = url.searchParams.get('refresh');
+    return value === '1' || value === 'true';
+  }
+
+  /**
+   * 校验设置页提交的 QQ 路径。
+   *
+   * 三道关：类型 → 绝对路径 → 归一化后仍存在。归一化很重要：用户从文件选择器里
+   * 点进 `<root>/<uin>` 或 `resources/app` 是常见手滑，直接报错会让人以为不支持。
+   */
+  function parseQqPathsPatch(value: unknown): QqPathOverridesPatch {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      throw new HttpError(400, 'BAD_QQ_PATHS', 'qqPaths 必须是对象');
+    }
+    const record = value as Record<string, unknown>;
+    for (const key of Object.keys(record)) {
+      if (key !== 'installDir' && key !== 'dataDir') {
+        throw new HttpError(400, 'BAD_QQ_PATHS', `qqPaths 里不认识的键 "${key}"`);
+      }
+    }
+
+    const patch: QqPathOverridesPatch = {};
+    for (const key of ['installDir', 'dataDir'] as const) {
+      if (!(key in record)) continue;
+      const raw = record[key];
+      if (raw === null) {
+        patch[key] = null;
+        continue;
+      }
+      if (typeof raw !== 'string') {
+        throw new HttpError(400, 'BAD_QQ_PATHS', `${key} 必须是字符串或 null`);
+      }
+      const trimmed = raw.trim();
+      // 空串等价于「清除」：前端清空输入框后点应用就是这个形状。
+      if (!trimmed) {
+        patch[key] = null;
+        continue;
+      }
+      if (!looksAbsolutePath(trimmed)) {
+        throw new HttpError(
+          400,
+          'BAD_QQ_PATHS',
+          `${key} 必须是绝对路径（收到 "${trimmed}"）：相对路径会按服务进程的 cwd 解析，含义不确定`,
+        );
+      }
+      const normalized =
+        key === 'installDir'
+          ? normalizeQqInstallDir(trimmed, process.platform)
+          : normalizeQqDataRoot(trimmed, process.platform);
+      if (!existsSync(normalized)) {
+        const hint =
+          normalized === trimmed
+            ? `路径不存在：${normalized}`
+            : `路径不存在：${normalized}（已按目录层级从 "${trimmed}" 归一化而来）`;
+        throw new HttpError(400, 'BAD_QQ_PATHS', `${key} ${hint}`);
+      }
+      patch[key] = normalized;
+    }
+    return patch;
+  }
+
+  /** 把补丁合并到当前覆盖上（`undefined` 保持不变，`null` 清除）。 */
+  function mergeQqPathOverrides(
+    runtime: ConsoleRuntime,
+    patch: QqPathOverridesPatch,
+  ): { installDir?: string | null; dataDir?: string | null } | null {
+    const current = runtime.qqPathOverrides ?? {};
+    const next: { installDir?: string | null; dataDir?: string | null } = { ...current };
+    if (patch.installDir !== undefined) {
+      if (patch.installDir === null) delete next.installDir;
+      else next.installDir = patch.installDir;
+    }
+    if (patch.dataDir !== undefined) {
+      if (patch.dataDir === null) delete next.dataDir;
+      else next.dataDir = patch.dataDir;
+    }
+    return Object.keys(next).length > 0 ? next : null;
   }
 
   // ─────────────────────────── 鉴权 ───────────────────────────

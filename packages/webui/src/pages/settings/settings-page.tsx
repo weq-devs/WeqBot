@@ -44,18 +44,32 @@ export function SettingsPage() {
   const [dirBusy, setDirBusy] = useState(false);
   const [levelBusy, setLevelBusy] = useState(false);
   const [qzoneBusy, setQzoneBusy] = useState(false);
+  const [installDir, setInstallDir] = useState('');
+  const [dataDir, setDataDir] = useState('');
+  const [pathsBusy, setPathsBusy] = useState(false);
   const [savedAt, setSavedAt] = useState<number>();
 
-  const load = useCallback(async () => {
-    try {
-      const value = await api.settings.get();
-      setSnapshot(value);
-      setLogDir(value.logging.dir ?? '');
-      setFailure(undefined);
-    } catch (cause) {
-      setFailure(describe(cause));
-    }
+  const apply = useCallback((value: SettingsSnapshot) => {
+    setSnapshot(value);
+    setLogDir(value.logging.dir ?? '');
+    setInstallDir(value.qqPaths?.installDir ?? '');
+    setDataDir(value.qqPaths?.dataDir ?? '');
   }, []);
+
+  const load = useCallback(
+    async (refresh = false) => {
+      try {
+        const value = refresh
+          ? await api.settings.update({ refresh: true })
+          : await api.settings.get();
+        apply(value);
+        setFailure(undefined);
+      } catch (cause) {
+        setFailure(describe(cause));
+      }
+    },
+    [apply],
+  );
 
   useEffect(() => {
     void load();
@@ -66,43 +80,70 @@ export function SettingsPage() {
     setFailure(undefined);
     try {
       const value = await api.settings.update({ logDir });
-      setSnapshot(value);
-      setLogDir(value.logging.dir ?? '');
+      apply(value);
       setSavedAt(Date.now());
     } catch (cause) {
       setFailure(describe(cause));
     } finally {
       setDirBusy(false);
     }
-  }, [logDir]);
+  }, [apply, logDir]);
 
-  const applyQzone = useCallback(async (qzone: boolean) => {
-    setQzoneBusy(true);
-    setFailure(undefined);
-    try {
-      const value = await api.settings.update({ qzone });
-      setSnapshot(value);
-      setSavedAt(Date.now());
-    } catch (cause) {
-      setFailure(describe(cause));
-    } finally {
-      setQzoneBusy(false);
-    }
-  }, []);
+  /**
+   * 保存手动路径。
+   *
+   * 传 `null` 表示「清除这一项」，与后端语义一致（空串也会被后端归一成 null）。
+   */
+  const applyQqPaths = useCallback(
+    async (patch: { installDir?: string | null; dataDir?: string | null }) => {
+      setPathsBusy(true);
+      setFailure(undefined);
+      try {
+        const value = await api.settings.update({ qqPaths: patch, refresh: true });
+        apply(value);
+        setSavedAt(Date.now());
+      } catch (cause) {
+        setFailure(describe(cause));
+      } finally {
+        setPathsBusy(false);
+      }
+    },
+    [apply],
+  );
 
-  const applyLevel = useCallback(async (level: LogLevel) => {
-    setLevelBusy(true);
-    setFailure(undefined);
-    try {
-      const value = await api.settings.update({ level });
-      setSnapshot(value);
-      setSavedAt(Date.now());
-    } catch (cause) {
-      setFailure(describe(cause));
-    } finally {
-      setLevelBusy(false);
-    }
-  }, []);
+  const applyQzone = useCallback(
+    async (qzone: boolean) => {
+      setQzoneBusy(true);
+      setFailure(undefined);
+      try {
+        const value = await api.settings.update({ qzone });
+        apply(value);
+        setSavedAt(Date.now());
+      } catch (cause) {
+        setFailure(describe(cause));
+      } finally {
+        setQzoneBusy(false);
+      }
+    },
+    [apply],
+  );
+
+  const applyLevel = useCallback(
+    async (level: LogLevel) => {
+      setLevelBusy(true);
+      setFailure(undefined);
+      try {
+        const value = await api.settings.update({ level });
+        apply(value);
+        setSavedAt(Date.now());
+      } catch (cause) {
+        setFailure(describe(cause));
+      } finally {
+        setLevelBusy(false);
+      }
+    },
+    [apply],
+  );
 
   if (!snapshot) {
     return (
@@ -136,9 +177,9 @@ export function SettingsPage() {
         <button
           type="button"
           className="set-refresh"
-          onClick={() => void load()}
+          onClick={() => void load(true)}
           aria-label="重新检查"
-          title="重新检查"
+          title="重新检查（跳过 30 秒缓存）"
         >
           <RefreshCw size={15} aria-hidden="true" />
         </button>
@@ -172,6 +213,17 @@ export function SettingsPage() {
             label="QQ 安装"
             tone={environment.qqExe ? 'good' : 'critical'}
             detail={environment.installRoot ?? '未找到 QQ 安装目录'}
+            source={sourceLabel(environment.sources?.qqExe)}
+          />
+          <PathEditor
+            label="安装目录"
+            value={installDir}
+            placeholder="例如 /opt/QQ、C:\Program Files\Tencent\QQNT（macOS 填 QQ.app）"
+            busy={pathsBusy}
+            hint="留空 = 自动探测。也可以填 QQ 可执行文件或 resources/app，会自动归一到安装根。"
+            onChange={setInstallDir}
+            onApply={() => void applyQqPaths({ installDir: installDir.trim() || null })}
+            onClear={() => void applyQqPaths({ installDir: null })}
           />
           <CheckRow
             label="wrapper"
@@ -191,14 +243,34 @@ export function SettingsPage() {
                   ]
                     .filter(Boolean)
                     .join(' · ')
-                : '读不到 major.node'
+                : environment.version
+                  ? `读取到版本 ${environment.version}（major.node 未解析，可用扫码登录）`
+                  : '读不到 major.node'
             }
           />
           <CheckRow
             label="数据目录"
             tone={environment.dataRoot ? 'good' : 'critical'}
             detail={environment.dataRoot ?? '未找到'}
+            source={sourceLabel(environment.sources?.dataRoot)}
             mono
+          />
+          <PathEditor
+            label="数据根"
+            value={dataDir}
+            placeholder="例如 ~/.config/QQ、D:\Tencent Files"
+            busy={pathsBusy}
+            hint="留空 = 自动探测。填成某个账号目录时会上跳到数据根。"
+            onChange={setDataDir}
+            onApply={() => void applyQqPaths({ dataDir: dataDir.trim() || null })}
+            onClear={() => void applyQqPaths({ dataDir: null })}
+          />
+          <CheckRow
+            label="nt_msg.db"
+            tone={environment.qqDbPath ? 'good' : 'muted'}
+            detail={environment.qqDbPath ?? '未推导出（配置 qq.dbPath 或先登录一个本机账号）'}
+            mono
+            title={environment.qqDbPath ?? undefined}
           />
           <CheckRow
             label="login.db"
@@ -229,8 +301,10 @@ export function SettingsPage() {
           />
         </ul>
         <p className="set-note">
-          `qq.dbPath` 是应用配置里的一个字段（`nt_msg.db` 的路径），由启动参数 `--qq-db` 或环境变量
-          `WEQBOT_QQ_DB` 提供；设置页暂不直接修改它。
+          路径来源的优先级：**设置页填写 &gt; 环境变量 &gt; 自动探测**。安装目录可用
+          `WEQBOT_QQ_INSTALL_DIR` 或 `WEQBOT_QQ_EXE`，数据根用 `WEQBOT_QQ_ROOT`。 `nt_msg.db`
+          默认从数据根 + 当前账号推导，也可以用 `--qq-db` / `WEQBOT_QQ_DB`
+          显式指定（它的优先级最高）。
         </p>
       </section>
 
@@ -402,21 +476,98 @@ function CheckRow({
   tone,
   mono,
   title,
+  source,
 }: {
   label: string;
   detail: string;
   tone: Tone;
   mono?: boolean;
   title?: string;
+  /** 「手动 / 环境变量 / 自动」来源标记；不给就不显示。 */
+  source?: string;
 }) {
   const Icon = tone === 'good' ? Check : tone === 'muted' ? CircleAlert : AlertTriangle;
   return (
     <li className="set-check" data-tone={tone} title={title}>
       <Icon size={14} aria-hidden="true" />
       <span className="set-check-label">{label}</span>
+      {source && <span className="set-check-source">{source}</span>}
       <span className={mono ? 'set-check-detail mono' : 'set-check-detail'}>{detail}</span>
     </li>
   );
+}
+
+/** 一行「路径输入 + 应用 + 清除」。与日志目录那一段同一套样式。 */
+function PathEditor({
+  label,
+  value,
+  placeholder,
+  hint,
+  busy,
+  onChange,
+  onApply,
+  onClear,
+}: {
+  label: string;
+  value: string;
+  placeholder: string;
+  hint: string;
+  busy: boolean;
+  onChange(value: string): void;
+  onApply(): void;
+  onClear(): void;
+}) {
+  const inputId = `set-qq-path-${label}`;
+  return (
+    <li className="set-path-editor">
+      <div className="set-field">
+        <label htmlFor={inputId}>{label}</label>
+        <div className="set-inline">
+          <input
+            id={inputId}
+            className="set-input mono"
+            value={value}
+            placeholder={placeholder}
+            spellCheck={false}
+            autoComplete="off"
+            onChange={(event) => onChange(event.currentTarget.value)}
+          />
+          <Button variant="primary" size="md" disabled={busy} onClick={onApply}>
+            {busy ? (
+              <LoaderCircle size={14} className="spin" aria-hidden="true" />
+            ) : (
+              <Check size={14} aria-hidden="true" />
+            )}
+            应用
+          </Button>
+          <Button variant="ghost" size="md" disabled={busy || value === ''} onClick={onClear}>
+            清除
+          </Button>
+        </div>
+        <small className="set-hint">{hint}</small>
+      </div>
+    </li>
+  );
+}
+
+/** 把 `sources` 里的机器值翻成设置页上的中文标签。 */
+function sourceLabel(source: string | undefined): string | undefined {
+  switch (source) {
+    case 'override':
+      return '手动';
+    case 'env':
+      return '环境变量';
+    case 'protocol':
+      return '协议注册';
+    case 'registry':
+      return '注册表';
+    case 'spotlight':
+      return 'Spotlight';
+    case 'detected':
+      return '自动';
+    default:
+      return undefined;
+  }
 }
 
 function describe(cause: unknown): string {

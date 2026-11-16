@@ -28,8 +28,20 @@ export interface BotConfig {
      * 账号 `nt_msg.db` 的绝对路径（进程层）。用于 `isQqLoggedIn` 预检：
      * QQ 本体在线时不允许 mode 2。不传时跳过检查并打 warn —— 这是产品红线，
      * 独立部署应尽量配置。
+     *
+     * 控制台（`@weqbot/node`）会在这个值为空时，按 QQ 数据目录 + 账号推导出
+     * 同一个路径再传进来；本包不自己做磁盘探测。
      */
     dbPath?: string;
+    /**
+     * QQ 安装根（含 `QQ.exe` / `qq` 的目录，macOS 是 `QQ.app`）。
+     *
+     * **bot 本身不读它** —— 这是给控制台的环境探测用的提示，避免非标准安装时
+     * 用户只能靠环境变量。真正影响上线的是 `native.wrapperPath`。
+     */
+    installDir?: string;
+    /** QQ 数据根（`~/.config/QQ` / `…\Tencent Files`）。同样是控制台侧提示。 */
+    dataDir?: string;
   };
   session?: {
     /**

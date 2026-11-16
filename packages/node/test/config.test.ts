@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { ConfigError, loadConfigFile, mergeConfig } from '../src/config';
-import { saveOneBotConfig } from '../src/webui/config-file';
+import { saveOneBotConfig, saveQqPaths } from '../src/webui/config-file';
 
 async function withFile(content: string, run: (path: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'weqbot-config-'));
@@ -164,4 +164,111 @@ test('mergeConfig：配置文件里出现 account 也压不掉 --account', () =>
   // 类型上不允许，但 JSON 是运行时数据；这里锁住行为。
   const file = { account: { uin: '99999' } } as never;
   assert.equal(mergeConfig({ file, uin: '10001' }).account.uin, '10001');
+});
+
+// ─────────────────────────── qq 路径字段 ───────────────────────────
+
+test('读配置：qq.installDir / qq.dataDir 与 dbPath 并存', async () => {
+  await withFile(
+    JSON.stringify({
+      qq: { dbPath: '/db/nt_msg.db', installDir: '/opt/QQ', dataDir: '/home/me/.config/QQ' },
+    }),
+    async (path) => {
+      const loaded = await loadConfigFile(path);
+      assert.equal(loaded.qq?.dbPath, '/db/nt_msg.db');
+      assert.equal(loaded.qq?.installDir, '/opt/QQ');
+      assert.equal(loaded.qq?.dataDir, '/home/me/.config/QQ');
+
+      const merged = mergeConfig({ file: loaded, uin: '10001' });
+      assert.equal(merged.qq?.installDir, '/opt/QQ', 'mergeConfig 不能丢掉新字段');
+      assert.equal(merged.qq?.dataDir, '/home/me/.config/QQ');
+    },
+  );
+});
+
+test('读配置：qq 里拼错的键要报错并列出可用键', async () => {
+  await withFile(JSON.stringify({ qq: { installRoot: '/opt/QQ' } }), async (path) => {
+    await assert.rejects(loadConfigFile(path), (cause: unknown) => {
+      assert.ok(cause instanceof ConfigError);
+      assert.match(cause.message, /installRoot/);
+      assert.match(cause.message, /dbPath/);
+      return true;
+    });
+  });
+});
+
+test('读配置：qq 字段类型错误 / 空串要报错', async () => {
+  for (const qq of [
+    { installDir: 123 },
+    { dataDir: true },
+    { dbPath: '' },
+    { installDir: '   ' },
+  ]) {
+    await withFile(JSON.stringify({ qq }), async (path) => {
+      await assert.rejects(loadConfigFile(path), ConfigError, `应拒绝 ${JSON.stringify(qq)}`);
+    });
+  }
+});
+
+test('读配置：qq 不是对象要报错', async () => {
+  await withFile(JSON.stringify({ qq: ['/opt/QQ'] }), async (path) => {
+    await assert.rejects(loadConfigFile(path), ConfigError);
+  });
+});
+
+test('saveQqPaths：只改 qq 子键，其余顶层键与 dbPath 原样保留', async () => {
+  await withFile(
+    JSON.stringify({
+      log: { level: 'warn' },
+      qq: { dbPath: '/db/nt_msg.db' },
+      onebotByUin: { '10001': EMPTY_NETWORKS },
+    }),
+    async (path) => {
+      await saveQqPaths(path, { installDir: '/opt/QQ', dataDir: '/home/me/.config/QQ' });
+      const parsed = JSON.parse(await readFile(path, 'utf8'));
+      assert.equal(parsed.log.level, 'warn');
+      assert.equal(parsed.qq.dbPath, '/db/nt_msg.db');
+      assert.equal(parsed.qq.installDir, '/opt/QQ');
+      assert.equal(parsed.qq.dataDir, '/home/me/.config/QQ');
+      assert.ok(parsed.onebotByUin['10001']);
+    },
+  );
+});
+
+test('saveQqPaths：null 删键；qq 空了就整个删掉', async () => {
+  await withFile(
+    JSON.stringify({ qq: { installDir: '/opt/QQ', dataDir: '/data/QQ' }, log: { level: 'info' } }),
+    async (path) => {
+      await saveQqPaths(path, { installDir: null });
+      let parsed = JSON.parse(await readFile(path, 'utf8'));
+      assert.equal(parsed.qq.installDir, undefined);
+      assert.equal(parsed.qq.dataDir, '/data/QQ');
+
+      await saveQqPaths(path, { dataDir: null });
+      parsed = JSON.parse(await readFile(path, 'utf8'));
+      assert.equal(parsed.qq, undefined, 'qq 变空后不该留下空对象');
+      assert.equal(parsed.log.level, 'info');
+    },
+  );
+});
+
+test('saveQqPaths：undefined 表示不动这一项', async () => {
+  await withFile(JSON.stringify({ qq: { installDir: '/opt/QQ' } }), async (path) => {
+    await saveQqPaths(path, { dataDir: '/data/QQ' });
+    const parsed = JSON.parse(await readFile(path, 'utf8'));
+    assert.equal(parsed.qq.installDir, '/opt/QQ');
+    assert.equal(parsed.qq.dataDir, '/data/QQ');
+  });
+});
+
+test('saveQqPaths：文件不存在时新建；保存后仍能被加载器接受', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'weqbot-config-'));
+  const path = join(dir, 'config.json');
+  try {
+    await saveQqPaths(path, { installDir: '/opt/QQ' });
+    const loaded = await loadConfigFile(path);
+    assert.equal(loaded.qq?.installDir, '/opt/QQ');
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
 });

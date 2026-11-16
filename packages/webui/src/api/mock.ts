@@ -120,6 +120,15 @@ const ONLINE_SINCE = Date.now() - 1000 * 60 * 47;
 
 let mockQzone = true;
 
+/** 设置页「手动指定」的路径；`null` 表示走自动探测（与后端语义一致）。 */
+const mockQqPaths: { installDir: string | null; dataDir: string | null } = {
+  installDir: null,
+  dataDir: null,
+};
+
+/** 覆盖项的来源标记，用来在检查卡上显示「手动」。 */
+const mockQqSources: { installDir?: 'override'; dataDir?: 'override' } = {};
+
 const mockLogging: {
   dir: string | null;
   level: SettingsSnapshot['logging']['level'];
@@ -135,9 +144,23 @@ const mockLogging: {
 
 function settingsSnapshot(): SettingsSnapshot {
   return {
-    environment: ENVIRONMENT,
+    environment: {
+      ...ENVIRONMENT,
+      ...(mockQqPaths.installDir ? { installRoot: mockQqPaths.installDir } : {}),
+      ...(mockQqPaths.dataDir ? { dataRoot: mockQqPaths.dataDir } : {}),
+      sources: {
+        ...(mockQqSources.installDir
+          ? { qqExe: 'override' as const }
+          : { qqExe: 'detected' as const }),
+        ...(mockQqSources.dataDir
+          ? { dataRoot: 'override' as const }
+          : { dataRoot: 'detected' as const }),
+      },
+      qqDbPath: '/home/me/.config/QQ/nt_qq_2472b5970cc3e5c0348c9601425e4186/nt_db/nt_msg.db',
+    },
     account: { uin: '10002' },
     onebot: { qzone: mockQzone },
+    qqPaths: { installDir: mockQqPaths.installDir, dataDir: mockQqPaths.dataDir },
     logging: {
       dir: mockLogging.dir,
       level: mockLogging.level,
@@ -454,6 +477,8 @@ export const mockApi = {
       logDir?: string | null;
       level?: SettingsSnapshot['logging']['level'];
       qzone?: boolean;
+      qqPaths?: { installDir?: string | null; dataDir?: string | null };
+      refresh?: boolean;
     }) {
       await sleep(latency(160));
       if (patch.logDir !== undefined) {
@@ -461,6 +486,15 @@ export const mockApi = {
       }
       if (patch.level !== undefined) mockLogging.level = patch.level;
       if (patch.qzone !== undefined) mockQzone = patch.qzone;
+      if (patch.qqPaths !== undefined) {
+        // 与后端一致：`null` / 空串 = 清除覆盖，回到自动探测。
+        for (const key of ['installDir', 'dataDir'] as const) {
+          if (!(key in patch.qqPaths)) continue;
+          const value = patch.qqPaths[key]?.trim() ?? '';
+          mockQqPaths[key] = value.length > 0 ? value : null;
+          mockQqSources[key] = mockQqPaths[key] ? 'override' : undefined;
+        }
+      }
       return settingsSnapshot();
     },
   },

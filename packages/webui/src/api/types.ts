@@ -35,7 +35,16 @@ export interface LoginEnvironment {
   dataRoot: string | null;
   loginDbs: string[];
   client?: { appid: string; qua?: string; version?: string; build?: string };
-  /** QQ 本体是否在线；`undefined` 表示没配置 dbPath、无法判断。 */
+  /** `resources/app/package.json` 的版本（native 解析失败时的第二条来源）。 */
+  version?: string;
+  /** 每一项是怎么来的：手动 / 环境变量 / 自动探测。 */
+  sources?: {
+    dataRoot?: 'override' | 'env' | 'detected';
+    qqExe?: 'override' | 'env' | 'protocol' | 'registry' | 'spotlight' | 'detected';
+  };
+  /** 本次「QQ 本体在线」预检用的 `nt_msg.db`。 */
+  qqDbPath?: string;
+  /** QQ 本体是否在线；`undefined` 表示拿不到 dbPath、无法判断。 */
   qqRunning?: boolean;
 }
 
@@ -263,6 +272,8 @@ export interface SettingsSnapshot {
   account?: { uin: string } | null;
   /** 旧版服务端可能没有这一块。 */
   onebot?: { qzone: boolean };
+  /** 当前手动指定的 QQ 路径（设置页预填输入框）；没设就是 `null`。 */
+  qqPaths?: { installDir: string | null; dataDir: string | null };
   logging: {
     /** 当前落盘目录；`null` 表示关闭落盘。 */
     dir: string | null;
@@ -284,11 +295,18 @@ export interface SettingsSnapshot {
 
 export interface SettingsApi {
   get(): Promise<SettingsSnapshot>;
-  /** `logDir` 为空串 / `off` / `null` 表示关闭落盘。 */
+  /**
+   * `logDir` 为空串 / `off` / `null` 表示关闭落盘。
+   *
+   * `qqPaths` 里的 `null` 或空串表示清除手动覆盖、回到自动探测；
+   * `refresh` 为 true 时跳过路径缓存重新探测。
+   */
   update(patch: {
     logDir?: string | null;
     level?: LogLevel;
     qzone?: boolean;
+    qqPaths?: { installDir?: string | null; dataDir?: string | null };
+    refresh?: boolean;
   }): Promise<SettingsSnapshot>;
 }
 

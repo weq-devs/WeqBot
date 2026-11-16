@@ -359,3 +359,23 @@
     flex-direction: column;
   }
 }
+
+/* 环境检查里的「手动 / 环境变量 / 自动」来源标记。 */
+.set-check-source {
+  flex: none;
+  padding: 1px 6px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  line-height: 1.5;
+}
+
+/* 环境检查里的路径编辑行：只在 `.set-checks` 里出现，其余沿用 `.set-field`。 */
+.set-path-editor {
+  padding: 6px 8px 10px;
+}
+
+.set-path-editor .set-field > label {
+  font-size: var(--text-xs);
+}

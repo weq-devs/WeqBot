@@ -5,14 +5,28 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import type { QqHints } from '../src/webui/qq-detect';
 import { discoverQqPaths } from '../src/webui/qq-paths';
 
+/** 所有 fixture 都登记在这里，`after` 一次性清掉。 */
+const fixtures: string[] = [];
+
 async function fixture(): Promise<string> {
-  return mkdtemp(join(tmpdir(), 'weqbot-qq-'));
+  const root = await mkdtemp(join(tmpdir(), 'weqbot-qq-'));
+  fixtures.push(root);
+  return root;
+}
+
+process.on('exit', () => {
+  for (const root of fixtures) void rm(root, { recursive: true, force: true });
+});
+
+function hintsOf(patch: Partial<QqHints>): QqHints {
+  return { installDir: null, protocolExe: null, spotlightApp: null, sources: {}, ...patch };
 }
 
 test('Linux 布局：数据根 / 两个 login.db / 安装目录 / wrapper / major', async () => {
@@ -134,3 +148,259 @@ function restore(key: string, value: string | undefined): void {
   if (value === undefined) delete process.env[key];
   else process.env[key] = value;
 }
+
+// ─────────────────── 覆盖来源 / 新探测路径 ───────────────────
+
+test('安装根：WEQBOT_QQ_INSTALL_DIR 能定位；WEQBOT_QQ_ROOT 只管数据根', async () => {
+  const root = await fixture();
+  const install = join(root, 'qq-install');
+  await mkdir(join(install, 'resources', 'app'), { recursive: true });
+  await writeFile(join(install, 'qq'), '');
+  await writeFile(join(install, 'resources', 'app', 'wrapper.node'), '');
+
+  const dataRoot = join(root, 'qq-data');
+  await mkdir(dataRoot, { recursive: true });
+
+  const paths = discoverQqPaths({
+    platform: 'linux',
+    home: root,
+    env: { WEQBOT_QQ_INSTALL_DIR: install, WEQBOT_QQ_ROOT: dataRoot },
+    hints: hintsOf({}),
+    pathStyle: 'posix',
+  });
+
+  assert.equal(paths.dataRoot, dataRoot, 'WEQBOT_QQ_ROOT 只影响数据根');
+  assert.equal(paths.installRoot, install);
+  assert.equal(paths.sources.dataRoot, 'env');
+  assert.equal(paths.sources.qqExe, 'env');
+});
+
+test('安装根：WEQBOT_QQ_ROOT 不会被当成安装根', async () => {
+  const root = await fixture();
+  // 造一份「数据根里也有 qq 可执行文件」的布局：如果实现把数据根当安装根，
+  // 就会返回这个 exe；正确实现应该忽略它。
+  const dataRoot = join(root, 'qq-data');
+  await mkdir(join(dataRoot, 'resources', 'app'), { recursive: true });
+  await writeFile(join(dataRoot, 'qq'), '');
+
+  const paths = discoverQqPaths({
+    platform: 'linux',
+    home: join(root, 'nowhere'),
+    env: { WEQBOT_QQ_ROOT: dataRoot },
+    hints: hintsOf({}),
+    pathStyle: 'posix',
+  });
+
+  assert.equal(paths.dataRoot, dataRoot);
+  assert.notEqual(paths.qqExe, join(dataRoot, 'qq'), '这是第 1 项修复：数据根不再被当成安装根');
+  assert.notEqual(paths.sources.qqExe, 'env', '数据根来源不该污染安装根来源');
+});
+
+test('覆盖优先级：配置文件 > 环境变量 > 自动探测', async () => {
+  const root = await fixture();
+  const fromOverride = join(root, 'override-install');
+  const fromEnv = join(root, 'env-install');
+  for (const dir of [fromOverride, fromEnv]) {
+    await mkdir(join(dir, 'resources', 'app'), { recursive: true });
+    await writeFile(join(dir, 'qq'), '');
+    await writeFile(join(dir, 'resources', 'app', 'wrapper.node'), '');
+  }
+
+  const overrideData = join(root, 'override-data');
+  const envData = join(root, 'env-data');
+  await mkdir(overrideData, { recursive: true });
+  await mkdir(envData, { recursive: true });
+
+  const paths = discoverQqPaths({
+    platform: 'linux',
+    home: root,
+    env: { WEQBOT_QQ_INSTALL_DIR: fromEnv, WEQBOT_QQ_ROOT: envData },
+    overrides: { installDir: fromOverride, dataDir: overrideData },
+    hints: hintsOf({}),
+    pathStyle: 'posix',
+  });
+
+  assert.equal(paths.installRoot, fromOverride);
+  assert.equal(paths.dataRoot, overrideData);
+  assert.equal(paths.sources.qqExe, 'override');
+  assert.equal(paths.sources.dataRoot, 'override');
+});
+
+test('数据根覆盖：用户选到 nt_qq_<hash> 账户目录时自动上跳', async () => {
+  const root = await fixture();
+  const dataRoot = join(root, 'QQ');
+  const accountDir = join(dataRoot, 'nt_qq_0123456789abcdef0123456789abcdef');
+  await mkdir(join(accountDir, 'nt_db'), { recursive: true });
+
+  const paths = discoverQqPaths({
+    platform: 'linux',
+    home: root,
+    env: {},
+    overrides: { dataDir: accountDir },
+    hints: hintsOf({}),
+    pathStyle: 'posix',
+  });
+
+  assert.equal(paths.dataRoot, dataRoot);
+});
+
+test('login.db 顺序是 segment-major：primary 永远排在 supplementary 前面', async () => {
+  const root = await fixture();
+  // 第一个根只有 secondary，第二个根有 primary。
+  const rootA = join(root, 'a');
+  const rootB = join(root, 'b');
+  await mkdir(join(rootA, 'nt_qq', 'global', 'nt_db'), { recursive: true });
+  await mkdir(join(rootB, 'global', 'nt_db'), { recursive: true });
+  await writeFile(join(rootA, 'nt_qq', 'global', 'nt_db', 'login.db'), 'secondary');
+  await writeFile(join(rootB, 'global', 'nt_db', 'login.db'), 'primary');
+
+  const paths = discoverQqPaths({
+    platform: 'linux',
+    home: root,
+    env: { WEQBOT_QQ_ROOT: rootA },
+    overrides: { dataDir: rootB },
+    hints: hintsOf({}),
+    pathStyle: 'posix',
+  });
+
+  assert.deepEqual(
+    paths.loginDbs,
+    [
+      join(rootB, 'global', 'nt_db', 'login.db'),
+      join(rootA, 'nt_qq', 'global', 'nt_db', 'login.db'),
+    ],
+    'primary 必须在 supplementary 之前，否则 dedupeByUin 会用错行',
+  );
+});
+
+// Windows 布局在本机只能用 POSIX 字符串模拟：`win32.join` 造出来的 `\tmp\...`
+// 在 Linux 上会变成仓库根下的字面反斜杠目录，`existsSync` 也就对不上了。
+// `pathStyle: 'posix'` 让拼路径与磁盘探测都用真实存在的 POSIX fixture，
+// 布局规则（`versions/<v>/resources/app`）本身由 `platform: 'win32'` 决定。
+test('Windows 协议处理器锚定：没有 versions/config.json 也能定位', async () => {
+  const root = await fixture();
+  const qqRoot = join(root, 'QQ');
+  const appDir = join(qqRoot, 'versions', '9.9.9', 'resources', 'app');
+  await mkdir(appDir, { recursive: true });
+  await writeFile(join(qqRoot, 'QQ.exe'), '');
+  await writeFile(join(appDir, 'timwp.exe'), '');
+  await writeFile(join(appDir, 'wrapper.node'), '');
+  await writeFile(join(appDir, 'major.node'), '');
+
+  const paths = discoverQqPaths({
+    platform: 'win32',
+    pathStyle: 'posix',
+    home: root,
+    env: {},
+    hints: hintsOf({
+      protocolExe: join(appDir, 'timwp.exe'),
+      sources: { installDir: 'protocol' },
+    }),
+  });
+
+  assert.equal(paths.installRoot, qqRoot);
+  assert.equal(paths.appDir, appDir);
+  assert.equal(paths.qqExe, join(qqRoot, 'QQ.exe'));
+  assert.equal(paths.majorNode, join(appDir, 'major.node'));
+  assert.equal(paths.sources.qqExe, 'protocol');
+});
+
+test('Windows 注册表兜底：没有协议处理器时用 UninstallString 推出的安装根', async () => {
+  const root = await fixture();
+  const qqRoot = join(root, 'QQ');
+  const appDir = join(qqRoot, 'versions', '9.9.9', 'resources', 'app');
+  await mkdir(appDir, { recursive: true });
+  await writeFile(join(qqRoot, 'QQ.exe'), '');
+  await writeFile(join(appDir, 'wrapper.node'), '');
+
+  const paths = discoverQqPaths({
+    platform: 'win32',
+    pathStyle: 'posix',
+    home: root,
+    env: {},
+    hints: hintsOf({ installDir: qqRoot, sources: { installDir: 'registry' } }),
+  });
+
+  assert.equal(paths.installRoot, qqRoot);
+  assert.equal(paths.sources.qqExe, 'registry');
+});
+
+test('macOS Spotlight：静态候选都没有时靠 mdfind 结果', async () => {
+  const root = await fixture();
+  const app = join(root, 'QQ.app');
+  await mkdir(join(app, 'Contents', 'MacOS'), { recursive: true });
+  await mkdir(join(app, 'Contents', 'Resources', 'app'), { recursive: true });
+  await writeFile(join(app, 'Contents', 'MacOS', 'QQ'), '');
+  await writeFile(join(app, 'Contents', 'Resources', 'app', 'wrapper.node'), '');
+
+  const paths = discoverQqPaths({
+    platform: 'darwin',
+    home: join(root, 'nohome'),
+    env: {},
+    hints: hintsOf({ spotlightApp: app, sources: { installDir: 'spotlight' } }),
+  });
+
+  assert.equal(paths.installRoot, app);
+  assert.equal(paths.sources.qqExe, 'spotlight');
+});
+
+test('版本：优先读 resources/app/package.json', async () => {
+  const root = await fixture();
+  const install = join(root, 'qq-install');
+  await mkdir(join(install, 'resources', 'app'), { recursive: true });
+  await writeFile(join(install, 'qq'), '');
+  await writeFile(
+    join(install, 'resources', 'app', 'package.json'),
+    JSON.stringify({ version: '3.2.35-54395' }),
+  );
+
+  const paths = discoverQqPaths({
+    platform: 'linux',
+    home: root,
+    env: { WEQBOT_QQ_INSTALL_DIR: install },
+    hints: hintsOf({}),
+    pathStyle: 'posix',
+  });
+
+  assert.equal(paths.version, '3.2.35-54395');
+});
+
+test('版本：package.json 缺失时是 null，不影响其它字段', async () => {
+  const root = await fixture();
+  const install = join(root, 'qq-install');
+  await mkdir(join(install, 'resources', 'app'), { recursive: true });
+  await writeFile(join(install, 'qq'), '');
+
+  const paths = discoverQqPaths({
+    platform: 'linux',
+    home: root,
+    env: { WEQBOT_QQ_INSTALL_DIR: install },
+    hints: hintsOf({}),
+    pathStyle: 'posix',
+  });
+
+  assert.equal(paths.version, null);
+  assert.equal(paths.installRoot, install);
+});
+
+test('安装根覆盖可以是 resources/app，归一化回安装根', async () => {
+  const root = await fixture();
+  const install = join(root, 'QQ');
+  const appDir = join(install, 'resources', 'app');
+  await mkdir(appDir, { recursive: true });
+  await writeFile(join(install, 'qq'), '');
+  await writeFile(join(appDir, 'wrapper.node'), '');
+
+  const paths = discoverQqPaths({
+    platform: 'linux',
+    home: root,
+    env: {},
+    overrides: { installDir: appDir },
+    hints: hintsOf({}),
+    pathStyle: 'posix',
+  });
+
+  assert.equal(paths.installRoot, install);
+  assert.equal(paths.appDir, appDir);
+  assert.equal(paths.sources.qqExe, 'override');
+});
