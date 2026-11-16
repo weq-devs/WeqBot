@@ -106,7 +106,5 @@ if (checkOnly) {
 }
 
 process.stdout.write(
-  changed.length > 0
-    ? `✓ 已替换 ${found.length} 处 / ${changed.length} 个文件\n`
-    : '✓ 无需改动\n',
+  changed.length > 0 ? `✓ 已替换 ${found.length} 处 / ${changed.length} 个文件\n` : '✓ 无需改动\n',
 );

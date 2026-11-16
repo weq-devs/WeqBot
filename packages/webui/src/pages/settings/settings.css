@@ -104,7 +104,7 @@
   background: var(--bg-hover);
 }
 
-.set-check svg {
+.set-checks .set-check svg {
   flex: none;
 }
 

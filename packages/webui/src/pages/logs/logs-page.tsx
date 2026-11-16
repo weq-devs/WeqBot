@@ -25,7 +25,6 @@ import type {
   ActionCallEntry,
   ActionStats,
   LogEntry,
-  LogStats,
   PushEventEntry,
   StreamName,
 } from '../../api/types';
@@ -43,10 +42,16 @@ const STREAMS: { key: StreamName; label: string; Icon: typeof Bot }[] = [
 
 type AnyEntry = LogEntry | ActionCallEntry | PushEventEntry;
 
+/** 日志条目本身没有 id（同毫秒可能多条），渲染时用单调递增序号做 key。 */
+interface StoredEntry {
+  key: number;
+  entry: AnyEntry;
+}
+
 export function LogsPage() {
   const [stream, setStream] = useState<StreamName>('logs');
   const [paused, setPaused] = useState(false);
-  const [entries, setEntries] = useState<Record<StreamName, AnyEntry[]>>({
+  const [entries, setEntries] = useState<Record<StreamName, StoredEntry[]>>({
     logs: [],
     actions: [],
     events: [],
@@ -58,6 +63,7 @@ export function LogsPage() {
   const { data: stats } = usePolling(loadStats, 4000);
   const pausedRef = useRef(paused);
   pausedRef.current = paused;
+  const seqRef = useRef(0);
 
   // 三条流同时在后台订阅：切标签时不需要重新建立连接，统计头也不会滞后。
   useEffect(() => {
@@ -65,9 +71,10 @@ export function LogsPage() {
       api.logs.stream(key, {
         onEntry(entry) {
           if (pausedRef.current) return;
+          const stored: StoredEntry = { key: seqRef.current++, entry: entry as AnyEntry };
           setEntries((current) => {
             const list = current[key];
-            const next = [...list, entry as AnyEntry];
+            const next = [...list, stored];
             return { ...current, [key]: next.length > MAX_ROWS ? next.slice(-MAX_ROWS) : next };
           });
         },
@@ -82,12 +89,12 @@ export function LogsPage() {
     const list = entries[stream];
     const needle = filter.trim().toLowerCase();
     if (!needle) return list;
-    return list.filter((entry) => JSON.stringify(entry).toLowerCase().includes(needle));
+    return list.filter((item) => JSON.stringify(item.entry).toLowerCase().includes(needle));
   }, [entries, stream, filter]);
 
   return (
     <div className="logs">
-      <header className="logs-stats" aria-label="统计">
+      <header className="logs-stats">
         <StatTile label="Action 调用" value={stats ? formatCompact(stats.actions.total) : '—'} />
         <StatTile
           label="成功率"
@@ -210,12 +217,12 @@ export function LogsPage() {
               {visible
                 .slice()
                 .reverse()
-                .map((entry, index) => (
+                .map((item) => (
                   <Row
-                    key={`${entry.ts}-${index}`}
+                    key={item.key}
                     stream={stream}
-                    entry={entry}
-                    onOpen={() => setDetail(entry)}
+                    entry={item.entry}
+                    onOpen={() => setDetail(item.entry)}
                   />
                 ))}
             </tbody>

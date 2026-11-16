@@ -489,7 +489,7 @@
   text-align: right;
 }
 
-.ov-top-count em {
+.ov-top-list .ov-top-count em {
   color: var(--status-warning);
   font-style: normal;
 }

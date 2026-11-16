@@ -24,16 +24,16 @@
   white-space: nowrap;
 }
 
-.net-autosave[data-saving],
-.net-autosave:not([data-saving]) .net-autosave-dot {
-  color: var(--text-muted);
-}
-
 .net-autosave-dot {
   width: 6px;
   height: 6px;
   border-radius: 50%;
   background: currentColor;
+}
+
+.net-autosave[data-saving],
+.net-autosave:not([data-saving]) .net-autosave-dot {
+  color: var(--text-muted);
 }
 
 .net-hint {

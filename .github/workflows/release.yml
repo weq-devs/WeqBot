@@ -60,6 +60,10 @@ jobs:
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
 
+      # Biome lint 与 CI 用同一条命令：告警不放过，发版前先拦。
+      - name: pnpm lint
+        run: pnpm lint
+
       # 发版前跑一遍门禁：护栏 / 类型 / 文档快照 / 测试，红了就不发。
       - name: pnpm verify
         run: pnpm verify

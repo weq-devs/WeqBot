@@ -15,7 +15,7 @@ permissions:
 
 jobs:
   verify:
-    name: 护栏 / 类型 / 测试 / 构建
+    name: Lint / 护栏 / 类型 / 测试 / 构建
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
@@ -36,6 +36,10 @@ jobs:
 
       - name: 安装依赖
         run: pnpm install --frozen-lockfile
+
+      # Biome lint（`--error-on-warnings`）：warning 也拦，避免告警常态积累。
+      - name: pnpm lint
+        run: pnpm lint
 
       # 架构护栏 + 全量类型检查 + OneBot 文档快照 + 契约测试。
       - name: pnpm verify
