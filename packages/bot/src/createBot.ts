@@ -36,6 +36,7 @@ import { createOneBotAdapter, type OneBotAdapter } from '@weqbot/onebot';
 import type { ProtocolClient } from '@weqbot/protocol';
 import { createOidbWebCredentials, createProtocolClient } from '@weqbot/protocol';
 import type { BotConfig, BotOneBotConfig } from './config';
+import { logBotEvent } from './event-log';
 import { createMediaUrlResolver } from './media-url';
 import { createProtocolBackend } from './onebot-backend';
 import { generateSecToken } from './sec-token';
@@ -115,6 +116,8 @@ export interface BotSnapshot {
 export function createBot(options: CreateBotOptions): Bot {
   const { config, native, vault } = options;
   const log = options.logger ?? createLogger('bot', { level: config.log?.level ?? 'info' });
+  /** 收到的消息 / 事件专用子日志器：终端与落盘里一眼能按 scope 过滤。 */
+  const eventLog = log.child('event');
   const events = new TypedEventBus<BotEventMap>();
   const machine = new SessionStateMachine();
   const uin = config.account.uin;
@@ -148,6 +151,11 @@ export function createBot(options: CreateBotOptions): Bot {
   let stopping = false;
 
   machine.onChange((change) => {
+    log.info('状态', {
+      from: change.from,
+      to: change.to,
+      ...(change.detail ? { detail: change.detail } : {}),
+    });
     events.emit('state', { type: 'state', ...change });
   });
 
@@ -428,12 +436,15 @@ export function createBot(options: CreateBotOptions): Bot {
             });
           }
           for (const event of result.events) {
+            // 先打印再分发：日志顺序与事件顺序一致，排查时不用自己排序。
+            logBotEvent(eventLog, event);
             if (event.type === 'message') events.emit('message', event.message);
             else if (event.type === 'notice') events.emit('notice', event);
             else if (event.type === 'request') events.emit('request', event);
             events.emit('event', event);
           }
         } catch (cause) {
+          log.error('推送解码失败', { cause });
           events.emit('event', {
             type: 'error',
             error: new WeqBotError('UNKNOWN', '推送解码失败', { cause }),
@@ -442,6 +453,7 @@ export function createBot(options: CreateBotOptions): Bot {
         }
       },
       (error) => {
+        log.error('推送通道错误', { cause: error });
         events.emit('event', {
           type: 'error',
           error: new WeqBotError('UNKNOWN', '推送通道错误', { cause: error }),

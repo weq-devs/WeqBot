@@ -105,13 +105,13 @@ pnpm docs:actions:check    # 只校验是否最新（`pnpm verify` 已包含）
 pnpm dev:cli                                            # 只起控制台，浏览器里选账号登录
 pnpm dev:cli --account <uin> --config <cfg>            # 先上线，再提供控制台
 pnpm dev:cli --account <uin> --no-webui                # 纯 CLI，不开控制台
-pnpm dev:webui                                         # 前端开发服务器（/api 代理到 6099）
+pnpm dev:webui                                         # 前端开发服务器（/api 代理到 6299）
 VITE_WEBUI_MOCK=1 pnpm dev:webui                       # 脱离后端看界面（mock 数据）
 pnpm build:webui                                       # 构建 dist/，由控制台服务托管
 ```
 
-控制台只监听 `127.0.0.1:6099`（`--webui-port` / `--webui-host` 可改），启动时终端打印
-带令牌的一键链接 `http://127.0.0.1:6099/#token=…`。令牌每次启动重新生成，可用
+控制台只监听 `127.0.0.1:6299`（`--webui-port` / `--webui-host` 可改），启动时终端打印
+带令牌的一键链接 `http://127.0.0.1:6299/#token=…`。令牌每次启动重新生成，可用
 `WEQBOT_WEBUI_TOKEN` 固定；会话走 HttpOnly cookie，连续 5 次输错锁 30 秒。
 页面：访问令牌 → 账号登录（本机 `login.db` 账号 / 扫码 / 环境检查）→ 总览 / 网络 /
 日志 / 调试。

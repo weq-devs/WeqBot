@@ -183,7 +183,18 @@
   width: 9px;
   height: 9px;
   border-radius: 50%;
-  background: oklch(1 0 0 / 0.14);
+}
+
+.terminal-dots span:nth-child(1) {
+  background: #ff5f57;
+}
+
+.terminal-dots span:nth-child(2) {
+  background: #febc2e;
+}
+
+.terminal-dots span:nth-child(3) {
+  background: #28c840;
 }
 
 .terminal-title {

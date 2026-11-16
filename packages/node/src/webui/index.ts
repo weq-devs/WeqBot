@@ -17,7 +17,7 @@ import { existsSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type { BotOneBotConfig, BotConfig } from '@weqbot/bot';
-import { createLogger, type Logger } from '@weqbot/common';
+import { createLogger, subscribeLogs, type Logger } from '@weqbot/common';
 import type { CredentialVault } from '@weqbot/session';
 import type { NativePort, RawNativeBinding } from '@weqbot/wire';
 import { WebUiAuth } from './auth';
@@ -102,7 +102,7 @@ export async function runWebUi(options: RunWebUiOptions): Promise<WebUiHandle> {
   const staticDir = options.staticDir ?? defaultStaticDir();
   const server = createWebUiServer({
     ...(options.host ? { host: options.host } : {}),
-    port: options.port ?? 6099,
+    port: options.port ?? 6299,
     ...(staticDir ? { staticDir } : {}),
     handle: (input) => router.handle(input),
     logger: log,
@@ -112,7 +112,10 @@ export async function runWebUi(options: RunWebUiOptions): Promise<WebUiHandle> {
   const token = auth.plainToken;
   const url = `http://${options.host ?? '127.0.0.1'}:${handle.port}/#token=${token}`;
 
-  log.info('控制台已就绪', {
+  // 运行日志同时进观测缓冲：日志页的「运行日志」流靠它，终端照旧输出。
+  const unsubscribeLogs = subscribeLogs(observability.logSink);
+
+  log.debug('控制台已就绪', {
     url: `http://${options.host ?? '127.0.0.1'}:${handle.port}/`,
     ...(staticDir ? { staticDir } : { hint: '没找到 webui/dist，只提供 API' }),
   });
@@ -127,6 +130,7 @@ export async function runWebUi(options: RunWebUiOptions): Promise<WebUiHandle> {
     url,
     runtime,
     async close() {
+      unsubscribeLogs();
       await runtime.close();
       await handle.close();
     },

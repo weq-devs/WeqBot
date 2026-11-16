@@ -11,7 +11,7 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
 import { createBot, describeBot } from '@weqbot/bot';
-import { createLogger } from '@weqbot/common';
+import { configureLogging, createLogger, type LogLevel } from '@weqbot/common';
 import { FileCredentialVault } from '@weqbot/session';
 import { adaptNativeBinding, inspectNative } from '@weqbot/wire';
 import { ConfigError, loadConfigFile, mergeConfig } from './config';
@@ -22,6 +22,20 @@ import { runWebUi } from './webui';
 /** 独立进程的默认凭据目录；`WEQBOT_VAULT_DIR` 可覆盖（测试 / 多实例）。 */
 function defaultVaultDir(): string {
   return process.env.WEQBOT_VAULT_DIR ?? join(homedir(), '.weqbot', 'accounts');
+}
+
+/** 日志目录；`WEQBOT_LOG_DIR=off` 关闭落盘（WeQ 嵌入 / 只读环境）。 */
+function resolveLogDir(): string | null {
+  const configured = process.env.WEQBOT_LOG_DIR;
+  if (configured === 'off') return null;
+  return configured && configured.trim() !== '' ? configured : join(process.cwd(), 'logs');
+}
+
+/** `--trace` > `--verbose` > `WEQBOT_LOG_LEVEL`；都没有则交由 logger 的默认值。 */
+function resolveLogLevel(values: { verbose?: boolean; trace?: boolean }): LogLevel | undefined {
+  if (values.trace) return 'trace';
+  if (values.verbose) return 'debug';
+  return undefined;
 }
 
 const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
@@ -43,7 +57,7 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
                        也可用 $WEQBOT_QQ_DB）
   --config <path>      JSON 配置：native / qq / session / secToken / onebot / log
                        （不含凭据；字段见 packages/node/config.example.json）
-  --webui-port <port>  控制台端口（默认 6099，只听 127.0.0.1）
+  --webui-port <port>  控制台端口（默认 6299，只听 127.0.0.1）
   --webui-host <host>  控制台监听地址（默认 127.0.0.1；非回环会告警）
   --no-webui           不启动控制台
   --qq-pid <pid>       只与 --print-capabilities 连用：诊断 QQ 进程的会话物料
@@ -51,10 +65,14 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
   --check              自检模式
   --sidecar            desktop 拉起的托管模式（NDJSON over stdio，见 @weqbot/control）
   --verbose            打开 debug 日志
+  --trace              打开 trace 日志：完整打印收发包（不脱敏，只进终端）
   -h, --help           显示本帮助
 
 环境变量:
   WEQBOT_WEBUI_TOKEN   固定控制台令牌（默认每次启动随机生成并打印）
+  WEQBOT_LOG_DIR       日志落盘目录（默认 ./logs；设为 off 关闭落盘）
+  WEQBOT_LOG_LEVEL     终端日志级别：trace / debug / info / warn / error
+  WEQBOT_LOG_FILE_LEVEL 落盘级别（默认 debug；trace 不落盘）
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -73,6 +91,7 @@ async function main(argv: string[]): Promise<number> {
       sidecar: { type: 'boolean', default: false },
       'print-capabilities': { type: 'boolean', default: false },
       verbose: { type: 'boolean', default: false },
+      trace: { type: 'boolean', default: false },
       help: { type: 'boolean', short: 'h', default: false },
     },
   });
@@ -97,12 +116,20 @@ async function main(argv: string[]): Promise<number> {
     }
   }
 
-  const log = createLogger('cli', { level: values.verbose ? 'debug' : 'info' });
-  const loaded = loadNative({ ...(values['native-dir'] ? { dir: values['native-dir'] } : {}) });
+  const logDir = resolveLogDir();
+  const level = resolveLogLevel(values);
+  configureLogging({ ...(level ? { level } : {}), dir: logDir });
+  const log = createLogger('cli');
+  const loaded = loadNative({
+    ...(values['native-dir'] ? { dir: values['native-dir'] } : {}),
+    // native 自己的日志进文件，永不占终端：签名 / 发包的 hex 就是从这儿出来的。
+    ...(logDir ? { logPath: join(logDir, 'native.log') } : {}),
+    debugLog: values.trace,
+  });
   const native = adaptNativeBinding(loaded.binding);
   const capabilities = inspectNative(native);
 
-  log.info('原生组件已加载', {
+  log.debug('原生组件已加载', {
     path: loaded.path,
     profile: loaded.profile,
     ...(loaded.buildInfo ? { validitySecs: loaded.buildInfo.validitySecs } : {}),
@@ -218,7 +245,6 @@ async function main(argv: string[]): Promise<number> {
     if (!webui) {
       // `--no-webui` 的直启路径：自己建 bot，不经过控制台。
       const bot = createBot({ config: baseConfig, native, vault, logger: log });
-      bot.events.on('state', (change) => log.info('状态', change));
       const stop = (signal: string): void => {
         log.info('收到退出信号，开始下线', { signal });
         void bot.stop('closed').finally(() => process.exit(0));
@@ -245,8 +271,6 @@ async function main(argv: string[]): Promise<number> {
           }
         : 'off',
     });
-  } else {
-    log.info('未指定 --account：控制台等待在登录页选择账号');
   }
 
   /**

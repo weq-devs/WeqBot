@@ -10,7 +10,7 @@
  * 不补桩，这样探测看到的是真实情况。
  */
 
-import { createLogger } from '@weqbot/common';
+import { createLogger, renderHex, type Logger } from '@weqbot/common';
 import type {
   DeviceProfile,
   NativeBuildInfo,
@@ -176,11 +176,53 @@ export interface RawNativeBinding {
   };
   /** 从数据根离线计算设备 guid（32 位小写 hex）。 */
   readDeviceGuid?(dataRoot: string): string | null;
+
+  // ── native 自己的日志（`--verbose` / `--trace` 与落盘用） ──────────
+  //
+  // 不设 `setLogPath` 时 native 的日志行为由产物决定；签名 / 发包的调试行
+  // （含 hex）可能直接落到终端。加载器据此把日志定向到文件。
+  setLogPath?(path: string): void;
+  setDebugLog?(enabled: boolean): void;
+  isDebugLogEnabled?(): boolean;
   /** 二维码登录。事件与 `quickLogin` 的 `onEvent` 同一形状。 */
   qrLogin?(
     options: RawQuickLoginOptions,
     onEvent?: (error: Error | null, event: unknown) => unknown,
   ): Promise<QuickLoginResult>;
+}
+
+/**
+ * trace 级别的收发包日志（`--trace`）。
+ *
+ * **刻意不脱敏**：这条流的用途就是对着抓包排查字节差异，替换掉字段反而让
+ * 它失去意义。它只在 trace 打开时生成 hex（`isEnabled` 先挡一道，避免每次
+ * 发包都白算一个字符串），且永不落盘。
+ */
+function traceSend(
+  log: Logger,
+  label: string,
+  fields: Record<string, unknown>,
+  body: Uint8Array,
+): number {
+  if (!log.isEnabled('trace')) return 0;
+  log.trace(`${label} →`, { ...fields, len: body.byteLength, hex: renderHex(body) });
+  return Date.now();
+}
+
+function traceReply(
+  log: Logger,
+  label: string,
+  fields: Record<string, unknown>,
+  reply: Uint8Array,
+  startedAt: number,
+): void {
+  if (!log.isEnabled('trace')) return;
+  log.trace(`${label} ←`, {
+    ...fields,
+    len: reply.byteLength,
+    elapsedMs: startedAt === 0 ? undefined : Date.now() - startedAt,
+    hex: renderHex(reply),
+  });
 }
 
 export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
@@ -189,8 +231,14 @@ export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
 
   if (raw.sendPacket) {
     const call = raw.sendPacket.bind(raw);
-    adapted.sendPacket = async (sessionId, cmd, body, needSign, signMode) =>
-      new Uint8Array(await call(sessionId, cmd, Buffer.from(body), needSign, signMode));
+    adapted.sendPacket = async (sessionId, cmd, body, needSign, signMode) => {
+      const sent = traceSend(log, `sendPacket ${cmd}`, { sessionId, needSign, signMode }, body);
+      const reply = new Uint8Array(
+        await call(sessionId, cmd, Buffer.from(body), needSign, signMode),
+      );
+      traceReply(log, `sendPacket ${cmd}`, { sessionId }, reply, sent);
+      return reply;
+    };
   }
 
   if (raw.sendOidbPacket) {
@@ -203,10 +251,15 @@ export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
       isUid,
       needSign,
       signMode,
-    ) =>
-      new Uint8Array(
+    ) => {
+      const label = `sendOidb 0x${command.toString(16)}_${subCommand.toString(16)}`;
+      const sent = traceSend(log, label, { sessionId, isUid, needSign, signMode }, body);
+      const reply = new Uint8Array(
         await call(sessionId, command, subCommand, Buffer.from(body), isUid, needSign, signMode),
       );
+      traceReply(log, label, { sessionId }, reply, sent);
+      return reply;
+    };
   }
 
   if (raw.quickLogin) {

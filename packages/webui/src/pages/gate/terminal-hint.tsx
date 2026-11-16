@@ -62,7 +62,6 @@ export function TerminalHint({ open, onToggle }: TerminalHintProps) {
           <span />
           <span />
         </span>
-        <span className="terminal-title">令牌就在这个终端里</span>
         <ChevronUp className="terminal-chevron" size={14} aria-hidden="true" />
       </button>
 

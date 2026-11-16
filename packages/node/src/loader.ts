@@ -29,6 +29,18 @@ export interface LoadNativeOptions {
   dir?: string;
   platform?: NodeJS.Platform;
   arch?: NodeJS.Architecture;
+  /**
+   * 把 native 自己的日志写到这里（通常是 `logs/native.log`）。
+   *
+   * 不给时 native 不落盘 —— 它的签名 / 发包调试行（含 hex）由产物自己决定
+   * 往哪写。独立进程一律给一个路径，终端才是干净的。
+   */
+  logPath?: string;
+  /**
+   * native 的 debug 级日志（含包体 dump）。默认 **关**：签名时那串 hex
+   * 就是它打出来的。`--trace` 时才开，并且只进文件。
+   */
+  debugLog?: boolean;
 }
 
 export interface LoadedNative {
@@ -109,6 +121,11 @@ export function loadNative(options: LoadNativeOptions = {}): LoadedNative {
   if (typeof binding.sendPacket !== 'function' || typeof binding.sendOidbPacket !== 'function') {
     throw new Error(`原生组件缺少发包出口：${nativePath}`);
   }
+
+  // native 的调试输出（签名 / 发包的 hex）不走我们的 logger：它写自己的文件，
+  // 不设路径时按产物默认行为走。两条都显式设置，终端才不会被刷屏。
+  binding.setDebugLog?.(options.debugLog ?? false);
+  if (options.logPath) binding.setLogPath?.(options.logPath);
 
   const buildInfo = typeof binding.getBuildInfo === 'function' ? binding.getBuildInfo() : undefined;
 

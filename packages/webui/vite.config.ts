@@ -7,7 +7,7 @@ import { defineConfig } from 'vite';
  *
  * 开发服务器只听 127.0.0.1，与正式服务的默认一致，不把页面暴露到局域网。
  *
- * `/api` 代理到控制台服务（默认 6099）：开发期与正式部署走同一套 cookie 语义，
+ * `/api` 代理到控制台服务（默认 6299）：开发期与正式部署走同一套 cookie 语义，
  * 前端代码不需要为「跨端口」写任何特例。后端没起时页面会显示「无法连接」。
  * 想脱离后端看界面：`VITE_WEBUI_MOCK=1 pnpm dev:webui`。
  *
@@ -15,7 +15,7 @@ import { defineConfig } from 'vite';
  * （防 DNS rebinding + 跨站写），开发服务器自己的 `127.0.0.1:5173` 会被拒。
  * 生产端的安全逻辑一点没放宽：这里改的是**发出去的请求头**。
  */
-const target = process.env.WEQBOT_WEBUI_ORIGIN ?? 'http://127.0.0.1:6099';
+const target = process.env.WEQBOT_WEBUI_ORIGIN ?? 'http://127.0.0.1:6299';
 
 export default defineConfig({
   plugins: [react()],

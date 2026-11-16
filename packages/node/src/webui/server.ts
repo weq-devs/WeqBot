@@ -123,7 +123,7 @@ export function createWebUiServer(options: WebUiServerOptions): {
 
   function isAcceptableHost(hostHeader: string, listeningPort: number): boolean {
     if (!hostHeader) return false;
-    // `localhost:6099` / `127.0.0.1:6099` / `[::1]:6099`
+    // `localhost:6299` / `127.0.0.1:6299` / `[::1]:6299`
     const match = /^(\[[^\]]+\]|[^:]+)(?::(\d+))?$/.exec(hostHeader);
     if (!match) return false;
     const hostname = match[1]!.toLowerCase();
@@ -155,7 +155,7 @@ export function createWebUiServer(options: WebUiServerOptions): {
           resolve();
         });
       });
-      log.info('WebUI 已启动', { host, port });
+      log.debug('WebUI 已启动', { host, port });
       return {
         get port() {
           return port;
