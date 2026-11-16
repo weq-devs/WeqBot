@@ -49,8 +49,8 @@ function text(value: string): Uint8Array {
 }
 
 test('请求只带需要的 key，uin 必须是正整数', () => {
-  const request = FetchUserProfile.serialize({ uin: 2863253201 });
-  assert.equal(request.uin, 2863253201);
+  const request = FetchUserProfile.serialize({ uin: 10002 });
+  assert.equal(request.uin, 10002);
   const keys = (request.keys as Array<{ key: number }>).map((entry) => entry.key);
   assert.ok(keys.includes(PROFILE_KEY.nickname), '昵称是必需项');
   assert.ok(keys.includes(PROFILE_KEY.gender));
@@ -66,7 +66,7 @@ test('昵称 / 性别 / 年龄 / 签名按 key 解出来', () => {
   const info = deserializeProfile(
     roundTrip(
       response({
-        uin: 2863253201,
+        uin: 10002,
         uid: 'u_target',
         numbers: [
           [PROFILE_KEY.gender, 1],
@@ -79,11 +79,11 @@ test('昵称 / 性别 / 年龄 / 签名按 key 解出来', () => {
         ],
       }),
     ),
-    2863253201,
+    10002,
   );
 
   assert.deepEqual(info, {
-    uin: 2863253201,
+    uin: 10002,
     uid: 'u_target',
     nickname: '小明',
     remark: '',

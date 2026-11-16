@@ -34,7 +34,7 @@ test('读一份完整配置', async () => {
     qq: { dbPath: '/opt/QQ/nt_msg.db' },
     session: { syncGraceMs: 30_000 },
     secToken: { rotateMs: 3_600_000 },
-    onebotByUin: { '2863253201': EMPTY_NETWORKS },
+    onebotByUin: { '10002': EMPTY_NETWORKS },
     log: { level: 'debug' },
     keepRaw: true,
   });
@@ -74,7 +74,7 @@ test('onebotByUin.networks 四类数组缺一不可', async () => {
   await withFile(
     JSON.stringify({
       onebotByUin: {
-        '2863253201': { networks: { httpServers: [], httpClients: [], wsServers: [] } },
+        '10002': { networks: { httpServers: [], httpClients: [], wsServers: [] } },
       },
     }),
     async (path) => {
@@ -82,7 +82,7 @@ test('onebotByUin.networks 四类数组缺一不可', async () => {
     },
   );
 
-  await withFile(JSON.stringify({ onebotByUin: { '2863253201': {} } }), async (path) => {
+  await withFile(JSON.stringify({ onebotByUin: { '10002': {} } }), async (path) => {
     await assert.rejects(loadConfigFile(path), /networks/);
   });
 
@@ -108,14 +108,14 @@ test('mergeConfig：命令行覆盖配置文件，账号只认 --account', () =>
   const merged = mergeConfig({
     file: {
       qq: { dbPath: '/from/file.db' },
-      onebotByUin: { '2863253201': EMPTY_NETWORKS },
+      onebotByUin: { '10002': EMPTY_NETWORKS },
       log: { level: 'warn' },
     },
-    uin: '2863253201',
+    uin: '10002',
     qqDbPath: '/from/cli.db',
   });
 
-  assert.equal(merged.account.uin, '2863253201');
+  assert.equal(merged.account.uin, '10002');
   assert.equal(merged.qq?.dbPath, '/from/cli.db', '命令行优先');
   assert.deepEqual(merged.onebot, EMPTY_NETWORKS, '当前账号的 OneBot 配置要被选中');
   assert.equal(merged.log?.level, 'warn');

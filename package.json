@@ -32,7 +32,9 @@
     "docs:actions": "tsx scripts/dump-onebot-docs.mjs",
     "docs:actions:check": "tsx scripts/dump-onebot-docs.mjs --check",
     "docs:dev": "pnpm --filter @weqbot/docs dev",
-    "docs:build": "pnpm --filter @weqbot/docs build"
+    "docs:build": "pnpm --filter @weqbot/docs build",
+    "anonymize:uin": "node scripts/anonymize-uin.mjs",
+    "anonymize:uin:check": "node scripts/anonymize-uin.mjs --check"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.6.7",

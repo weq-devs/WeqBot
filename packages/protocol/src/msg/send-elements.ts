@@ -361,7 +361,7 @@ export interface SendImageElement {
  * 抓包（2026-10-28 私聊）实测取值，可作参照：
  *   fileName = '97CB548233A112AC73308617CB37044A.jpg'（大写 md5 + 扩展名）
  *   fileSize = 99944、md5Hex = '97cb548233a112ac73308617cb37044a'
- *   downloadPath = resId = '/2863253201-2151786634-97CB548233A112AC73308617CB37044A'
+ *   downloadPath = resId = '/10002-2151786634-97CB548233A112AC73308617CB37044A'
  *   imgType = 1000（jpg）、picHeight = 1920、picWidth = 864
  *   md5Str = 'D4A0354FCDD29D896673E4C87E7C7156'
  */

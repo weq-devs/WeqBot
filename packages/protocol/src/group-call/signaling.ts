@@ -111,7 +111,7 @@ export const GROUP_CREATE_ROOM_F8: ProtoMessage = message([
   f('f2', 2, 'uint32', { force: true }),
   f('f3', 3, 'uint32', { force: true }),
   f('f4', 4, 'uint32', { force: true }),
-  /** 实测 = 0x28270853 = 673646675，与主叫相关（三次抓包恒定）。 */
+  /** 实测 = 0x28270853 = 10003，与主叫相关（三次抓包恒定）。 */
   f('f7', 7, 'uint32', { force: true }),
   /** 实测恒为 2。 */
   f('f8', 8, 'uint32', { force: true }),
@@ -216,7 +216,7 @@ export const GROUP_INVITE_ROOM_RSP: ProtoMessage = message([
  * `f4` 是 88 字节 authKey（**不在抓包里显式构造，直接从开房回包带过来**）。
  */
 export const GROUP_QUERY_ROOM_REQ: ProtoMessage = message([
-  /** 实测 = 0x28270853 = 673646675（与开房 `f8.f7`、邀请 `f13.f7` 同值）。 */
+  /** 实测 = 0x28270853 = 10003（与开房 `f8.f7`、邀请 `f13.f7` 同值）。 */
   f('roomId', 1, 'uint32', { force: true }),
   f('wanted', 2, 'uint32', { repeated: true, force: true }),
   f('f3', 3, 'uint32', { force: true }),
@@ -412,7 +412,7 @@ export const CreateGroupRoom: TrpcSpec<{ selfUid: string; groupId: number }, Gro
     profile: GROUP_CAPABILITY_PROFILE,
     f4: CREATE_ROOM_F4,
     f5: CREATE_ROOM_F5,
-    // f7 是**本次通话的群号**，必须由调用方传（抓包里的 673646675 只是那次通话的群）。
+    // f7 是**本次通话的群号**，必须由调用方传（抓包里的 10003 只是那次通话的群）。
     f8: { ...CREATE_ROOM_F8_BASE, f7: groupId >>> 0 },
     f9: CREATE_ROOM_F9,
   }),

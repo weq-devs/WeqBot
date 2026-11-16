@@ -34,7 +34,7 @@
   "keepRaw": false,
   "maxReloginAttempts": 5,
   "onebotByUin": {
-    "2863253201": {
+    "10002": {
       "networks": {
         "wsServers": [
           {

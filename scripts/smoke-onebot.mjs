@@ -7,12 +7,12 @@
  *
  * 用法（bot 已经在另一个终端跑着）：
  *
- *   node --import tsx scripts/smoke-onebot.mjs --url ws://127.0.0.1:6700 --self 2863253201
+ *   node --import tsx scripts/smoke-onebot.mjs --url ws://127.0.0.1:6700 --self 10002
  *
  * 全部只读用例默认执行；会**发消息**的用例要显式加 `--send`：
  *
  *   node --import tsx scripts/smoke-onebot.mjs --url ws://127.0.0.1:6700 \
- *     --self 2863253201 --send --peer 10001 --group 55555
+ *     --self 10002 --send --peer 10001 --group 55555
  *
  * 输出是一张 PASS/FAIL/SKIP 表，末尾给出「哪些 V 项还没结论」。
  */

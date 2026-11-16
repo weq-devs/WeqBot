@@ -23,7 +23,7 @@
 // **私聊实测（2026-09-26，真机）**：把 f1 换成私聊目标一律失败 ——
 //   - f1 = uid 字符串 u_LKt3AdAIMP-CUfn6ydzDzw：回显里 f1 变成**未知字段** 1:"u_…"，
 //     即它只把 f1 当 varint 读，字符串不进 schema。
-//   - f1 = 目标 uin 2863253201：被读成 group_code:2863253201，当群号查，查不到会话。
+//   - f1 = 目标 uin 10002：被读成 group_code:10002，当群号查，查不到会话。
 //   - chatType=2 能过结构校验但报 70001 AudioRsp MediaData is Empty；chatType=1 + 非群
 //     目标报 31001 GenerateAudio err；chatType=3 也退回 31001（枚举校验）。
 //

@@ -27,7 +27,7 @@ WeqBot 对外提供 **OneBot v11** 兼容接口。这一页讲清怎么连、怎
 ```json
 {
   "onebotByUin": {
-    "2863253201": {
+    "10002": {
       "networks": {
         "wsServers": [
           {

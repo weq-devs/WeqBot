@@ -101,14 +101,14 @@ const ENVIRONMENT: LoginEnvironment = {
 
 const ACCOUNTS: LoginAccount[] = [
   {
-    uin: '2863253201',
+    uin: '10002',
     uid: 'u_LKt3AdAIMP-CUfn6ydzDzw',
     nickname: '冬眠的猫',
     lastLoginAt: Date.now() - 3 * 60 * 60 * 1000,
     hasA1: true,
   },
   {
-    uin: '1707889225',
+    uin: '10001',
     uid: 'u_9kPq2SdLmNx6RtVw8YzAbc',
     nickname: '小号测试',
     lastLoginAt: Date.now() - 9 * 24 * 60 * 60 * 1000,
@@ -136,7 +136,7 @@ const mockLogging: {
 function settingsSnapshot(): SettingsSnapshot {
   return {
     environment: ENVIRONMENT,
-    account: { uin: '2863253201' },
+    account: { uin: '10002' },
     onebot: { qzone: mockQzone },
     logging: {
       dir: mockLogging.dir,
@@ -162,10 +162,10 @@ function overview(): Overview {
     ...(online
       ? {
           account: {
-            uin: '2863253201',
+            uin: '10002',
             uid: 'u_LKt3AdAIMP-CUfn6ydzDzw',
             nickname: '冬眠的猫',
-            avatarUrl: `/api/avatar/2863253201`,
+            avatarUrl: `/api/avatar/10002`,
             onlineSince: ONLINE_SINCE,
             startedAt: ONLINE_SINCE - 12_000,
             device: {
@@ -508,7 +508,7 @@ export const mockApi = {
         data: {
           action: name,
           mock: true,
-          ...(name === 'get_login_info' ? { user_id: 2863253201, nickname: '冬眠的猫' } : {}),
+          ...(name === 'get_login_info' ? { user_id: 10002, nickname: '冬眠的猫' } : {}),
         },
         latencyMs: 18,
       };

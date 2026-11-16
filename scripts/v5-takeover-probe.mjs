@@ -13,7 +13,7 @@
  *   6. 到时间后 closeSession，再观察 QQ 是否会自己恢复
  *
  * 用法：
- *   node scripts/v5-takeover-probe.mjs --uin 1707889225 --native /tmp/weqbot-native/nt_helper.node
+ *   node scripts/v5-takeover-probe.mjs --uin 10001 --native /tmp/weqbot-native/nt_helper.node
  */
 
 import { createHash } from 'node:crypto';

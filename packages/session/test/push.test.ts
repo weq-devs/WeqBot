@@ -30,7 +30,7 @@ function groupMessage(text: string, bubble: number): Record<string, unknown> {
 }
 
 test('聊天消息 → InboundMessage，装扮与 peer 都保留', () => {
-  const bridge = new PushBridge({ selfUin: '2863253201', selfUid: 'u_self' });
+  const bridge = new PushBridge({ selfUin: '10002', selfUid: 'u_self' });
   const result = bridge.handle(
     frame(encode(MSG_PUSH_ENVELOPE, { messages: [groupMessage('hi', 9)] })),
   );
@@ -51,7 +51,7 @@ test('聊天消息 → InboundMessage，装扮与 peer 都保留', () => {
 });
 
 test('输入状态在观测到 uid→uin 后补全 peer', () => {
-  const bridge = new PushBridge({ selfUin: '2863253201' });
+  const bridge = new PushBridge({ selfUin: '10002' });
   const message = encode(MSG_PUSH_ENVELOPE, { messages: [groupMessage('hi', 0)] });
   bridge.handle(frame(message));
 
@@ -89,7 +89,7 @@ const GROUP_CHANGE = message([
 ]);
 
 test('33 入群 → group-member-increase，uid 用观测缓存补 uin', () => {
-  const bridge = new PushBridge({ selfUin: '2863253201', selfUid: 'u_self' });
+  const bridge = new PushBridge({ selfUin: '10002', selfUid: 'u_self' });
   bridge.handle(frame(encode(MSG_PUSH_ENVELOPE, { messages: [groupMessage('hi', 0)] })));
 
   const result = bridge.handle(
@@ -129,7 +129,7 @@ test('33 入群 → group-member-increase，uid 用观测缓存补 uin', () => {
 });
 
 test('好友申请 → request / friend，事件总线可收到 request', () => {
-  const bridge = new PushBridge({ selfUin: '2863253201', selfUid: 'u_self' });
+  const bridge = new PushBridge({ selfUin: '10002', selfUid: 'u_self' });
   const content = encode(
     message([
       {
@@ -165,7 +165,7 @@ test('好友申请 → request / friend，事件总线可收到 request', () => 
 });
 
 test('未建模的推送进入 unhandled，不丢帧', () => {
-  const bridge = new PushBridge({ selfUin: '2863253201' });
+  const bridge = new PushBridge({ selfUin: '10002' });
   const result = bridge.handle(
     frame(
       encode(MSG_PUSH_ENVELOPE, {

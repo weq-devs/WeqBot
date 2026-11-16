@@ -6,7 +6,7 @@ import test from 'node:test';
 import { FileCredentialVault, type SecretStore } from '../src/vault';
 
 const account = {
-  uin: '2863253201',
+  uin: '10002',
   uid: 'u_test',
   a1: new Uint8Array([1, 2, 3, 4, 5]),
   guid: '0123456789abcdef0123456789abcdef',

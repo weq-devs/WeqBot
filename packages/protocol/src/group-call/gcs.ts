@@ -62,7 +62,7 @@ export interface GroupGcsHead {
   f8: number;
   /** `f11`：应答类包置 1。 */
   f11: number;
-  /** `f13`：**群号**（实机 673646675），不是媒体会话 ID。 */
+  /** `f13`：**群号**（实机 10003），不是媒体会话 ID。 */
   groupId: number;
   f16: number;
   f19: number;

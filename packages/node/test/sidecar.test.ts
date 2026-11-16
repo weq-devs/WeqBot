@@ -33,14 +33,14 @@ function memoryVault(): CredentialVault & { accounts: Map<string, StoredAccount>
 
 function fakeBot(): Bot {
   return {
-    uin: '2863253201',
+    uin: '10002',
     state: 'online',
     sessionId: 7,
     events: new TypedEventBus<BotEventMap>(),
     protocol: undefined,
     onebot: undefined,
     snapshot: {
-      uin: '2863253201',
+      uin: '10002',
       state: 'online',
       sessionId: 7,
       reconnects: 0,
@@ -65,7 +65,7 @@ function harness(options: Partial<Parameters<typeof runSidecar>[0]> = {}) {
   const seen: Parameters<NonNullable<Parameters<typeof runSidecar>[0]['botFactory']>>[0][] = [];
 
   const handle = runSidecar({
-    uin: '2863253201',
+    uin: '10002',
     native: {} as NativePort,
     vault,
     stdin,
@@ -110,7 +110,7 @@ test('ping / login / status / shutdown 全链路', async () => {
   assert.ok(login && login.kind === 'response' && login.ok);
   assert.equal((login.result as { state: string }).state, 'online');
   assert.equal((login.result as { sessionId: number }).sessionId, 7);
-  assert.deepEqual([...h.vault.accounts.get('2863253201')!.a1], [9, 8, 7]);
+  assert.deepEqual([...h.vault.accounts.get('10002')!.a1], [9, 8, 7]);
 
   h.stdin.write(`${JSON.stringify(controlRequest(3, 'status', {}))}\n`);
   await waitFor(() => h.decoded.length >= 3);
@@ -180,9 +180,9 @@ test('启动期配置（--config）透传进 BotConfig，凭据仍只来自 logi
   assert.equal(config.session?.syncGraceMs, 30_000);
   // login 没给 qqDbPath 时回落到配置文件的。
   assert.equal(config.qq?.dbPath, '/from/config.db');
-  assert.equal(config.account.uin, '2863253201');
+  assert.equal(config.account.uin, '10002');
   // 凭据不出现在配置里。
-  assert.deepEqual([...h.vault.accounts.get('2863253201')!.a1], [9, 8, 7]);
+  assert.deepEqual([...h.vault.accounts.get('10002')!.a1], [9, 8, 7]);
 });
 
 test('login 的 qqDbPath 覆盖配置文件的值', async () => {
