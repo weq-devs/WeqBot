@@ -135,6 +135,8 @@ export function createBot(options: CreateBotOptions): Bot {
   let offStatus: (() => void) | undefined;
   let storedAccount: StoredAccount | undefined;
   let onebot: OneBotAdapter | undefined;
+  /** OneBot 后端：上线后用来预热昵称表（好友 / 群 / 登录信息）。 */
+  let backend: ReturnType<typeof createProtocolBackend> | undefined;
   /** 当前账号 uid（登录后才有）。 */
   let selfUid: string | undefined;
   let tokenTimer: ReturnType<typeof setTimeout> | undefined;
@@ -344,6 +346,8 @@ export function createBot(options: CreateBotOptions): Bot {
       // native 侧这两项可以是 None，但真机指纹需要稳定值：vault 没存就用本机。
       deviceName: stored.device.deviceName ?? hostname(),
       kernelVersion: stored.device.kernelVersion ?? release(),
+    }).catch((cause: unknown) => {
+      throw normalizeLoginError(cause, uin);
     });
 
     // EasyLogin 不回传 uid（QR / classic 会）；vault / 宿主配置仍是权威来源。
@@ -496,7 +500,7 @@ export function createBot(options: CreateBotOptions): Bot {
       // 入站媒体：pic/ptt/video 只有 fileToken，URL 要靠 rkey 现拼（带缓存）。
       // 历史消息 / 合并转发也要用同一份解析器，否则拉回来的图片只有文件名。
       const media = createMediaUrlResolver({ protocol, logger: log });
-      const backend = createProtocolBackend({
+      backend = createProtocolBackend({
         protocol,
         selfUin: uin,
         ...(selfUid ? { selfUid: selfUid } : {}),
@@ -527,6 +531,8 @@ export function createBot(options: CreateBotOptions): Bot {
       await adapter.start();
       onebot = adapter;
       log.info('OneBot 已启动', { port: adapter.port, actions: adapter.actions().length });
+      // 昵称表在后台预热：失败不影响上线，日志里退回 uin / 短 uid。
+      void seedIdentity(backend);
     } catch (cause) {
       log.error('OneBot 启动失败（会话继续）', { uin, cause });
     }
@@ -581,8 +587,44 @@ export function createBot(options: CreateBotOptions): Bot {
     }
   }
 
+  /**
+   * 用 OneBot 后端的联系人 / 群列表预热昵称表。
+   *
+   * SnowLuma 在初始化时维护一张持久化身份表；这里不做持久化（身份缓存按约定
+   * 不落盘），只在每次上线后从好友列表、群列表和登录信息里补一遍名字。
+   * 消息里的群名片 / 昵称会继续增量更新，所以预热失败只降级成显示 uin。
+   */
+  async function seedIdentity(source: typeof backend): Promise<void> {
+    if (!source) return;
+    const describe = (cause: unknown): string =>
+      cause instanceof Error ? cause.message : String(cause);
+    try {
+      const login = await source.getLoginInfo?.();
+      if (login) {
+        identity.observeName({ uin: login.userId, uid: login.uid ?? selfUid }, login.nickname);
+      }
+    } catch (cause) {
+      log.debug('读取登录信息失败（昵称表跳过自身）', { cause: describe(cause) });
+    }
+    try {
+      const friends = await source.getFriendList?.();
+      for (const friend of friends ?? []) {
+        identity.observeName({ uin: friend.userId }, friend.remark || friend.nickname);
+      }
+    } catch (cause) {
+      log.debug('读取好友列表失败（昵称表不完整）', { cause: describe(cause) });
+    }
+    try {
+      const groups = await source.getGroupList?.();
+      for (const group of groups ?? []) {
+        identity.observeName({ uin: group.groupId }, group.groupName);
+      }
+    } catch (cause) {
+      log.debug('读取群列表失败（昵称表不完整）', { cause: describe(cause) });
+    }
+  }
+
   function handleStatus(event: SessionStatusEvent): void {
-    log.debug('会话状态', { kind: event.kind });
     switch (event.kind) {
       case 'heartbeat':
         events.emit('heartbeat', { type: 'heartbeat', at: event.ts, rttMs: event.rttMs });
@@ -717,6 +759,28 @@ export function createBot(options: CreateBotOptions): Bot {
     refreshSecToken,
     reloadOneBot,
   };
+}
+
+/**
+ * native 在登录链路里抛出的错误里，哪些属于**项目策略拒绝**而非凭据问题。
+ *
+ * native 侧只有 napi 的 message 字符串可用（没有 `code` 字段），所以约定一个
+ * 稳定的大写前缀 —— 与 `nt_helper` 的 `coded_error` 惯例一致。前缀对不上就
+ * **原样返回**：不能把任意 napi 错误重新包装成 `ACCESS_DENIED`，否则「a1 失效」
+ * 也会显示成「项目策略限制」，把用户引到错误的方向。
+ */
+const DENIED_PREFIX = 'LOGIN_DENIED:';
+
+function normalizeLoginError(cause: unknown, uin: string): WeqBotError {
+  const message = cause instanceof Error ? cause.message : String(cause);
+  if (message.startsWith(DENIED_PREFIX)) {
+    return new WeqBotError(
+      'ACCESS_DENIED',
+      '当前构建的项目策略不允许登录该账号（与 QQ 凭据无关）',
+      { cause, fields: { uin, native: message } },
+    );
+  }
+  return new WeqBotError('LOGIN_FAILED', message, { cause, fields: { uin } });
 }
 
 /** `DeviceProfile.os` → native 的 `(os, NTLoginPlatform)` 常量。 */

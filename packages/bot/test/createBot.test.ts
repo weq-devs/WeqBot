@@ -240,6 +240,40 @@ test('start: 登录与 vault 都没有 uid 时报 LOGIN_FAILED', async () => {
   assert.equal(harness.calls.openSession, 0);
 });
 
+test('start: 远端模式 exit 报 ACCESS_DENIED，且不误报成凭据问题', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative({
+    quickLogin: async () => {
+      // native 侧 napi 错误只有 message，约定 LOGIN_DENIED: 前缀。
+      throw new Error('LOGIN_DENIED: 远端模式下当前构建不允许登录');
+    },
+  });
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+
+  await assert.rejects(bot.start(), (error: unknown) => {
+    assert.equal((error as { code?: string }).code, 'ACCESS_DENIED');
+    assert.match((error as Error).message, /项目策略/);
+    assert.match((error as Error).message, /与 QQ 凭据无关/);
+    return true;
+  });
+  assert.equal(harness.calls.openSession, 0);
+});
+
+test('start: 非 LOGIN_DENIED 的 native 错误仍归为 LOGIN_FAILED', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative({
+    quickLogin: async () => {
+      throw new Error('a1 已被服务端拒绝');
+    },
+  });
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+
+  await assert.rejects(bot.start(), (error: unknown) => {
+    assert.equal((error as { code?: string }).code, 'LOGIN_FAILED');
+    return true;
+  });
+});
+
 test('配置了 onebot 时会启动适配器，stop 时一起关掉', async () => {
   const { vault } = makeVault();
   const harness = makeNative();

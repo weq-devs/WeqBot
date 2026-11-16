@@ -4,6 +4,7 @@
   "private": true,
   "type": "module",
   "description": "WeQ Bot — 独立 QQ bot 框架（mode2 自建上线），可作为纯 TS 嵌入 WeQ desktop",
+  "license": "CC-BY-NC-SA-4.0",
   "packageManager": "pnpm@12.8.1",
   "engines": {
     "node": ">=22.12.0"

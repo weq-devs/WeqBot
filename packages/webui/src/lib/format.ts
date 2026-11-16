@@ -54,6 +54,15 @@ export function formatMs(ms: number): string {
   return ms < 1000 ? `${Math.round(ms)} ms` : `${(ms / 1000).toFixed(2)} s`;
 }
 
+/** 字节 → `182 MB` / `1.4 GB`；设备状态卡用。 */
+export function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return '—';
+  if (bytes < 1024) return `${Math.round(bytes)} B`;
+  if (bytes < 1024 ** 2) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 ** 3) return `${(bytes / 1024 ** 2).toFixed(0)} MB`;
+  return `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+}
+
 export const PHASE_LABEL: Record<string, string> = {
   'no-account': '未登录',
   starting: '启动中',

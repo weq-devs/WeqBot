@@ -200,6 +200,85 @@
   opacity: 0.85;
 }
 
+/* ───────────────────────────── 设备状态 ───────────────────────────── */
+
+.ov-device {
+  padding-bottom: 14px;
+}
+
+.ov-device-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 1px;
+  margin: 0 8px;
+  padding: 0 0 2px;
+  border-radius: var(--radius-sm);
+  background: var(--border);
+  overflow: hidden;
+}
+
+.ov-device-stat {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  padding: 11px 12px;
+  background: var(--bg-elevated);
+}
+
+.ov-device-stat header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.ov-device-stat header svg {
+  flex: none;
+  color: var(--text-faint);
+}
+
+.ov-device-stat header em {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  font-style: normal;
+  white-space: nowrap;
+}
+
+.ov-device-stat strong {
+  overflow: hidden;
+  font-size: var(--text-md);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-device-hint {
+  overflow: hidden;
+  color: var(--text-faint);
+  font-size: 10.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.ov-device-track {
+  height: 4px;
+  margin-top: 3px;
+  overflow: hidden;
+  border-radius: 2px;
+  background: var(--bg-sunken);
+}
+
+.ov-device-fill {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  opacity: 0.75;
+}
+
 /* ───────────────────────────── 两列 ───────────────────────────── */
 
 .ov-grid {
@@ -432,11 +511,18 @@
 }
 
 @media (max-width: 1080px) {
-  .ov-metrics {
+  .ov-metrics,
+  .ov-device-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
   .ov-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 560px) {
+  .ov-device-grid {
     grid-template-columns: minmax(0, 1fr);
   }
 }

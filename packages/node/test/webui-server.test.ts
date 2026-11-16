@@ -10,6 +10,7 @@ import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
+import type { BotOneBotConfig } from '@weqbot/bot';
 import { WebUiAuth } from '../src/webui/auth';
 import type { ConsoleRuntime } from '../src/webui/console';
 import { Observability } from '../src/webui/observability';
@@ -20,6 +21,8 @@ const TOKEN = 'wqb_AAAAAAAAAAAAAAAAAAAAAAAA';
 
 interface Harness {
   port: number;
+  /** `reloadOneBot` 收到的配置（用来断言令牌保留等副作用）。 */
+  reloaded: unknown[];
   close(): Promise<void>;
 }
 
@@ -30,7 +33,7 @@ function fakeRuntime(state: {
   result?: { status: string; retcode: number; data: unknown };
   calls?: Array<{ name: string; params: unknown }>;
   onebot?: boolean;
-}): ConsoleRuntime {
+}): ConsoleRuntime & { reloaded: unknown[] } {
   const actions = state.actions ?? ['get_login_info', 'send_group_msg'];
   const adapter = {
     actions: () => actions,
@@ -89,7 +92,7 @@ function fakeRuntime(state: {
     logout: async () => {},
     consoleEvents: { on: () => () => {} },
     close: async () => {},
-  } as unknown as ConsoleRuntime;
+  } as unknown as ConsoleRuntime & { reloaded: unknown[] };
 }
 
 async function start(
@@ -99,6 +102,7 @@ async function start(
     result?: { status: string; retcode: number; data: unknown };
     phase?: string;
     onebot?: boolean;
+    config?: BotOneBotConfig;
   } = {},
 ): Promise<Harness> {
   const auth = new WebUiAuth(TOKEN);
@@ -113,7 +117,7 @@ async function start(
     auth,
     console: runtime,
     observability,
-    readConfig: () => undefined,
+    readConfig: () => options.config,
   });
   const server = createWebUiServer({
     port: 0,
@@ -121,7 +125,11 @@ async function start(
     handle: (input) => router.handle(input),
   });
   const handle: WebUiServerHandle = await server.start();
-  return { port: handle.port, close: () => handle.close() };
+  return {
+    port: handle.port,
+    reloaded: runtime.reloaded as unknown[],
+    close: () => handle.close(),
+  };
 }
 
 interface Reply {
@@ -452,7 +460,24 @@ test('GET /api/onebot/config 在未配置时返回空骨架', async () => {
 });
 
 test('PUT /api/onebot/config：accessToken 打码值不会被写回成字面量', async () => {
-  const harness = await start();
+  const harness = await start({
+    config: {
+      networks: {
+        httpServers: [
+          {
+            name: 'main',
+            port: 6700,
+            accessToken: 'secret-token',
+            messageFormat: 'array',
+            reportSelfMessage: true,
+          },
+        ],
+        httpClients: [],
+        wsServers: [],
+        wsClients: [],
+      },
+    } as unknown as BotOneBotConfig,
+  });
   try {
     const cookie = await login(harness.port);
     const reply = await call(harness.port, '/api/onebot/config', {
@@ -480,7 +505,10 @@ test('PUT /api/onebot/config：accessToken 打码值不会被写回成字面量'
     // 没有 bot 时 reloadOneBot 不会执行，配置仍然会被接受并保存（无 configPath 时只校验）。
     assert.equal(reply.status, 200);
     const saved = JSON.parse(reply.body).config;
-    assert.equal(saved.networks.httpServers[0].accessToken, undefined);
+    // 响应始终打码；真正要验的是交给 reloadOneBot 的令牌还是原值。
+    assert.equal(saved.networks.httpServers[0].accessToken, '***');
+    const applied = harness.reloaded[0] as BotOneBotConfig;
+    assert.equal(applied.networks.httpServers[0]?.accessToken, 'secret-token');
   } finally {
     await harness.close();
   }

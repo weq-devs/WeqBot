@@ -1,0 +1,361 @@
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-width: 920px;
+  padding-bottom: 24px;
+}
+
+.set-hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 16px;
+  padding: 18px 20px;
+  background: linear-gradient(120deg, var(--accent-soft), transparent 55%), var(--bg-elevated);
+}
+
+.set-hero h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+
+.set-hero p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+.set-refresh {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 32px;
+  height: 32px;
+  margin-left: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg-elevated);
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.set-refresh:hover {
+  border-color: var(--border-strong);
+  color: var(--text);
+}
+
+.set-refresh:active {
+  transform: rotate(-30deg);
+}
+
+.set-section {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 16px 20px 18px;
+}
+
+.set-section-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.set-section-head h3 {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0;
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+.set-section-head h3 svg {
+  color: var(--accent-text);
+}
+
+.set-section-sub {
+  margin-left: auto;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.set-checks {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.set-check {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  padding: 5px 8px;
+  border-radius: var(--radius-xs);
+}
+
+.set-check:hover {
+  background: var(--bg-hover);
+}
+
+.set-check svg {
+  flex: none;
+}
+
+.set-check[data-tone="good"] svg {
+  color: var(--status-good);
+}
+
+.set-check[data-tone="warning"] svg {
+  color: var(--status-warning);
+}
+
+.set-check[data-tone="critical"] svg {
+  color: var(--status-critical-text);
+}
+
+.set-check[data-tone="muted"] svg {
+  color: var(--text-faint);
+}
+
+.set-check-label {
+  flex: none;
+  width: 118px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+}
+
+.set-check-detail {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.set-check[data-tone="critical"] .set-check-detail {
+  color: var(--status-critical-text);
+}
+
+.set-check[data-tone="warning"] .set-check-detail {
+  color: color-mix(in oklch, var(--status-warning) 75%, var(--text));
+}
+
+.set-note,
+.set-hint {
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  line-height: 1.6;
+}
+
+.set-row {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.set-row > div {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.set-row strong {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.set-row small {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+}
+
+.set-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.set-field > label {
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+}
+
+.set-inline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.set-inline .btn {
+  flex: none;
+  gap: 6px;
+}
+
+.set-input {
+  width: 100%;
+  height: 34px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xs);
+  background: var(--bg);
+  color: var(--text);
+  font-size: var(--text-sm);
+}
+
+.set-input:focus {
+  border-color: var(--accent-border);
+  outline: none;
+  box-shadow: 0 0 0 3px var(--accent-soft);
+}
+
+.set-subsection {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.set-subsection h4 {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  font-weight: 600;
+}
+
+.set-files {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.set-files li {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px 8px;
+  border-radius: var(--radius-xs);
+  color: var(--text-muted);
+  font-size: var(--text-xs);
+}
+
+.set-files li:hover {
+  background: var(--bg-hover);
+}
+
+.set-files li span:last-child {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+.set-empty {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.set-facts {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 10px 20px;
+  margin: 0;
+}
+
+.set-facts div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.set-facts dt {
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.set-facts dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.set-failure {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 8px 12px;
+  overflow: hidden;
+  border: 1px solid var(--status-critical-border);
+  border-radius: var(--radius-sm);
+  background: var(--status-critical-soft);
+  color: var(--status-critical-text);
+  font-size: var(--text-sm);
+}
+
+.set-saved {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin: 0;
+  color: var(--status-good);
+  font-size: var(--text-xs);
+}
+
+.set-loading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  padding: 24px;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+}
+
+@media (max-width: 560px) {
+  .set-check {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .set-check-label {
+    width: auto;
+  }
+
+  .set-check-detail {
+    flex-basis: 100%;
+    padding-left: 22px;
+    white-space: normal;
+  }
+
+  .set-inline {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

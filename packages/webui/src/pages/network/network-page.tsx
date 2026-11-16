@@ -1,24 +1,25 @@
 /**
- * 网络页：四类网络卡片 + 右侧抽屉编辑。
+ * 网络页：四类网络卡片 + 居中模态卡片编辑。
  *
  * 保存走 `PUT /api/onebot/config`：服务端会先停旧适配器再按新配置起，失败回滚。
- * 这里的表单刻意**不做花哨的自动补全**：端口、路径、role 都是少数几个值，
- * 下拉 + 输入框比「猜」可靠。
+ * 改动自动保存（防抖 550ms），不再有「保存并应用」按钮 —— 端口、路径、role
+ * 都是少数几个值，下拉 + 输入框比「猜」可靠；用户不该为了一个开关去找保存按钮。
  */
 
 import {
   AlertTriangle,
+  Check,
   CirclePlus,
   Globe,
+  LoaderCircle,
   Plug,
   PlugZap,
   Radio,
-  Save,
   Trash2,
   X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 import { api, ApiError } from '../../api';
 import type {
   MessageFormat,
@@ -43,7 +44,7 @@ const KINDS: { kind: Kind; label: string; Icon: typeof Globe; hint: string }[] =
   { kind: 'wsClients', label: '反向 WS', Icon: PlugZap, hint: '我们连出去' },
 ];
 
-export function NetworkPage({ overview }: PageProps) {
+export function NetworkPage({ overview, phase }: PageProps) {
   const load = useCallback(() => api.network.get(), []);
   const { data: loaded, error, reload } = usePolling(load, 8000);
   const [draft, setDraft] = useState<OneBotConfig>();
@@ -51,29 +52,51 @@ export function NetworkPage({ overview }: PageProps) {
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [savedAt, setSavedAt] = useState<number>();
+  /** 最后一次成功落盘的序列化内容：防抖保存据此判断是否真的改了。 */
+  const lastSaved = useRef<string | undefined>(undefined);
+  /** 最新草稿：保存回来时只在草稿没被继续编辑的前提下回填。 */
+  const draftRef = useRef<OneBotConfig | undefined>(undefined);
+  draftRef.current = draft;
 
-  // 首次拿到配置后建草稿；之后只在用户没改动过时才跟随服务端（避免覆盖正在编辑的内容）。
+  // 首次拿到配置后建草稿；之后不再用服务端值覆盖用户正在编辑的内容。
   useEffect(() => {
-    if (loaded && !draft) setDraft(structuredClone(loaded));
+    if (loaded && !draft) {
+      lastSaved.current = JSON.stringify(loaded);
+      setDraft(structuredClone(loaded));
+    }
   }, [loaded, draft]);
 
-  const dirty = JSON.stringify(draft) !== JSON.stringify(loaded);
+  const dirty = Boolean(draft && loaded && JSON.stringify(draft) !== JSON.stringify(loaded));
 
-  const save = useCallback(async () => {
+  const persist = useCallback(
+    async (config: OneBotConfig, serialized: string) => {
+      setSaving(true);
+      setFailure(undefined);
+      try {
+        const saved = await api.network.save(config);
+        lastSaved.current = JSON.stringify(saved);
+        // 服务端会把 accessToken 换成 `***`；回填草稿才能让「已保存」生效，
+        // 但保存期间用户又改了东西时不能用旧响应盖掉新输入。
+        if (JSON.stringify(draftRef.current) === serialized) setDraft(structuredClone(saved));
+        setSavedAt(Date.now());
+        reload();
+      } catch (cause) {
+        setFailure(describe(cause));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [reload],
+  );
+
+  // 自动保存：改动停止 550ms 后提交。失败时保留草稿，用户改一下或点「重试」。
+  useEffect(() => {
     if (!draft) return;
-    setSaving(true);
-    setFailure(undefined);
-    try {
-      const saved = await api.network.save(draft);
-      setDraft(structuredClone(saved));
-      setSavedAt(Date.now());
-      reload();
-    } catch (cause) {
-      setFailure(describe(cause));
-    } finally {
-      setSaving(false);
-    }
-  }, [draft, reload]);
+    const serialized = JSON.stringify(draft);
+    if (serialized === lastSaved.current) return;
+    const timer = setTimeout(() => void persist(draft, serialized), 550);
+    return () => clearTimeout(timer);
+  }, [draft, persist]);
 
   const update = useCallback((kind: Kind, index: number, patch: Partial<NetworkConfig>) => {
     setDraft((current) => {
@@ -130,25 +153,29 @@ export function NetworkPage({ overview }: PageProps) {
   return (
     <div className="net">
       <div className="net-toolbar">
+        {' '}
         <p className="net-hint">
-          保存后只重启 OneBot 适配器，会话与账号保持在线；配置损坏时服务端会回滚上一份。
+          配置按当前账号保存（{overview?.account?.uin ?? '未上线'}）。改动会自动保存并热重启 OneBot
+          适配器，会话与账号保持在线；账号不在线时先保存，上线后自动启动。
         </p>
-        <div className="net-toolbar-actions">
-          {savedAt && !dirty && (
-            <span className="net-saved">
-              <Save size={14} aria-hidden="true" />
-              已保存
-            </span>
-          )}
-          <Button
-            variant="primary"
-            size="md"
-            disabled={!dirty || saving}
-            onClick={() => void save()}
-          >
-            {saving ? '保存中…' : '保存并应用'}
-          </Button>
-        </div>
+        <span className="net-autosave" data-saving={saving || undefined} role="status">
+          {saving ? (
+            <>
+              <LoaderCircle size={14} className="spin" aria-hidden="true" />
+              保存中…
+            </>
+          ) : savedAt && !dirty ? (
+            <>
+              <Check size={14} aria-hidden="true" />
+              已自动保存
+            </>
+          ) : dirty ? (
+            <>
+              <span className="net-autosave-dot" aria-hidden="true" />
+              等待保存…
+            </>
+          ) : null}
+        </span>
       </div>
 
       <AnimatePresence>
@@ -161,7 +188,16 @@ export function NetworkPage({ overview }: PageProps) {
             exit={{ opacity: 0, height: 0 }}
           >
             <AlertTriangle size={15} aria-hidden="true" />
-            {failure ?? describe(error)}
+            <span>{failure ?? describe(error)}</span>
+            {failure && draft && (
+              <Button
+                variant="ghost"
+                size="md"
+                onClick={() => void persist(draft, JSON.stringify(draft))}
+              >
+                重试
+              </Button>
+            )}
           </motion.p>
         )}
       </AnimatePresence>
@@ -203,12 +239,23 @@ export function NetworkPage({ overview }: PageProps) {
                         >
                           <span className="net-item-name">{network.name}</span>
                           <span className="net-item-endpoint mono">{endpointOf(network)}</span>
-                          <span className="net-item-state">
+                          <span
+                            className="net-item-state"
+                            title={
+                              snapshot
+                                ? (NETWORK_STATE_LABEL[snapshot.state] ?? snapshot.state)
+                                : network.enabled === false
+                                  ? '这条网络已关闭，不会被启动'
+                                  : '配置已保存；账号上线后自动启动'
+                            }
+                          >
                             {snapshot
                               ? (NETWORK_STATE_LABEL[snapshot.state] ?? snapshot.state)
                               : network.enabled === false
-                                ? '未启用'
-                                : '未生效'}
+                                ? '已关闭'
+                                : phase === 'online'
+                                  ? '启动中…'
+                                  : '账号上线后启动'}
                             {snapshot && snapshot.clients > 0 && ` · ${snapshot.clients}`}
                           </span>
                         </button>
@@ -240,29 +287,13 @@ export function NetworkPage({ overview }: PageProps) {
         })}
       </div>
 
-      <section className="card net-global">
-        <header className="net-group-head">
-          <h3>全局</h3>
-        </header>
-        <div className="net-field net-field-row">
-          <span id="net-global-qzone">
-            QQ 空间能力
-            <small>关闭后 qzone 相关 action 不注册，也不会去换票</small>
-          </span>
-          <Switch
-            checked={draft?.qzone !== false}
-            aria-labelledby="net-global-qzone"
-            onChange={(qzone) => setDraft((current) => (current ? { ...current, qzone } : current))}
-          />
-        </div>
-      </section>
-
       <AnimatePresence>
         {editingNetwork && editing && (
-          <NetworkDrawer
+          <NetworkModal
             key={`${editing.kind}:${editing.index}`}
             kind={editing.kind}
             network={editingNetwork}
+            saving={saving}
             onChange={(patch) => update(editing.kind, editing.index, patch)}
             onClose={() => setEditing(null)}
           />
@@ -272,149 +303,193 @@ export function NetworkPage({ overview }: PageProps) {
   );
 }
 
-// ─────────────────────────── 抽屉 ───────────────────────────
+// ─────────────────────────── 模态卡片 ───────────────────────────
 
-function NetworkDrawer({
+function NetworkModal({
   kind,
   network,
+  saving,
   onChange,
   onClose,
 }: {
   kind: Kind;
   network: NetworkConfig;
+  saving: boolean;
   onChange(patch: Partial<NetworkConfig>): void;
   onClose(): void;
 }) {
   const server = kind === 'httpServers' || kind === 'wsServers';
   const ws = kind === 'wsServers' || kind === 'wsClients';
 
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent): void => {
+      if (event.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   return (
-    <motion.aside
-      className="net-drawer"
-      initial={{ x: '100%' }}
-      animate={{ x: 0 }}
-      exit={{ x: '100%' }}
-      transition={{ type: 'spring', bounce: 0, duration: 0.38 }}
-      aria-label="编辑网络"
+    <motion.div
+      className="net-modal-backdrop"
+      initial={{ opacity: 0 }}
+      animate={{ opacity: 1 }}
+      exit={{ opacity: 0 }}
+      transition={{ duration: 0.16 }}
+      onClick={onClose}
     >
-      <header className="net-drawer-head">
-        <h2>{NETWORK_KIND_LABEL[snapshotKindOf(kind)] ?? kind}</h2>
-        <button type="button" className="net-drawer-close" onClick={onClose} aria-label="关闭">
-          <X size={16} />
-        </button>
-      </header>
+      <motion.section
+        className="net-modal card"
+        role="dialog"
+        aria-modal="true"
+        aria-label="编辑网络"
+        initial={{ opacity: 0, y: 12, scale: 0.98 }}
+        animate={{ opacity: 1, y: 0, scale: 1 }}
+        exit={{ opacity: 0, y: 8, scale: 0.98 }}
+        transition={{ type: 'spring', bounce: 0, duration: 0.32 }}
+        onClick={(event) => event.stopPropagation()}
+      >
+        <header className="net-modal-head">
+          <div>
+            <h2>{NETWORK_KIND_LABEL[snapshotKindOf(kind)] ?? kind}</h2>
+            <span className="net-modal-sub">改动自动保存</span>
+          </div>
+          <button type="button" className="net-modal-close" onClick={onClose} aria-label="关闭">
+            <X size={16} />
+          </button>
+        </header>
 
-      <div className="net-drawer-body">
-        <Field label="名称">
-          <input
-            className="net-input"
-            value={network.name}
-            onChange={(event) => onChange({ name: event.currentTarget.value })}
-          />
-        </Field>
-
-        {server ? (
-          <>
-            <Field label="监听地址">
-              <input
-                className="net-input mono"
-                value={(network as { host?: string }).host ?? '127.0.0.1'}
-                onChange={(event) => onChange({ host: event.currentTarget.value })}
-              />
-            </Field>
-            <Field label="端口">
-              <input
-                className="net-input mono"
-                type="number"
-                min={0}
-                max={65535}
-                value={(network as { port: number }).port}
-                onChange={(event) =>
-                  onChange({ port: Number(event.currentTarget.value) } as Partial<NetworkConfig>)
-                }
-              />
-            </Field>
-            <Field label="路径">
-              <input
-                className="net-input mono"
-                value={(network as { path?: string }).path ?? '/'}
-                onChange={(event) => onChange({ path: event.currentTarget.value })}
-              />
-            </Field>
-            {kind === 'httpServers' && (
-              <div className="net-field net-field-row">
-                <span id="net-ws-shared">同时接受 WS 连接</span>
-                <Switch
-                  checked={Boolean((network as { enableWebSocket?: boolean }).enableWebSocket)}
-                  aria-labelledby="net-ws-shared"
-                  onChange={(enableWebSocket) => onChange({ enableWebSocket })}
-                />
-              </div>
-            )}
-          </>
-        ) : (
-          <Field label="目标地址">
+        <div className="net-modal-body">
+          <Field label="名称">
             <input
-              className="net-input mono"
-              value={(network as { url: string }).url}
-              onChange={(event) => onChange({ url: event.currentTarget.value })}
+              className="net-input"
+              value={network.name}
+              onChange={(event) => onChange({ name: event.currentTarget.value })}
             />
           </Field>
-        )}
 
-        {ws && (
-          <Field label="角色">
+          {server ? (
+            <>
+              <Field label="监听地址">
+                <input
+                  className="net-input mono"
+                  value={(network as { host?: string }).host ?? '127.0.0.1'}
+                  onChange={(event) => onChange({ host: event.currentTarget.value })}
+                />
+              </Field>
+              <Field label="端口">
+                <input
+                  className="net-input mono"
+                  type="number"
+                  min={0}
+                  max={65535}
+                  value={(network as { port: number }).port}
+                  onChange={(event) =>
+                    onChange({ port: Number(event.currentTarget.value) } as Partial<NetworkConfig>)
+                  }
+                />
+              </Field>
+              <Field label="路径">
+                <input
+                  className="net-input mono"
+                  value={(network as { path?: string }).path ?? '/'}
+                  onChange={(event) => onChange({ path: event.currentTarget.value })}
+                />
+              </Field>
+              {kind === 'httpServers' && (
+                <div className="net-field net-field-row">
+                  <span id="net-ws-shared">同时接受 WS 连接</span>
+                  <Switch
+                    checked={Boolean((network as { enableWebSocket?: boolean }).enableWebSocket)}
+                    aria-labelledby="net-ws-shared"
+                    onChange={(enableWebSocket) => onChange({ enableWebSocket })}
+                  />
+                </div>
+              )}
+            </>
+          ) : (
+            <Field label="目标地址">
+              <input
+                className="net-input mono"
+                value={(network as { url: string }).url}
+                onChange={(event) => onChange({ url: event.currentTarget.value })}
+              />
+            </Field>
+          )}
+
+          {ws && (
+            <Field label="角色">
+              <select
+                className="net-input"
+                value={(network as { role?: WsRole }).role ?? 'Universal'}
+                onChange={(event) => onChange({ role: event.currentTarget.value as WsRole })}
+              >
+                <option value="Universal">Universal（收发都行）</option>
+                <option value="Api">Api（只收 action）</option>
+                <option value="Event">Event（只收事件）</option>
+              </select>
+            </Field>
+          )}
+
+          <Field label="消息格式">
             <select
               className="net-input"
-              value={(network as { role?: WsRole }).role ?? 'Universal'}
-              onChange={(event) => onChange({ role: event.currentTarget.value as WsRole })}
+              value={network.messageFormat}
+              onChange={(event) =>
+                onChange({ messageFormat: event.currentTarget.value as MessageFormat })
+              }
             >
-              <option value="Universal">Universal（收发都行）</option>
-              <option value="Api">Api（只收 action）</option>
-              <option value="Event">Event（只收事件）</option>
+              <option value="array">array（消息段数组）</option>
+              <option value="string">string（CQ 码）</option>
             </select>
           </Field>
-        )}
 
-        <Field label="消息格式">
-          <select
-            className="net-input"
-            value={network.messageFormat}
-            onChange={(event) =>
-              onChange({ messageFormat: event.currentTarget.value as MessageFormat })
-            }
-          >
-            <option value="array">array（消息段数组）</option>
-            <option value="string">string（CQ 码）</option>
-          </select>
-        </Field>
+          <div className="net-field net-field-row">
+            <span id="net-report-self">
+              上报自身消息
+              <small>`message_sent` 事件是否推给客户端</small>
+            </span>
+            <Switch
+              checked={network.reportSelfMessage}
+              aria-labelledby="net-report-self"
+              onChange={(reportSelfMessage) => onChange({ reportSelfMessage })}
+            />
+          </div>
 
-        <div className="net-field net-field-row">
-          <span id="net-report-self">
-            上报自身消息
-            <small>`message_sent` 事件是否推给客户端</small>
-          </span>
-          <Switch
-            checked={network.reportSelfMessage}
-            aria-labelledby="net-report-self"
-            onChange={(reportSelfMessage) => onChange({ reportSelfMessage })}
-          />
+          <Field label="访问令牌">
+            <input
+              className="net-input mono"
+              type="password"
+              placeholder="留空表示不鉴权"
+              value={network.accessToken ?? ''}
+              onChange={(event) => onChange({ accessToken: event.currentTarget.value })}
+            />
+            <small className="net-field-hint">
+              显示 `***` 表示已有令牌，保持不动会自动沿用原值。
+            </small>
+          </Field>
         </div>
 
-        <Field label="访问令牌">
-          <input
-            className="net-input mono"
-            type="password"
-            placeholder="留空表示不鉴权"
-            value={network.accessToken ?? ''}
-            onChange={(event) => onChange({ accessToken: event.currentTarget.value })}
-          />
-          <small className="net-field-hint">
-            已有令牌显示为 `***`；不改动它就直接保存，原值会被保留。
-          </small>
-        </Field>
-      </div>
-    </motion.aside>
+        <footer className="net-modal-foot">
+          <span className="net-autosave" data-saving={saving || undefined}>
+            {saving ? (
+              <>
+                <LoaderCircle size={14} className="spin" aria-hidden="true" />
+                保存中…
+              </>
+            ) : (
+              <>
+                <Check size={14} aria-hidden="true" />
+                已自动保存
+              </>
+            )}
+          </span>
+          <Button variant="secondary" size="md" onClick={onClose}>
+            完成
+          </Button>
+        </footer>
+      </motion.section>
+    </motion.div>
   );
 }
 

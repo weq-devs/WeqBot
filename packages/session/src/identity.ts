@@ -19,11 +19,18 @@
 export class IdentityCache {
   private readonly uinByUid = new Map<string, string>();
   private readonly uidByUin = new Map<string, string>();
+  /** uin / uid → 显示名。来源是消息里的昵称、群名片、好友列表与群列表。 */
+  private readonly nameByUin = new Map<string, string>();
+  private readonly nameByUid = new Map<string, string>();
 
   constructor(private readonly capacity = 8192) {}
 
   /** 记录一条观测；uid / uin 任一不合法就忽略。 */
-  observe(uid: string | null | undefined, uin: number | string | null | undefined): void {
+  observe(
+    uid: string | null | undefined,
+    uin: number | string | null | undefined,
+    name?: string | null,
+  ): void {
     if (!uid?.startsWith('u_')) return;
     const value =
       typeof uin === 'string' ? uin.trim() : uin === null || uin === undefined ? '' : String(uin);
@@ -42,7 +49,48 @@ export class IdentityCache {
     if (previous && previous !== uid) this.uinByUid.delete(previous);
     this.uidByUin.set(value, uid);
 
+    if (name?.trim()) this.observeName({ uid, uin: value }, name);
     this.evict();
+  }
+
+  /**
+   * 记录显示名。`uin` 是群号 / QQ 号，`uid` 是 `u_...`，两者可以只给一个。
+   *
+   * 昵称不是权威映射，只用于日志渲染；空串与纯空白忽略，避免把名字覆盖掉。
+   */
+  observeName(
+    input: { uid?: string | null; uin?: number | string | null },
+    name: string | null | undefined,
+  ): void {
+    const display = name?.trim();
+    if (!display) return;
+    const uin =
+      typeof input.uin === 'string'
+        ? input.uin.trim()
+        : input.uin === null || input.uin === undefined
+          ? ''
+          : String(input.uin);
+    const uid = input.uid?.startsWith('u_') ? input.uid : undefined;
+    if (/^\d{4,}$/.test(uin)) this.nameByUin.set(uin, display);
+    if (uid) this.nameByUid.set(uid, display);
+    this.evict();
+  }
+
+  /** uin → 显示名。 */
+  nameOfUin(uin: string | number | null | undefined): string | undefined {
+    const key = uin === null || uin === undefined ? '' : String(uin);
+    return key ? this.nameByUin.get(key) : undefined;
+  }
+
+  /** uid → 显示名。 */
+  nameOfUid(uid: string | null | undefined): string | undefined {
+    return uid ? this.nameByUid.get(uid) : undefined;
+  }
+
+  /** 从 `PeerRef` 形状里取显示名：uid 优先，退回 id（群号 / uin）。 */
+  nameOf(ref: { id?: string; uid?: string } | undefined): string | undefined {
+    if (!ref) return undefined;
+    return this.nameOfUid(ref.uid) ?? this.nameOfUin(ref.id);
   }
 
   /** uid → uin。未观测到返回 `undefined`。 */
@@ -63,6 +111,8 @@ export class IdentityCache {
   clear(): void {
     this.uinByUid.clear();
     this.uidByUin.clear();
+    this.nameByUin.clear();
+    this.nameByUid.clear();
   }
 
   private evict(): void {
@@ -79,6 +129,16 @@ export class IdentityCache {
       const uid = this.uidByUin.get(oldest.value);
       this.uidByUin.delete(oldest.value);
       if (uid && this.uinByUid.get(uid) === oldest.value) this.uinByUid.delete(uid);
+    }
+    while (this.nameByUin.size > this.capacity) {
+      const oldest = this.nameByUin.keys().next();
+      if (oldest.done) break;
+      this.nameByUin.delete(oldest.value);
+    }
+    while (this.nameByUid.size > this.capacity) {
+      const oldest = this.nameByUid.keys().next();
+      if (oldest.done) return;
+      this.nameByUid.delete(oldest.value);
     }
   }
 }

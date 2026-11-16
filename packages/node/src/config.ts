@@ -7,13 +7,13 @@
  *    泄漏路径，所以这里遇到 `a1` / `d1` 之类的键会**直接报错**，而不是静默忽略。
  * 2. **失败的字段要说清楚是哪一项**。这份文件是用户手写的，出错时只说
  *    「配置无效」等于没写。
- * 3. 不认识的顶层键也报错 —— 拼错的键（`oneBot` vs `onebot`）静默失效比报错更糟。
+ * 3. 不认识的顶层键也报错 —— 拼错的键（`oneBot` vs `onebotByUin`）静默失效比报错更糟。
  *
  * 形状与 `BotConfig` 一致（少 `account`，那份由 `--account` 决定）。
  */
 
 import { readFile } from 'node:fs/promises';
-import type { BotConfig } from '@weqbot/bot';
+import type { BotConfig, BotOneBotConfig } from '@weqbot/bot';
 
 /** 允许出现在配置文件里的顶层键。`account` 不在其中：账号只由 `--account` 给。 */
 const ALLOWED_KEYS = new Set([
@@ -21,7 +21,7 @@ const ALLOWED_KEYS = new Set([
   'qq',
   'session',
   'secToken',
-  'onebot',
+  'onebotByUin',
   'log',
   'keepRaw',
   'maxReloginAttempts',
@@ -37,7 +37,12 @@ export class ConfigError extends Error {
   }
 }
 
-export type LoadedConfig = Omit<BotConfig, 'account'>;
+export type OneBotAccountMap = Record<string, BotOneBotConfig>;
+
+export type LoadedConfig = Omit<BotConfig, 'account'> & {
+  /** 按 QQ 号保存的 OneBot 配置；键是 uin，账号之间互不覆盖。 */
+  onebotByUin?: OneBotAccountMap;
+};
 
 /**
  * 读一份 JSON 配置。
@@ -77,28 +82,40 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
     }
   }
 
-  // `onebot` 是最常被写错的一块（少个 networks、networks 里少一类）。
-  if (record.onebot !== undefined) validateOneBot(path, record.onebot);
+  // `onebotByUin` 是最常被写错的一块（少个 networks、networks 里少一类）。
+  if (record.onebotByUin !== undefined) validateOneBotMap(path, record.onebotByUin);
 
   return record as LoadedConfig;
 }
 
-function validateOneBot(path: string, value: unknown): void {
+function validateOneBotMap(path: string, value: unknown): void {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) {
-    throw new ConfigError(path, 'onebot 必须是对象');
+    throw new ConfigError(path, 'onebotByUin 必须是对象（键是 QQ 号）');
+  }
+  for (const [uin, config] of Object.entries(value as Record<string, unknown>)) {
+    if (!/^\d{5,20}$/.test(uin)) {
+      throw new ConfigError(path, `onebotByUin 的键 "${uin}" 不是合法 QQ 号`);
+    }
+    validateOneBot(path, config, `onebotByUin.${uin}`);
+  }
+}
+
+function validateOneBot(path: string, value: unknown, prefix = 'onebotByUin'): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ConfigError(path, `${prefix} 必须是对象`);
   }
   const networks = (value as Record<string, unknown>).networks;
   if (networks === undefined) {
-    throw new ConfigError(path, 'onebot.networks 缺失（即使不监听也要写空数组）');
+    throw new ConfigError(path, `${prefix}.networks 缺失（即使不监听也要写空数组）`);
   }
   if (typeof networks !== 'object' || networks === null || Array.isArray(networks)) {
-    throw new ConfigError(path, 'onebot.networks 必须是对象');
+    throw new ConfigError(path, `${prefix}.networks 必须是对象`);
   }
   const required = ['httpServers', 'httpClients', 'wsServers', 'wsClients'] as const;
   for (const key of required) {
     const list = (networks as Record<string, unknown>)[key];
     if (!Array.isArray(list)) {
-      throw new ConfigError(path, `onebot.networks.${key} 必须是数组（没有就写 []）`);
+      throw new ConfigError(path, `${prefix}.networks.${key} 必须是数组（没有就写 []）`);
     }
   }
 }
@@ -114,9 +131,11 @@ export function mergeConfig(options: {
   qqDbPath?: string;
 }): BotConfig {
   const file = options.file ?? {};
+  const { onebotByUin, ...rest } = file;
   const qqDbPath = options.qqDbPath ?? file.qq?.dbPath;
   return {
-    ...file,
+    ...rest,
+    ...(options.uin && onebotByUin?.[options.uin] ? { onebot: onebotByUin[options.uin] } : {}),
     account: { uin: options.uin },
     ...(qqDbPath ? { qq: { ...file.qq, dbPath: qqDbPath } } : {}),
   };

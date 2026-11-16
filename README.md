@@ -135,6 +135,22 @@ pnpm smoke:onebot --url ws://127.0.0.1:6700 --self <uin> --send  # 含真实发�
 4. 不得 import `@weqbot/node` —— 否则宿主打包会带上第二份原生组件。
 5. `@weqbot/control` 只能依赖 `common` / `wire` —— 它会同时被打进 WeQ 与 sidecar。
 
+## 许可证
+
+本项目基于 [**CC BY-NC-SA 4.0**](./LICENSE)（知识共享 署名-非商业性使用-相同方式共享 4.0 国际）
+发布，与主仓库 `weq-devs/WeQ` 同款：
+
+- **署名（BY）** —— 注明来源为 `weq-devs/WeqBot`，并注明是否做了修改；
+- **非商业性使用（NC）** —— **禁止任何形式的商业使用**；
+- **相同方式共享（SA）** —— 衍生作品必须以**相同的 CC BY-NC-SA 4.0** 发布。
+
+⚠️ 注意：本项目并未整体转为 CC BY-NC-SA。`packages/protocol` 是 `WeQ/packages/protocol`
+的逐字副本、部分 wire schema 搬运自 **SnowLuma**（其许可是非开源的
+Source-Available Non-Commercial，且**公开发布衍生版需事先书面许可**），
+另有若干第三方依赖遵循各自许可证。详见
+[`packages/protocol/README.md`](./packages/protocol/README.md) 的「许可与来源」一节。
+若要公开发布衍生版本，请先确认这几处的授权口径。
+
 ## 版本
 
 版本号未定，`0.0.0` 只是占位。**不要**在功能提交里顺手改版本号。

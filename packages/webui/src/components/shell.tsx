@@ -16,6 +16,7 @@ import {
   LogOut,
   Network,
   ScrollText,
+  Settings2,
   ShieldOff,
   TerminalSquare,
   type LucideIcon,
@@ -35,8 +36,9 @@ import { DebugPage } from '../pages/debug/debug-page';
 import { LogsPage } from '../pages/logs/logs-page';
 import { NetworkPage } from '../pages/network/network-page';
 import { OverviewPage } from '../pages/overview/overview-page';
+import { SettingsPage } from '../pages/settings/settings-page';
 
-export type PageKey = 'overview' | 'network' | 'logs' | 'debug';
+export type PageKey = 'overview' | 'network' | 'logs' | 'debug' | 'settings';
 
 export interface PageProps {
   overview: Overview | undefined;
@@ -55,6 +57,7 @@ const NAV: NavItem[] = [
   { key: 'network', label: '网络', Icon: Network },
   { key: 'logs', label: '日志', Icon: ScrollText },
   { key: 'debug', label: '调试', Icon: TerminalSquare },
+  { key: 'settings', label: '设置', Icon: Settings2 },
 ];
 
 export function Shell({
@@ -127,7 +130,9 @@ export function Shell({
         ? NetworkPage
         : page === 'logs'
           ? LogsPage
-          : DebugPage;
+          : page === 'debug'
+            ? DebugPage
+            : SettingsPage;
 
   return (
     <motion.div

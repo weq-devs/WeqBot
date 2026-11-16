@@ -9,7 +9,10 @@ import {
   Activity,
   CircleUserRound,
   Clock,
+  Cpu,
+  HardDrive,
   Inbox,
+  MemoryStick,
   Radio,
   RefreshCw,
   Send,
@@ -19,9 +22,10 @@ import {
 import { motion } from 'motion/react';
 import { type ReactNode, useCallback } from 'react';
 import { api } from '../../api';
-import type { LogStats, NetworkSnapshot } from '../../api/types';
+import type { LogStats, NetworkSnapshot, SystemSnapshot } from '../../api/types';
 import { useNow, usePolling } from '../../lib/hooks';
 import {
+  formatBytes,
   formatCompact,
   formatDateTime,
   formatDuration,
@@ -128,6 +132,8 @@ export function OverviewPage({ overview, phase, reloadOverview }: PageProps) {
         />
       </section>
 
+      {overview.system && <DeviceCard system={overview.system} />}
+
       <section className="ov-grid">
         <div className="card ov-networks">
           <header className="ov-card-head">
@@ -208,6 +214,110 @@ export function OverviewPage({ overview, phase, reloadOverview }: PageProps) {
           <TopActions stats={actions} />
         </section>
       )}
+    </div>
+  );
+}
+
+function DeviceCard({ system }: { system: SystemSnapshot }) {
+  // 旧服务端不返回 system；调用方已用 `overview.system &&` 挡住，这里只做类型收窄。
+  const heapRatio =
+    system.memory.heapTotal > 0 ? system.memory.heapUsed / system.memory.heapTotal : 0;
+  const systemUsed = Math.max(0, system.systemMemory.total - system.systemMemory.free);
+  const systemRatio = system.systemMemory.total > 0 ? systemUsed / system.systemMemory.total : 0;
+  const storage = system.storage;
+  const storageUsed = storage ? Math.max(0, storage.total - storage.free) : 0;
+  const storageRatio = storage && storage.total > 0 ? storageUsed / storage.total : 0;
+  const load = system.loadAvg[0] ?? 0;
+
+  return (
+    <section className="card ov-device" aria-label="设备状态">
+      <header className="ov-card-head">
+        <h3>
+          <Cpu size={16} aria-hidden="true" />
+          设备状态
+        </h3>
+        <span className="ov-card-sub">
+          {system.platform} · {system.arch} · {system.cpus} 核 · 系统已运行{' '}
+          {formatDuration(system.uptimeSec * 1000)}
+        </span>
+      </header>
+      <div className="ov-device-grid">
+        <DeviceStat
+          Icon={MemoryStick}
+          label="进程内存"
+          value={formatBytes(system.memory.rss)}
+          hint={`堆 ${formatBytes(system.memory.heapUsed)} / ${formatBytes(system.memory.heapTotal)}`}
+          ratio={heapRatio}
+          percentLabel={`堆 ${Math.round(heapRatio * 100)}%`}
+        />
+        <DeviceStat
+          Icon={Activity}
+          label="系统内存"
+          value={formatBytes(system.systemMemory.free)}
+          hint={`可用 · 共 ${formatBytes(system.systemMemory.total)}`}
+          ratio={systemRatio}
+          percentLabel={`已用 ${Math.round(systemRatio * 100)}%`}
+        />
+        <DeviceStat
+          Icon={HardDrive}
+          label="存储"
+          value={storage ? formatBytes(storage.free) : '—'}
+          hint={
+            storage
+              ? `可用 · 共 ${formatBytes(storage.total)}`
+              : system.logDir
+                ? '拿不到日志目录所在磁盘'
+                : '日志落盘已关闭'
+          }
+          ratio={storageRatio}
+          percentLabel={storage ? `已用 ${Math.round(storageRatio * 100)}%` : '—'}
+          title={storage?.path}
+        />
+        <DeviceStat
+          Icon={Cpu}
+          label="负载"
+          value={load.toFixed(2)}
+          hint={`1 / 5 / 15 分钟 · ${system.loadAvg.map((value) => value.toFixed(2)).join(' / ')}`}
+          ratio={Math.min(1, load / Math.max(1, system.cpus))}
+          percentLabel={`${system.cpus} 核`}
+        />
+      </div>
+    </section>
+  );
+}
+
+function DeviceStat({
+  Icon,
+  label,
+  value,
+  hint,
+  ratio,
+  percentLabel,
+  title,
+}: {
+  Icon: typeof Inbox;
+  label: string;
+  value: string;
+  hint: string;
+  ratio: number;
+  percentLabel: string;
+  title?: string;
+}) {
+  return (
+    <div className="ov-device-stat" title={title}>
+      <header>
+        <Icon size={14} aria-hidden="true" />
+        <span>{label}</span>
+        <em>{percentLabel}</em>
+      </header>
+      <strong>{value}</strong>
+      <span className="ov-device-hint">{hint}</span>
+      <span className="ov-device-track" aria-hidden="true">
+        <span
+          className="ov-device-fill"
+          style={{ width: `${Math.min(100, Math.max(2, ratio * 100))}%` }}
+        />
+      </span>
     </div>
   );
 }

@@ -2,15 +2,16 @@
  * `--config` 的加载与合并。
  *
  * 这里刻意覆盖错误路径多于成功路径：配置文件是用户手写的，**静默失效的代价
- * 远大于报错**（`oneBot` 拼错成 `onebot` 时会「配置看起来生效了但适配器没起」）。
+ * 远大于报错**（`oneBot` 拼错成 `onebotByUin` 时会「配置看起来生效了但适配器没起」）。
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import { ConfigError, loadConfigFile, mergeConfig } from '../src/config';
+import { saveOneBotConfig } from '../src/webui/config-file';
 
 async function withFile(content: string, run: (path: string) => Promise<void>): Promise<void> {
   const dir = await mkdtemp(join(tmpdir(), 'weqbot-config-'));
@@ -33,7 +34,7 @@ test('读一份完整配置', async () => {
     qq: { dbPath: '/opt/QQ/nt_msg.db' },
     session: { syncGraceMs: 30_000 },
     secToken: { rotateMs: 3_600_000 },
-    onebot: EMPTY_NETWORKS,
+    onebotByUin: { '2863253201': EMPTY_NETWORKS },
     log: { level: 'debug' },
     keepRaw: true,
   });
@@ -69,18 +70,24 @@ test('拼错的顶层键报错，并列出可用键', async () => {
   });
 });
 
-test('onebot.networks 四类数组缺一不可', async () => {
+test('onebotByUin.networks 四类数组缺一不可', async () => {
   await withFile(
     JSON.stringify({
-      onebot: { networks: { httpServers: [], httpClients: [], wsServers: [] } },
+      onebotByUin: {
+        '2863253201': { networks: { httpServers: [], httpClients: [], wsServers: [] } },
+      },
     }),
     async (path) => {
       await assert.rejects(loadConfigFile(path), /wsClients/);
     },
   );
 
-  await withFile(JSON.stringify({ onebot: {} }), async (path) => {
+  await withFile(JSON.stringify({ onebotByUin: { '2863253201': {} } }), async (path) => {
     await assert.rejects(loadConfigFile(path), /networks/);
+  });
+
+  await withFile(JSON.stringify({ onebotByUin: { 'not-a-uin': EMPTY_NETWORKS } }), async (path) => {
+    await assert.rejects(loadConfigFile(path), /不是合法 QQ 号/);
   });
 });
 
@@ -101,7 +108,7 @@ test('mergeConfig：命令行覆盖配置文件，账号只认 --account', () =>
   const merged = mergeConfig({
     file: {
       qq: { dbPath: '/from/file.db' },
-      onebot: EMPTY_NETWORKS,
+      onebotByUin: { '2863253201': EMPTY_NETWORKS },
       log: { level: 'warn' },
     },
     uin: '2863253201',
@@ -110,8 +117,39 @@ test('mergeConfig：命令行覆盖配置文件，账号只认 --account', () =>
 
   assert.equal(merged.account.uin, '2863253201');
   assert.equal(merged.qq?.dbPath, '/from/cli.db', '命令行优先');
-  assert.deepEqual(merged.onebot, EMPTY_NETWORKS, '配置文件里的 onebot 要透传');
+  assert.deepEqual(merged.onebot, EMPTY_NETWORKS, '当前账号的 OneBot 配置要被选中');
   assert.equal(merged.log?.level, 'warn');
+});
+
+test('mergeConfig：只选当前账号的 OneBot 配置', () => {
+  const merged = mergeConfig({
+    file: {
+      onebotByUin: {
+        '10001': EMPTY_NETWORKS,
+        '10002': { ...EMPTY_NETWORKS, qzone: false },
+      },
+    },
+    uin: '10002',
+  });
+  assert.equal(merged.onebot?.qzone, false);
+  assert.equal(mergeConfig({ file: {}, uin: '10003' }).onebot, undefined);
+});
+
+test('saveOneBotConfig：按 uin 写入，不碰其它账号与顶层键', async () => {
+  await withFile(
+    JSON.stringify({ log: { level: 'warn' }, onebotByUin: { '10001': EMPTY_NETWORKS } }),
+    async (path) => {
+      await saveOneBotConfig(path, '10002', { ...EMPTY_NETWORKS, qzone: false });
+      const parsed = JSON.parse(await readFile(path, 'utf8'));
+      assert.equal(parsed.log.level, 'warn');
+      assert.ok(parsed.onebotByUin['10001']);
+      assert.equal(parsed.onebotByUin['10002'].qzone, false);
+
+      // 再读回来要能选中刚保存的账号。
+      const loaded = await loadConfigFile(path);
+      assert.equal(mergeConfig({ file: loaded, uin: '10002' }).onebot?.qzone, false);
+    },
+  );
 });
 
 test('mergeConfig：没有命令行 qq-db 时用配置文件的值', () => {

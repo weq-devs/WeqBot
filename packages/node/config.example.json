@@ -16,23 +16,25 @@
   },
   "keepRaw": false,
   "maxReloginAttempts": 5,
-  "onebot": {
-    "networks": {
-      "wsServers": [
-        {
-          "name": "client",
-          "host": "127.0.0.1",
-          "port": 6700,
-          "role": "Universal",
-          "messageFormat": "array",
-          "reportSelfMessage": true
-        }
-      ],
-      "httpServers": [],
-      "wsClients": [],
-      "httpClients": []
-    },
-    "qzone": true,
-    "qzoneDomain": "qzone.qq.com"
+  "onebotByUin": {
+    "2863253201": {
+      "networks": {
+        "wsServers": [
+          {
+            "name": "client",
+            "host": "127.0.0.1",
+            "port": 6700,
+            "role": "Universal",
+            "messageFormat": "array",
+            "reportSelfMessage": true
+          }
+        ],
+        "httpServers": [],
+        "wsClients": [],
+        "httpClients": []
+      },
+      "qzone": true,
+      "qzoneDomain": "qzone.qq.com"
+    }
   }
 }

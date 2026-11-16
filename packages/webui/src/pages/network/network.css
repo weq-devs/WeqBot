@@ -14,6 +14,28 @@
   gap: 16px;
 }
 
+.net-autosave {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: var(--status-good);
+  font-size: var(--text-xs);
+  white-space: nowrap;
+}
+
+.net-autosave[data-saving],
+.net-autosave:not([data-saving]) .net-autosave-dot {
+  color: var(--text-muted);
+}
+
+.net-autosave-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+}
+
 .net-hint {
   max-width: 46em;
   margin: 0;
@@ -22,25 +44,11 @@
   line-height: 1.6;
 }
 
-.net-toolbar-actions {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  margin-left: auto;
-}
-
-.net-saved {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  color: var(--status-good);
-  font-size: var(--text-xs);
-}
-
 .net-failure {
   display: flex;
   align-items: center;
   gap: 8px;
+  justify-content: flex-start;
   margin: 0;
   padding: 9px 12px;
   overflow: hidden;
@@ -237,44 +245,50 @@
   color: var(--accent-text);
 }
 
-/* ───────────────────────────── 全局 ───────────────────────────── */
+/* ───────────────────────────── 模态卡片 ───────────────────────────── */
 
-.net-global {
-  max-width: 560px;
+.net-modal-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: oklch(0.2 0.02 260 / 0.34);
+  backdrop-filter: blur(3px);
 }
 
-/* ───────────────────────────── 抽屉 ───────────────────────────── */
-
-.net-drawer {
-  position: fixed;
-  top: 0;
-  right: 0;
-  z-index: 20;
+.net-modal {
   display: flex;
   flex-direction: column;
-  width: min(380px, 100vw);
-  height: 100dvh;
-  border-left: 1px solid var(--border-strong);
-  background: var(--bg-elevated);
+  width: min(480px, 100%);
+  max-height: min(720px, calc(100dvh - 48px));
+  overflow: hidden;
   box-shadow: var(--shadow-lg);
 }
 
-.net-drawer-head {
+.net-modal-head {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 10px;
-  height: 54px;
-  padding: 0 16px;
+  padding: 16px 18px 12px;
   border-bottom: 1px solid var(--border);
 }
 
-.net-drawer-head h2 {
+.net-modal-head h2 {
   margin: 0;
   font-size: var(--text-lg);
   font-weight: 600;
 }
 
-.net-drawer-close {
+.net-modal-sub {
+  display: block;
+  margin-top: 2px;
+  color: var(--text-faint);
+  font-size: var(--text-xs);
+}
+
+.net-modal-close {
   display: grid;
   place-items: center;
   width: 30px;
@@ -287,17 +301,30 @@
   cursor: pointer;
 }
 
-.net-drawer-close:hover {
+.net-modal-close:hover {
   background: var(--bg-hover);
   color: var(--text);
 }
 
-.net-drawer-body {
+.net-modal-body {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  padding: 16px;
+  padding: 16px 18px;
   overflow-y: auto;
+}
+
+.net-modal-foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 18px;
+  border-top: 1px solid var(--border);
+  background: var(--bg-sunken);
+}
+
+.net-modal-foot .net-autosave {
+  margin-left: 0;
 }
 
 /* ───────────────────────────── 字段 ───────────────────────────── */
@@ -359,14 +386,6 @@ select.net-input {
   line-height: 1.5;
 }
 
-.net-global {
-  padding-bottom: 8px;
-}
-
-.net-global .net-field-row {
-  padding: 0 16px 10px;
-}
-
 @media (max-width: 900px) {
   .net-groups {
     grid-template-columns: minmax(0, 1fr);
@@ -377,7 +396,7 @@ select.net-input {
     align-items: flex-start;
   }
 
-  .net-toolbar-actions {
+  .net-autosave {
     margin-left: 0;
   }
 }

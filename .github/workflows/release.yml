@@ -4,11 +4,11 @@ name: Release
 # 也可以在 Actions 页面手动跑，给一个已存在的 tag。
 on:
   push:
-    tags: ['v*']
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       tag:
-        description: '要发布的 tag（形如 v0.1.0，必须已存在）'
+        description: "要发布的 tag（形如 v0.1.0，必须已存在）"
         required: true
         type: string
 

@@ -1,5 +1,7 @@
 /**
- * 账号登录页：本机账号 / 扫码 + 环境检查 + 上线进度。
+ * 账号登录页：本机账号 / 扫码 + 上线进度。
+ *
+ * 环境检查已挪到「设置」页：登录只需要账号列表，安装路径和 wrapper 属于排障信息。
  *
  * 两条路径都在服务端（`ConsoleRuntime.startAccount` / `startQrLogin`）；页面只
  * 展示状态。扫码进度走 SSE（`console` 事件里的 `qr`），不轮询二维码 —— 那会
@@ -16,12 +18,11 @@ import {
   QrCode,
   RefreshCw,
   ScanLine,
-  ShieldCheck,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { api, ApiError } from '../../api';
-import type { ConsolePhase, LoginAccount, LoginEnvironment, QrSnapshot } from '../../api/types';
+import type { ConsolePhase, LoginAccount, QrSnapshot } from '../../api/types';
 import { Button } from '../../components/button';
 import { Logo } from '../../components/logo';
 import { enterPop, enterRise, enterStagger, screenExit } from '../../lib/motion';
@@ -32,26 +33,23 @@ type Tab = 'accounts' | 'qr';
 
 export function LoginPage({ phase, onLocked }: { phase: ConsolePhase; onLocked(): void }) {
   const [tab, setTab] = useState<Tab>('accounts');
-  const [environment, setEnvironment] = useState<LoginEnvironment>();
   const [accounts, setAccounts] = useState<LoginAccount[]>();
   const [qr, setQr] = useState<QrSnapshot>();
   const [failure, setFailure] = useState<string>();
   const [starting, setStarting] = useState<string>();
   const qrRequested = useRef(false);
 
-  const loadEnvironment = useCallback(async () => {
+  const loadAccounts = useCallback(async () => {
     try {
-      const [env, list] = await Promise.all([api.login.environment(), api.login.accounts()]);
-      setEnvironment(env);
-      setAccounts(list);
+      setAccounts(await api.login.accounts());
     } catch (cause) {
       setFailure(describe(cause));
     }
   }, []);
 
   useEffect(() => {
-    void loadEnvironment();
-  }, [loadEnvironment]);
+    void loadAccounts();
+  }, [loadAccounts]);
 
   // 扫码进度由服务端推过来；二维码图片也在这条流里，不轮询。
   useEffect(() => {
@@ -181,7 +179,7 @@ export function LoginPage({ phase, onLocked }: { phase: ConsolePhase; onLocked()
                   {accounts === undefined ? (
                     <AccountsSkeleton />
                   ) : accounts.length === 0 ? (
-                    <EmptyAccounts onRescan={() => void loadEnvironment()} />
+                    <EmptyAccounts onRescan={() => void loadAccounts()} />
                   ) : (
                     <ul className="login-accounts">
                       {accounts.map((account) => (
@@ -266,8 +264,6 @@ export function LoginPage({ phase, onLocked }: { phase: ConsolePhase; onLocked()
           </motion.div>
         )}
       </AnimatePresence>
-
-      <EnvironmentCard environment={environment} />
 
       <button type="button" className="login-lock" onClick={onLocked}>
         退出控制台
@@ -384,85 +380,15 @@ function EmptyAccounts({ onRescan }: { onRescan(): void }) {
   );
 }
 
-// ─────────────────────────── 环境检查卡 ───────────────────────────
-
-function EnvironmentCard({ environment }: { environment: LoginEnvironment | undefined }) {
-  if (!environment) return null;
-  const client = environment.client;
-  const checks = [
-    {
-      label: 'QQ 安装',
-      ok: Boolean(environment.qqExe),
-      detail: environment.installRoot ?? '未找到',
-    },
-    {
-      label: 'wrapper',
-      ok: Boolean(environment.wrapperNode),
-      detail: environment.wrapperNode ? '已找到（mode2 签名用）' : '缺失，无法自建上线',
-    },
-    {
-      label: '客户端身份',
-      ok: Boolean(client),
-      detail: client
-        ? `appid ${client.appid}${client.qua ? ` · ${client.qua}` : ''}`
-        : 'major.node 读不到',
-    },
-    {
-      label: '数据目录',
-      ok: Boolean(environment.dataRoot),
-      detail: environment.dataRoot ?? '未找到',
-    },
-    {
-      label: 'login.db',
-      ok: environment.loginDbs.length > 0,
-      detail:
-        environment.loginDbs.length > 0
-          ? `${environment.loginDbs.length} 份`
-          : '未找到（扫码仍可用）',
-    },
-    {
-      label: 'QQ 本体',
-      ok: environment.qqRunning === false,
-      detail:
-        environment.qqRunning === undefined
-          ? '未配置 dbPath，无法判断'
-          : environment.qqRunning
-            ? '正在运行 —— QQ 在线时不应自建上线'
-            : '已退出（可以自建上线）',
-      tone:
-        environment.qqRunning === undefined
-          ? ('muted' as const)
-          : environment.qqRunning
-            ? ('warning' as const)
-            : ('good' as const),
-    },
-  ];
-
-  return (
-    <motion.section className="login-env" variants={enterRise} aria-label="环境检查">
-      <header>
-        <ShieldCheck size={15} aria-hidden="true" />
-        环境检查
-        <span className="login-env-platform">{environment.platform}</span>
-      </header>
-      <ul>
-        {checks.map((check) => (
-          <li key={check.label} data-tone={check.tone ?? (check.ok ? 'good' : 'critical')}>
-            <span className="login-env-dot" aria-hidden="true" />
-            <span className="login-env-label">{check.label}</span>
-            <span className="login-env-detail">{check.detail}</span>
-          </li>
-        ))}
-      </ul>
-    </motion.section>
-  );
-}
-
 // ─────────────────────────── 工具 ───────────────────────────
 
 function describe(cause: unknown): string {
   if (cause instanceof ApiError) {
     if (cause.status === 0) return '控制台服务没有响应 —— 检查 weqbot 进程是否还在运行。';
+    // 项目策略拒绝与凭据无关：显式说出来，否则用户会以为要重新登录 / 重新扫码。
+    if (cause.code === 'ACCESS_DENIED') {
+      return '当前构建的项目策略限制了登录 —— 这不是 QQ 凭据或扫码的问题，重新登录也不会改变结果。';
+    }
     return cause.message;
   }
   return cause instanceof Error ? cause.message : String(cause);

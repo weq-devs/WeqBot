@@ -131,6 +131,11 @@ export function setLogLevel(level: LogLevel): void {
   consoleLevel = level;
 }
 
+/** 当前落盘级别（设置页展示 / 排查用）。 */
+export function getLogFileLevel(): LogLevel {
+  return fileLevel;
+}
+
 /** 该级别是否通过终端阈值。 */
 export function isLogLevelEnabled(level: LogLevel): boolean {
   return ORDER[level] >= ORDER[consoleLevel];

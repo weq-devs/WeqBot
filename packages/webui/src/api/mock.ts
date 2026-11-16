@@ -19,6 +19,7 @@ import {
   type PushEventEntry,
   type QrSnapshot,
   type SessionResult,
+  type SettingsSnapshot,
   type StreamName,
 } from './types';
 
@@ -117,6 +118,43 @@ const ACCOUNTS: LoginAccount[] = [
 
 const ONLINE_SINCE = Date.now() - 1000 * 60 * 47;
 
+let mockQzone = true;
+
+const mockLogging: {
+  dir: string | null;
+  level: SettingsSnapshot['logging']['level'];
+  files: Array<{ name: string; size: number }>;
+} = {
+  dir: '/workspace/logs',
+  level: 'info',
+  files: [
+    { name: 'weqbot-2026-11-16.log', size: 16470 },
+    { name: 'native.log', size: 8067 },
+  ],
+};
+
+function settingsSnapshot(): SettingsSnapshot {
+  return {
+    environment: ENVIRONMENT,
+    account: { uin: '2863253201' },
+    onebot: { qzone: mockQzone },
+    logging: {
+      dir: mockLogging.dir,
+      level: mockLogging.level,
+      fileLevel: 'debug',
+      files: mockLogging.files,
+    },
+    runtime: {
+      platform: 'linux',
+      arch: 'x64',
+      node: 'v22.12.0',
+      pid: 4242,
+      uptimeSec: 2820,
+      configPath: '/workspace/weqbot.json',
+    },
+  };
+}
+
 function overview(): Overview {
   const online = state.phase === 'online';
   return {
@@ -177,6 +215,22 @@ function overview(): Overview {
       : [],
     actions: { registered: online ? 198 : 0, skipped: 7 },
     ...(online ? { onebotPort: 6700 } : {}),
+    system: {
+      platform: 'linux',
+      arch: 'x64',
+      cpus: 16,
+      loadAvg: [0.42, 0.38, 0.31],
+      uptimeSec: 86_400 * 3 + 3600 * 5,
+      processUptimeSec: 1000 * 60 * 47,
+      memory: {
+        rss: 182 * 1024 * 1024,
+        heapUsed: 64 * 1024 * 1024,
+        heapTotal: 92 * 1024 * 1024,
+      },
+      systemMemory: { total: 32 * 1024 ** 3, free: 9.4 * 1024 ** 3 },
+      storage: { path: '/workspace/logs', total: 512 * 1024 ** 3, free: 187 * 1024 ** 3 },
+      logDir: '/workspace/logs',
+    },
   };
 }
 
@@ -204,7 +258,7 @@ const ACTIONS = [
 const LOG_SCOPES = ['bot', 'onebot', 'session.online', 'webui', 'protocol'];
 const LOG_MESSAGES = [
   ['info', 'OneBot 已启动'],
-  ['debug', '会话状态'],
+  ['debug', 'Action 参数校验通过'],
   ['info', '消息'],
   ['warn', '未建模的推送'],
   ['info', 'SecToken 已原地轮换'],
@@ -388,6 +442,26 @@ export const mockApi = {
     async save(config: OneBotConfig) {
       await sleep(latency(420));
       return config;
+    },
+  },
+
+  settings: {
+    async get() {
+      await sleep(latency(120));
+      return settingsSnapshot();
+    },
+    async update(patch: {
+      logDir?: string | null;
+      level?: SettingsSnapshot['logging']['level'];
+      qzone?: boolean;
+    }) {
+      await sleep(latency(160));
+      if (patch.logDir !== undefined) {
+        mockLogging.dir = patch.logDir === '' || patch.logDir === 'off' ? null : patch.logDir;
+      }
+      if (patch.level !== undefined) mockLogging.level = patch.level;
+      if (patch.qzone !== undefined) mockQzone = patch.qzone;
+      return settingsSnapshot();
     },
   },
 

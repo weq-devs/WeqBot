@@ -6,6 +6,7 @@ export {
   configureLogging,
   createLogger,
   getLogDirectory,
+  getLogFileLevel,
   getLogLevel,
   isLogLevelEnabled,
   renderHex,

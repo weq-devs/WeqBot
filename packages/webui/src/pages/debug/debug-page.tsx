@@ -153,7 +153,7 @@ export function DebugPage() {
               {current.summary || '—'}
               <span className="dbg-badge">{current.group}</span>
               {current.write && (
-                <span className="dbg-badge" data-tone="warning">
+                <span className="dbg-badge" data-tone="accent">
                   写操作
                 </span>
               )}

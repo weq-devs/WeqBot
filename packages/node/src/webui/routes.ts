@@ -12,9 +12,20 @@
  * - 其余 `/api/*`：必须带有效会话 cookie，否则 401。
  */
 
+import { readdirSync, statSync } from 'node:fs';
 import type { IncomingMessage, ServerResponse } from 'node:http';
+import { join } from 'node:path';
 import type { BotOneBotConfig } from '@weqbot/bot';
-import { createLogger, type Logger } from '@weqbot/common';
+import {
+  configureLogging,
+  createLogger,
+  getLogDirectory,
+  getLogFileLevel,
+  getLogLevel,
+  setLogLevel,
+  type Logger,
+  type LogLevel,
+} from '@weqbot/common';
 import type { WebUiAuth } from './auth';
 import { looksLikeToken, SESSION_COOKIE, sessionCookie } from './auth';
 import type { ConsoleRuntime } from './console';
@@ -40,6 +51,8 @@ export interface WebUiRouteOptions {
   saveConfig?: (config: BotOneBotConfig) => Promise<void>;
   /** 读取当前 OneBot 配置（给网络页）。 */
   readConfig: () => BotOneBotConfig | undefined;
+  /** `--config` 路径；设置页只展示，不在这里写。 */
+  configPath?: string;
 }
 
 export function createWebUiRouter(options: WebUiRouteOptions): {
@@ -129,6 +142,46 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
         return ok(response, runtime.overview());
       }
 
+      if (path === '/api/settings') {
+        if (request.method === 'GET') return ok(response, await settingsSnapshot());
+        if (request.method === 'PUT') {
+          const body = await readJson<{
+            logDir?: unknown;
+            level?: unknown;
+            qzone?: unknown;
+          }>(request);
+          if (body.logDir !== undefined) {
+            if (body.logDir !== null && typeof body.logDir !== 'string') {
+              throw new HttpError(400, 'BAD_LOG_DIR', 'logDir 必须是字符串或 null');
+            }
+            const raw = typeof body.logDir === 'string' ? body.logDir.trim() : '';
+            const dir = !raw || raw.toLowerCase() === 'off' ? null : raw;
+            configureLogging({ dir });
+            log.info('日志目录已切换', { dir: dir ?? 'off' });
+          }
+          if (body.level !== undefined) {
+            if (!isLogLevel(body.level)) {
+              throw new HttpError(400, 'BAD_LOG_LEVEL', '未知的日志级别');
+            }
+            setLogLevel(body.level);
+            log.info('终端日志级别已切换', { level: body.level });
+          }
+          if (body.qzone !== undefined) {
+            if (typeof body.qzone !== 'boolean') {
+              throw new HttpError(400, 'BAD_QZONE', 'qzone 必须是布尔值');
+            }
+            const current = options.readConfig() ?? EMPTY_ONEBOT_CONFIG;
+            const next = { ...current, qzone: body.qzone };
+            // qzone 决定后端是否换取空间凭据 / 注册 action，必须重建 OneBot 后端。
+            await runtime.currentBot?.reloadOneBot(next);
+            await options.saveConfig?.(next);
+            log.info('QQ 空间能力已切换', { qzone: body.qzone });
+          }
+          return ok(response, await settingsSnapshot());
+        }
+        throw new HttpError(405, 'METHOD_NOT_ALLOWED');
+      }
+
       if (path === '/api/onebot/config') {
         if (request.method === 'GET') {
           // 没配置过 OneBot 时也给一份空骨架：网络页要能直接「添加」并保存，
@@ -137,7 +190,7 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
         }
         if (request.method === 'PUT') {
           const body = await readJson<{ config?: unknown }>(request);
-          const config = validateOneBotConfig(body.config);
+          const config = validateOneBotConfig(body.config, options.readConfig());
           await runtime.currentBot?.reloadOneBot(config);
           await options.saveConfig?.(config);
           return ok(response, { config: maskConfig(config) });
@@ -187,6 +240,47 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
 
       return false;
     });
+  }
+
+  async function settingsSnapshot(): Promise<{
+    environment: Awaited<ReturnType<ConsoleRuntime['environment']>>;
+    account: { uin: string } | null;
+    onebot: { qzone: boolean };
+    logging: {
+      dir: string | null;
+      level: LogLevel;
+      fileLevel: LogLevel;
+      files: Array<{ name: string; size: number }>;
+    };
+    runtime: {
+      platform: NodeJS.Platform;
+      arch: string;
+      node: string;
+      pid: number;
+      uptimeSec: number;
+      configPath: string | null;
+    };
+  }> {
+    const dir = getLogDirectory();
+    return {
+      environment: await runtime.environment(),
+      account: runtime.boundUin ? { uin: runtime.boundUin } : null,
+      onebot: { qzone: options.readConfig()?.qzone !== false },
+      logging: {
+        dir,
+        level: getLogLevel(),
+        fileLevel: getLogFileLevel(),
+        files: listLogFiles(dir),
+      },
+      runtime: {
+        platform: process.platform,
+        arch: process.arch,
+        node: process.version,
+        pid: process.pid,
+        uptimeSec: Math.round(process.uptime()),
+        configPath: options.configPath ?? null,
+      },
+    };
   }
 
   // ─────────────────────────── 鉴权 ───────────────────────────
@@ -408,6 +502,36 @@ function isStreamName(value: string): value is StreamName {
   return value === 'logs' || value === 'actions' || value === 'events';
 }
 
+function isLogLevel(value: unknown): value is LogLevel {
+  return (
+    value === 'trace' ||
+    value === 'debug' ||
+    value === 'info' ||
+    value === 'warn' ||
+    value === 'error'
+  );
+}
+
+/** 日志目录下最近的文件（设置页展示用）；目录不存在时返回空表。 */
+function listLogFiles(dir: string | null): Array<{ name: string; size: number }> {
+  if (!dir) return [];
+  try {
+    return readdirSync(dir)
+      .filter((name) => name.endsWith('.log'))
+      .sort()
+      .slice(-12)
+      .map((name) => {
+        try {
+          return { name, size: statSync(join(dir, name)).size };
+        } catch {
+          return { name, size: 0 };
+        }
+      });
+  } catch {
+    return [];
+  }
+}
+
 /** 未配置 OneBot 时网络页使用的空骨架（`networks` 四类都要在）。 */
 const EMPTY_ONEBOT_CONFIG: BotOneBotConfig = {
   networks: { httpServers: [], httpClients: [], wsServers: [], wsClients: [] },
@@ -435,7 +559,7 @@ function maskConfig(config: BotOneBotConfig | undefined): BotOneBotConfig | unde
  * 不信任前端的任何字段：逐类检查数组与必填项。`accessToken: '***'` 会被当成
  * 「没改」—— 页面拿到的就是打码值，直接写回会把它变成字面量 `***`。
  */
-function validateOneBotConfig(value: unknown): BotOneBotConfig {
+function validateOneBotConfig(value: unknown, previous?: BotOneBotConfig): BotOneBotConfig {
   if (!value || typeof value !== 'object' || Array.isArray(value)) {
     throw new HttpError(400, 'BAD_CONFIG', 'config 必须是对象');
   }
@@ -445,10 +569,18 @@ function validateOneBotConfig(value: unknown): BotOneBotConfig {
     throw new HttpError(400, 'BAD_CONFIG', '缺少 networks');
   }
   const normalized = {
-    httpServers: normalizeNetworks(networks.httpServers, 'httpServers'),
-    httpClients: normalizeNetworks(networks.httpClients, 'httpClients'),
-    wsServers: normalizeNetworks(networks.wsServers, 'wsServers'),
-    wsClients: normalizeNetworks(networks.wsClients, 'wsClients'),
+    httpServers: normalizeNetworks(
+      networks.httpServers,
+      'httpServers',
+      previous?.networks.httpServers,
+    ),
+    httpClients: normalizeNetworks(
+      networks.httpClients,
+      'httpClients',
+      previous?.networks.httpClients,
+    ),
+    wsServers: normalizeNetworks(networks.wsServers, 'wsServers', previous?.networks.wsServers),
+    wsClients: normalizeNetworks(networks.wsClients, 'wsClients', previous?.networks.wsClients),
   } as BotOneBotConfig['networks'];
 
   // 端口唯一性：同一台机器上两个监听抢同一个端口是最常见的配置错误。
@@ -468,7 +600,11 @@ function validateOneBotConfig(value: unknown): BotOneBotConfig {
   };
 }
 
-function normalizeNetworks<T extends { accessToken?: string }>(value: unknown, label: string): T[] {
+function normalizeNetworks<T extends { name?: string; accessToken?: string }>(
+  value: unknown,
+  label: string,
+  previous?: T[],
+): T[] {
   if (value === undefined) return [];
   if (!Array.isArray(value)) throw new HttpError(400, 'BAD_CONFIG', `${label} 必须是数组`);
   return value.map((item, index) => {
@@ -476,7 +612,14 @@ function normalizeNetworks<T extends { accessToken?: string }>(value: unknown, l
       throw new HttpError(400, 'BAD_CONFIG', `${label}[${index}] 必须是对象`);
     }
     const record = { ...(item as Record<string, unknown>) };
-    if (record.accessToken === '***') delete record.accessToken;
+    if (record.accessToken === '***') {
+      // 打码值代表「没改」：按同名（退回同下标）条目把原令牌接回去。删掉会让
+      // 自动保存 在用户只改端口 / 开关 / 名称时把已有令牌清空。
+      const existing =
+        previous?.find((candidate) => candidate.name === record.name) ?? previous?.[index];
+      if (existing?.accessToken) record.accessToken = existing.accessToken;
+      else delete record.accessToken;
+    }
     if (typeof record.name !== 'string' || !record.name.trim()) {
       throw new HttpError(400, 'BAD_CONFIG', `${label}[${index}] 缺少 name`);
     }

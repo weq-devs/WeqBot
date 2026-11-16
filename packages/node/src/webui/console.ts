@@ -17,8 +17,16 @@
  * - 日志里出现 a1 / skey / pskey 一律由 `Observability` 的脱敏兜底。
  */
 
-import { TypedEventBus, type Logger } from '@weqbot/common';
-import { createBot, type Bot, type BotConfig, type BotSnapshot } from '@weqbot/bot';
+import { statfsSync } from 'node:fs';
+import { arch, cpus, freemem, loadavg, totalmem, uptime } from 'node:os';
+import { getLogDirectory, isWeqBotError, TypedEventBus, type Logger } from '@weqbot/common';
+import {
+  createBot,
+  type Bot,
+  type BotConfig,
+  type BotOneBotConfig,
+  type BotSnapshot,
+} from '@weqbot/bot';
 import type { BotEventMap, CredentialVault, StoredAccount } from '@weqbot/session';
 import type { DeviceProfile, NativePort, QuickLoginResult, RawNativeBinding } from '@weqbot/wire';
 import { HttpError } from './http-util';
@@ -61,6 +69,29 @@ export interface ConsoleOverview {
   networks: ReturnType<NonNullable<Bot['onebot']>['networks']>;
   actions: { registered: number; skipped: number };
   onebotPort?: number;
+  /** 设备状态：进程内存、系统内存、磁盘与运行时长。 */
+  system: ConsoleSystem;
+}
+
+export interface ConsoleSystem {
+  platform: NodeJS.Platform;
+  arch: string;
+  cpus: number;
+  loadAvg: number[];
+  /** 系统运行时长（秒）。 */
+  uptimeSec: number;
+  /** 本进程运行时长（秒）。 */
+  processUptimeSec: number;
+  memory: {
+    /** 进程常驻内存（字节）。 */
+    rss: number;
+    heapUsed: number;
+    heapTotal: number;
+  };
+  systemMemory: { total: number; free: number };
+  /** 日志目录所在文件系统；拿不到时省略（不影响其它指标）。 */
+  storage?: { path: string; total: number; free: number };
+  logDir: string | null;
 }
 
 export interface LoginEnvironment {
@@ -95,6 +126,8 @@ export interface ConsoleOptions {
    * **可变**：网络页保存后 `runWebUi` 会直接改这一份，下次上线 / 热重启读到新值。
    */
   config: Omit<BotConfig, 'account'>;
+  /** 按账号保存的 OneBot 配置；登录页切换账号时各用各的。 */
+  onebotByUin?: Record<string, BotOneBotConfig>;
   /** 配置文件中出现过的 `qq.dbPath`（由调用方传入，用于「QQ 是否在线」）。 */
   qqDbPath?: string;
   /** WebUI 自己的日志器：会挂上 `Observability.logSink`。 */
@@ -138,11 +171,24 @@ export class ConsoleRuntime {
   private loginRowsCache: { rows: LoginRow[]; at: number } | undefined;
   private unsubscribers: Array<() => void> = [];
   private qqPaths: QqPaths | undefined;
+  /** uin → OneBot 配置。内存镜像与配置文件同步，切换账号时读取。 */
+  private readonly onebotByUin: Map<string, BotOneBotConfig>;
 
   constructor(private readonly options: ConsoleOptions) {
     this.log = options.logger;
     this.observability = options.observability;
     this.botFactory = options.botFactory ?? createBot;
+    this.onebotByUin = new Map(Object.entries(options.onebotByUin ?? {}));
+  }
+
+  /** 当前账号（或指定账号）的 OneBot 配置；没有就返回 undefined（不跨账号借用）。 */
+  oneBotConfigFor(uin: string | undefined = this.startedAccount): BotOneBotConfig | undefined {
+    return uin ? this.onebotByUin.get(uin) : undefined;
+  }
+
+  /** 网络页 / 设置页保存后的内存镜像；下次这个账号上线直接生效。 */
+  rememberOneBotConfig(uin: string, config: BotOneBotConfig): void {
+    this.onebotByUin.set(uin, config);
   }
 
   get currentPhase(): ConsolePhase {
@@ -269,8 +315,13 @@ export class ConsoleRuntime {
     this.phase = 'starting';
     this.emitPhase('starting', '读取凭据');
 
+    const onebot = this.oneBotConfigFor(uin);
+    const botConfig: Omit<BotConfig, 'account'> = { ...this.options.config };
+    if (onebot) botConfig.onebot = onebot;
+    else delete botConfig.onebot;
+
     const bot = this.botFactory({
-      config: { ...this.options.config, account: { uin } },
+      config: { ...botConfig, account: { uin } },
       native: this.options.native,
       vault: this.options.vault,
       logger: this.log.child('bot'),
@@ -289,6 +340,12 @@ export class ConsoleRuntime {
       this.phase = 'offline';
       this.emitPhase('offline', messageOf(cause));
       this.log.error('账号上线失败', { uin, cause: messageOf(cause) });
+      // 策略拒绝是**预期内**的结果，不是服务端故障：必须作为 4xx + 稳定 code
+      // 给到前端，否则 `guard()` 会统一吞成 500 INTERNAL，页面只能显示一句
+      // 「内部错误」—— 用户会以为是凭据坏了，去反复重新扫码。
+      if (isWeqBotError(cause) && cause.code === 'ACCESS_DENIED') {
+        throw new HttpError(403, 'ACCESS_DENIED', cause.message);
+      }
       throw cause;
     }
   }
@@ -480,7 +537,17 @@ export class ConsoleRuntime {
     } catch (cause) {
       const message = messageOf(cause);
       // 超时已经置成 expired 了，不要再覆盖成 invalid。
-      if (snapshot.state !== 'expired') update({ state: 'invalid', error: message });
+      if (snapshot.state !== 'expired') {
+        // 策略拒绝：扫码已经成功、只是上线被拦。用专门的文案，别让用户以为
+        // 是二维码或凭据出了问题（那样会反复重扫）。
+        update({
+          state: 'invalid',
+          error:
+            isWeqBotError(cause) && cause.code === 'ACCESS_DENIED'
+              ? '当前构建的项目策略限制了登录 —— 与扫码或 QQ 凭据无关。'
+              : message,
+        });
+      }
       this.log.warn('扫码登录失败', { cause: message });
       return snapshot;
     } finally {
@@ -557,6 +624,7 @@ export class ConsoleRuntime {
         skipped: bot?.onebot?.skipped().length ?? 0,
       },
       ...(bot?.onebot?.port !== undefined ? { onebotPort: bot.onebot.port } : {}),
+      system: systemSnapshot(),
     };
   }
 
@@ -850,6 +918,36 @@ function deviceProfileOf(environment: LoginEnvironment): DeviceProfile {
     qua: client.qua ?? `V1_${environment.platform.toUpperCase()}_9.9.9`,
     // build 必须拼上：只写 `3.2.35` 会被 EasyLogin 判成参数错误。
     clientVersion: client.version && client.build ? `${client.version}-${client.build}` : '9.9.9',
+  };
+}
+
+/** 设备状态采样。全部是同步的轻量系统调用，跟着总览轮询走。 */
+function systemSnapshot(): ConsoleSystem {
+  const usage = process.memoryUsage();
+  const logDir = getLogDirectory();
+  const storagePath = logDir ?? process.cwd();
+  let storage: ConsoleSystem['storage'];
+  try {
+    const fs = statfsSync(storagePath);
+    storage = {
+      path: storagePath,
+      total: fs.blocks * fs.bsize,
+      free: fs.bavail * fs.bsize,
+    };
+  } catch {
+    // 路径不存在 / 文件系统不支持：盘容量这一项省略，其它指标照常。
+  }
+  return {
+    platform: process.platform,
+    arch: arch(),
+    cpus: cpus().length,
+    loadAvg: loadavg(),
+    uptimeSec: Math.round(uptime()),
+    processUptimeSec: Math.round(process.uptime()),
+    memory: { rss: usage.rss, heapUsed: usage.heapUsed, heapTotal: usage.heapTotal },
+    systemMemory: { total: totalmem(), free: freemem() },
+    ...(storage ? { storage } : {}),
+    logDir,
   };
 }
 

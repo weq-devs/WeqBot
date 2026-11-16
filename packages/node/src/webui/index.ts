@@ -23,6 +23,7 @@ import type { NativePort, RawNativeBinding } from '@weqbot/wire';
 import { WebUiAuth } from './auth';
 import { ConsoleRuntime } from './console';
 import { saveOneBotConfig } from './config-file';
+import { HttpError } from './http-util';
 import { Observability } from './observability';
 import { createWebUiRouter } from './routes';
 import { createWebUiServer } from './server';
@@ -33,8 +34,10 @@ export interface RunWebUiOptions {
   binding: RawNativeBinding;
   native: NativePort;
   vault: CredentialVault;
-  /** `--config` 的内容（不含 account）。 */
+  /** `--config` 的内容（不含 account）。`config.onebot` 只作为宿主默认值。 */
   config: Omit<BotConfig, 'account'>;
+  /** 按账号保存的 OneBot 配置（配置文件的 `onebotByUin`）。 */
+  onebotByUin?: Record<string, BotOneBotConfig>;
   /** `--config` 的路径；保存网络配置时写回它。不给时只在内存生效。 */
   configPath?: string;
   /** `qq.dbPath`，用于登录页的「QQ 是否在线」。 */
@@ -76,6 +79,7 @@ export async function runWebUi(options: RunWebUiOptions): Promise<WebUiHandle> {
     binding: options.binding,
     vault: options.vault,
     config: options.config,
+    ...(options.onebotByUin ? { onebotByUin: options.onebotByUin } : {}),
     ...(options.qqDbPath ? { qqDbPath: options.qqDbPath } : {}),
     // WebUI 自己的日志器挂上观测 sink：终端照常输出，页面也能看到。
     logger: log,
@@ -87,12 +91,14 @@ export async function runWebUi(options: RunWebUiOptions): Promise<WebUiHandle> {
     console: runtime,
     observability,
     logger: log,
-    readConfig: () => options.config.onebot,
-    // 没有 `--config` 时也要把新配置写回本进程：否则网络页保存后，这次会话
-    // 能临时生效，但退出重登 / 下次上线又变回「未启用」。
+    readConfig: () => runtime.oneBotConfigFor(runtime.boundUin),
+    ...(options.configPath ? { configPath: options.configPath } : {}),
+    // 网络配置属于当前账号：没有账号时不写全局文件，否则切号会串配置。
     saveConfig: async (config: BotOneBotConfig) => {
-      if (options.configPath) await saveOneBotConfig(options.configPath, config);
-      options.config.onebot = config;
+      const uin = runtime.boundUin;
+      if (!uin) throw new HttpError(409, 'NO_ACCOUNT', '先登录账号，再保存这个账号的网络配置');
+      if (options.configPath) await saveOneBotConfig(options.configPath, uin, config);
+      runtime.rememberOneBotConfig(uin, config);
     },
   });
 

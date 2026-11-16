@@ -119,8 +119,8 @@
   margin-left: auto;
   padding: 0 5px;
   border-radius: var(--radius-xs);
-  background: color-mix(in oklch, var(--status-warning) 14%, transparent);
-  color: color-mix(in oklch, var(--status-warning) 82%, var(--text));
+  background: var(--accent-soft);
+  color: var(--accent-text);
   font-size: 10px;
   font-style: normal;
 }
@@ -166,9 +166,10 @@
   font-size: 10.5px;
 }
 
-.dbg-badge[data-tone="warning"] {
-  border-color: color-mix(in oklch, var(--status-warning) 40%, transparent);
-  color: color-mix(in oklch, var(--status-warning) 82%, var(--text));
+.dbg-badge[data-tone="accent"] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
 }
 
 .dbg-params {
@@ -212,13 +213,13 @@
   border-top: 1px solid var(--border);
 }
 
-/* 写操作确认条：警告色 + 明确的文字，不是只靠按钮颜色。 */
+/* 写操作确认条：主题色标签 + 明确文字；真正的危险动作仍靠文案，不靠颜色。 */
 .dbg-confirm {
   display: flex;
   align-items: center;
   gap: 9px;
   flex-wrap: wrap;
-  color: var(--status-warning);
+  color: var(--accent-text);
   font-size: var(--text-sm);
 }
 

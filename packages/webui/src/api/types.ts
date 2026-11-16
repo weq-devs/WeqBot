@@ -103,6 +103,19 @@ export interface OverviewAccount {
   sessionId?: number;
 }
 
+export interface SystemSnapshot {
+  platform: string;
+  arch: string;
+  cpus: number;
+  loadAvg: number[];
+  uptimeSec: number;
+  processUptimeSec: number;
+  memory: { rss: number; heapUsed: number; heapTotal: number };
+  systemMemory: { total: number; free: number };
+  storage?: { path: string; total: number; free: number };
+  logDir: string | null;
+}
+
 export interface Overview {
   phase: ConsolePhase;
   account?: OverviewAccount;
@@ -111,6 +124,8 @@ export interface Overview {
   networks: NetworkSnapshot[];
   actions: { registered: number; skipped: number };
   onebotPort?: number;
+  /** 旧版服务端 / 嵌入宿主可能没有设备指标；缺失时总览隐藏设备卡。 */
+  system?: SystemSnapshot;
 }
 
 export interface OverviewApi {
@@ -238,6 +253,45 @@ export interface LogsApi {
   ): () => void;
 }
 
+// ─────────────────────────── 设置 ───────────────────────────
+
+export type LogLevel = 'trace' | 'debug' | 'info' | 'warn' | 'error';
+
+export interface SettingsSnapshot {
+  environment: LoginEnvironment;
+  /** 当前在线账号；没有时 `null`（OneBot 配置按账号隔离）。 */
+  account?: { uin: string } | null;
+  /** 旧版服务端可能没有这一块。 */
+  onebot?: { qzone: boolean };
+  logging: {
+    /** 当前落盘目录；`null` 表示关闭落盘。 */
+    dir: string | null;
+    /** 终端级别。 */
+    level: LogLevel;
+    /** 文件级别（默认 debug）。 */
+    fileLevel: LogLevel;
+    files: Array<{ name: string; size: number }>;
+  };
+  runtime: {
+    platform: string;
+    arch: string;
+    node: string;
+    pid: number;
+    uptimeSec: number;
+    configPath: string | null;
+  };
+}
+
+export interface SettingsApi {
+  get(): Promise<SettingsSnapshot>;
+  /** `logDir` 为空串 / `off` / `null` 表示关闭落盘。 */
+  update(patch: {
+    logDir?: string | null;
+    level?: LogLevel;
+    qzone?: boolean;
+  }): Promise<SettingsSnapshot>;
+}
+
 // ─────────────────────────── 调试 ───────────────────────────
 
 export interface ActionInfo {
@@ -297,6 +351,7 @@ export interface Api {
   login: LoginApi;
   overview: OverviewApi;
   network: NetworkApi;
+  settings: SettingsApi;
   logs: LogsApi;
   debug: DebugApi;
   account: AccountApi;

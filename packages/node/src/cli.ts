@@ -194,6 +194,15 @@ async function main(argv: string[]): Promise<number> {
       return 2;
     }
     // 凭据只从控制通道拿；事件写回 stdout，日志走 stderr（stdout 是协议流）。
+    const sidecarConfig = (() => {
+      if (!fileConfig) return undefined;
+      const { account: _account, ...rest } = mergeConfig({
+        file: fileConfig,
+        uin: values.account!,
+      });
+      void _account;
+      return rest;
+    })();
     runSidecar({
       uin: values.account,
       native,
@@ -202,7 +211,7 @@ async function main(argv: string[]): Promise<number> {
       stdout: process.stdout,
       // sidecar 的 OneBot 配置来自启动参数，不走控制通道：一个 sidecar 一个账号，
       // 端口拓扑属于部署形态，不该由每次 login 决定。
-      ...(fileConfig ? { config: fileConfig } : {}),
+      ...(sidecarConfig ? { config: sidecarConfig } : {}),
     });
     log.info('sidecar 已就绪，等待控制通道指令', { uin: values.account });
     return -1;
@@ -226,6 +235,7 @@ async function main(argv: string[]): Promise<number> {
         native,
         vault,
         config: consoleConfig,
+        onebotByUin: fileConfig?.onebotByUin ?? {},
         ...(values.config ? { configPath: values.config } : {}),
         ...(qqDbPath ? { qqDbPath } : {}),
         ...(values['webui-host'] ? { host: values['webui-host'] } : {}),

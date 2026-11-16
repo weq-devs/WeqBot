@@ -21,11 +21,18 @@ function truncate(text: string, max = MAX_TEXT_PREVIEW): string {
   return compact.length > max ? `${compact.slice(0, max)}…` : compact;
 }
 
-/** `[群名(12345)]`；没有缓存到名字时退回裸 id。 */
+/**
+ * `[群名(12345)]` / `[昵称(12345)]`；没有缓存到名字时退回 id。
+ *
+ * 输入状态 / 撤回这类推送只带 uid，名字要等同一会话里出现过消息才会进身份表。
+ * 仍没有名字时把 `u_xxx` 缩成短标识，至少比一整串 uid 好认。
+ */
 function peer(ref: PeerRef | undefined, fallback = '?'): string {
   if (!ref) return fallback;
   const name = ref.name?.trim();
-  return name ? `[${name}(${ref.id})]` : ref.id;
+  if (name) return `[${name}(${ref.id})]`;
+  if (ref.id.startsWith('u_')) return `[用户 ${ref.id.slice(-6)}]`;
+  return ref.id;
 }
 
 function textOf(value: unknown): string {
@@ -141,11 +148,19 @@ export function formatNotice(event: NoticeEvent): string {
     case 'input-status':
       return `输入中 ${peer(event.peer)} ${truncate(event.text, 20)}`.trim();
     case 'other':
-      return `事件 ${event.name}${event.detail ? ` ${truncate(event.detail)}` : ''}`;
+      return `${PUSH_EVENT_LABEL[event.name] ?? '事件'}${event.detail ? ` ${event.detail}` : ''}`;
     default:
       return `事件 ${String((event as { kind?: unknown }).kind ?? 'unknown')}`;
   }
 }
+
+/** `kind: 'other'` 的推送名 → 中文标签（detail 由 push 层给可读摘要）。 */
+const PUSH_EVENT_LABEL: Record<string, string> = {
+  'group-mute': '群禁言',
+  'group-reaction': '表情回应',
+  'group-essence': '群精华',
+  'client-receipt': '消息回执',
+};
 
 export function formatRequest(event: RequestEvent): string {
   if (event.kind === 'friend') {

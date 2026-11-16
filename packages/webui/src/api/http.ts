@@ -24,6 +24,7 @@ import {
   type PushEventEntry,
   type QrSnapshot,
   type SessionResult,
+  type SettingsSnapshot,
   type StreamName,
 } from './types';
 
@@ -156,6 +157,11 @@ export const httpApi: Api = {
       });
       return body.config;
     },
+  },
+
+  settings: {
+    get: () => request<SettingsSnapshot>('/api/settings'),
+    update: (patch) => request<SettingsSnapshot>('/api/settings', { method: 'PUT', body: patch }),
   },
 
   logs: {

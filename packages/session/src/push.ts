@@ -94,7 +94,7 @@ export class PushBridge {
             type: 'notice',
             kind: 'message-recall',
             at: event.time * 1000,
-            peer: { id: String(event.groupUin) },
+            peer: this.groupOf(event.groupUin),
             ...(event.authorUid ? { sender: this.peerOfUid(event.authorUid) } : {}),
             messageId: String(event.sequence),
             ...(event.operatorUid ? { operator: this.peerOfUid(event.operatorUid) } : {}),
@@ -108,7 +108,7 @@ export class PushBridge {
                 ? 'group-member-increase'
                 : 'group-member-decrease',
             at: event.time * 1000,
-            group: { id: String(event.groupUin) },
+            group: this.groupOf(event.groupUin),
             member:
               event.action === 'self-join'
                 ? { id: this.selfUin, ...(this.selfUid ? { uid: this.selfUid } : {}) }
@@ -121,9 +121,9 @@ export class PushBridge {
             type: 'notice',
             kind: 'group-admin',
             at: event.time * 1000,
-            group: { id: String(event.groupUin) },
+            group: this.groupOf(event.groupUin),
             member: this.peerOfUid(event.memberUid),
-            detail: event.set ? 'set' : 'unset',
+            detail: event.set ? '设为管理员' : '取消管理员',
           } satisfies NoticeEvent);
           break;
         case 'group-request':
@@ -131,7 +131,7 @@ export class PushBridge {
             type: 'request',
             kind: 'group',
             at: event.time * 1000,
-            group: { id: String(event.groupUin) },
+            group: this.groupOf(event.groupUin),
             from: this.peerOfUid(event.fromUid),
             ...(event.message ? { comment: event.message } : {}),
             flag: event.flag,
@@ -149,6 +149,7 @@ export class PushBridge {
           });
           break;
         case 'friend-add':
+          if (event.nickname) this.identity.observeName({ uid: event.uid }, event.nickname);
           out.push({
             type: 'notice',
             kind: 'friend-add',
@@ -164,7 +165,7 @@ export class PushBridge {
             type: 'notice',
             kind: 'poke',
             at: event.time * 1000,
-            peer: event.groupUin ? { id: String(event.groupUin) } : this.peerOfUid(event.fromUid),
+            peer: event.groupUin ? this.groupOf(event.groupUin) : this.peerOfUid(event.fromUid),
             sender: this.peerOfUid(event.fromUid),
             ...(event.toUid ? { target: this.peerOfUid(event.toUid) } : {}),
           } satisfies NoticeEvent);
@@ -178,7 +179,7 @@ export class PushBridge {
             kind: 'other',
             at: event.time * 1000,
             name: event.kind,
-            detail: describePushEvent(event),
+            detail: this.describeOther(event),
           } satisfies NoticeEvent);
           break;
         default:
@@ -191,8 +192,8 @@ export class PushBridge {
 
   private messageEvent(event: Extract<PushEvent, { kind: 'message' }>): BotEvent {
     const { message, scene } = event;
-    this.observe(message.session.uid, message.session.uin);
-    this.observe(message.sender.uid, message.sender.uin);
+    this.observe(message.session.uid, message.session.uin, message.session.name);
+    this.observe(message.sender.uid, message.sender.uin, message.sender.name);
 
     const sender: PeerRef = {
       id: String(message.sender.uin),
@@ -210,6 +211,9 @@ export class PushBridge {
         : {
             id: String(message.sender.uin),
             ...(message.sender.uid ? { uid: message.sender.uid } : {}),
+            ...(this.identity.nameOfUid(message.sender.uid)
+              ? { name: this.identity.nameOfUid(message.sender.uid) }
+              : {}),
           };
 
     const inbound: InboundMessage = {
@@ -235,29 +239,46 @@ export class PushBridge {
 
   private peerOfUid(uid: string): PeerRef {
     const uin = this.resolveUin(uid);
-    return uin ? { id: uin, uid } : { id: uid, uid };
+    const id = uin ?? uid;
+    const name = this.identity.nameOfUid(uid) ?? this.identity.nameOfUin(id);
+    return { id, uid, ...(name ? { name } : {}) };
   }
 
-  private observe(uid: string, uin: number): void {
-    this.identity.observe(uid, uin);
+  private groupOf(groupUin: number): PeerRef {
+    const id = String(groupUin);
+    const name = this.identity.nameOfUin(id);
+    return { id, ...(name ? { name } : {}) };
   }
-}
 
-/** 没有专门 `NoticeEvent.kind` 的推送：给诊断日志一段可读的摘要。 */
-function describePushEvent(
-  event: Extract<
-    PushEvent,
-    { kind: 'group-mute' | 'group-reaction' | 'group-essence' | 'client-receipt' }
-  >,
-): string {
-  switch (event.kind) {
-    case 'group-mute':
-      return `group=${event.groupUin} target=${event.targetUid} duration=${event.duration}`;
-    case 'group-reaction':
-      return `group=${event.groupUin} seq=${event.sequence} code=${event.code} count=${event.count}`;
-    case 'group-essence':
-      return `group=${event.groupUin} seq=${event.sequence} set=${event.set}`;
-    case 'client-receipt':
-      return `peer=${event.peerUid} clientSeq=${event.clientSequence} seq=${event.sequence}`;
+  private observe(uid: string, uin: number, name?: string): void {
+    this.identity.observe(uid, uin, name);
+  }
+
+  private peerLabel(ref: PeerRef): string {
+    const name = ref.name?.trim();
+    return name ? `[${name}(${ref.id})]` : ref.id;
+  }
+
+  /** 没有专门 `NoticeEvent.kind` 的推送：给日志一段可读的中文摘要。 */
+  private describeOther(
+    event: Extract<
+      PushEvent,
+      { kind: 'group-mute' | 'group-reaction' | 'group-essence' | 'client-receipt' }
+    >,
+  ): string {
+    switch (event.kind) {
+      case 'group-mute':
+        return `群 ${this.peerLabel(this.groupOf(event.groupUin))} · 目标 ${this.peerLabel(
+          this.peerOfUid(event.targetUid),
+        )} 禁言 ${event.duration} 秒`;
+      case 'group-reaction':
+        return `群 ${this.peerLabel(this.groupOf(event.groupUin))} · 消息 #${event.sequence} · 表情 ${event.code} ×${event.count}`;
+      case 'group-essence':
+        return `群 ${this.peerLabel(this.groupOf(event.groupUin))} · 消息 #${event.sequence} · ${
+          event.set ? '设为精华' : '取消精华'
+        }`;
+      case 'client-receipt':
+        return `与 ${this.peerLabel(this.peerOfUid(event.peerUid))} 的第 ${event.clientSequence} 条消息已送达`;
+    }
   }
 }

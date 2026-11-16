@@ -30,12 +30,7 @@ import type {
   StreamName,
 } from '../../api/types';
 import { usePolling } from '../../lib/hooks';
-import {
-  formatClock,
-  formatCompact,
-  formatMs,
-  LEVEL_LABEL,
-} from '../../lib/format';
+import { formatClock, formatCompact, formatMs, LEVEL_LABEL } from '../../lib/format';
 import './logs.css';
 
 const MAX_ROWS = 500;
@@ -105,7 +100,9 @@ export function LogsPage() {
         <StatTile
           label="p50 / p95"
           value={
-            stats ? `${formatMs(stats.actions.latency.p50)} / ${formatMs(stats.actions.latency.p95)}` : '—'
+            stats
+              ? `${formatMs(stats.actions.latency.p50)} / ${formatMs(stats.actions.latency.p95)}`
+              : '—'
           }
         />
         <StatTile
@@ -197,7 +194,9 @@ export function LogsPage() {
           <table className="logs-table">
             <thead>
               <tr>
-                <th scope="col" className="logs-col-time">时间</th>
+                <th scope="col" className="logs-col-time">
+                  时间
+                </th>
                 {stream === 'logs' && <th scope="col">级别</th>}
                 {stream === 'actions' && <th scope="col">Action</th>}
                 {stream === 'events' && <th scope="col">类型</th>}
@@ -228,9 +227,7 @@ export function LogsPage() {
         {detail && <DetailDrawer entry={detail} onClose={() => setDetail(null)} />}
       </AnimatePresence>
 
-      {stats && stats.actions.byAction.length > 0 && (
-        <ActionBreakdown stats={stats.actions} />
-      )}
+      {stats && stats.actions.byAction.length > 0 && <ActionBreakdown stats={stats.actions} />}
     </div>
   );
 }
@@ -248,15 +245,7 @@ function StatTile({ label, value }: { label: string; value: string }) {
   );
 }
 
-function Row({
-  stream,
-  entry,
-  onOpen,
-}: {
-  stream: StreamName;
-  entry: AnyEntry;
-  onOpen(): void;
-}) {
+function Row({ stream, entry, onOpen }: { stream: StreamName; entry: AnyEntry; onOpen(): void }) {
   const time = formatClock(entry.ts);
   if (stream === 'logs') {
     const log = entry as LogEntry;
@@ -272,9 +261,7 @@ function Row({
           <span className="logs-scope mono">{log.scope}</span>
           <span className="logs-msg">{log.msg}</span>
         </td>
-        <td className="logs-col-right">
-          {log.fields ? <ChevronHint /> : null}
-        </td>
+        <td className="logs-col-right">{log.fields ? <ChevronHint /> : null}</td>
       </tr>
     );
   }
@@ -282,13 +269,15 @@ function Row({
   if (stream === 'actions') {
     const call = entry as ActionCallEntry;
     return (
-      <tr onClick={onOpen} className="logs-row" data-level={call.status === 'ok' ? 'info' : 'error'}>
+      <tr
+        onClick={onOpen}
+        className="logs-row"
+        data-level={call.status === 'ok' ? 'info' : 'error'}
+      >
         <td className="mono logs-col-time">{time}</td>
         <td>
           <span className="logs-action mono">{call.action}</span>
-          {call.status === 'failed' && (
-            <span className="logs-retcode">{call.retcode}</span>
-          )}
+          {call.status === 'failed' && <span className="logs-retcode">{call.retcode}</span>}
         </td>
         <td className="logs-params mono">{preview(call.params)}</td>
         <td className="logs-col-right mono">
@@ -314,7 +303,11 @@ function Row({
 }
 
 function ChevronHint() {
-  return <span className="logs-chevron" aria-hidden="true">›</span>;
+  return (
+    <span className="logs-chevron" aria-hidden="true">
+      ›
+    </span>
+  );
 }
 
 function DetailDrawer({ entry, onClose }: { entry: AnyEntry; onClose(): void }) {

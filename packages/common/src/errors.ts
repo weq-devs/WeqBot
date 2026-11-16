@@ -11,6 +11,15 @@ export type WeqBotErrorCode =
   | 'NATIVE_MISSING_CAPABILITY'
   /** 登录失败：a1 失效、风控、协议拒绝。 */
   | 'LOGIN_FAILED'
+  /**
+   * 项目策略拒绝登录 —— **与凭据无关**。
+   *
+   * 远端模式（native 在换票后、注册前拉取）返回 `exit` 时抛出。它不代表
+   * a1 失效、风控或协议错误，所以不能归到 {@link LOGIN_FAILED}：那样会让用户
+   * 被引导去「重新登录 / 重新扫码」，而实际操作是没用的。UI 应明确提示是
+   * 当前构建的策略限制。
+   */
+  | 'ACCESS_DENIED'
   /** 该账号已有一条凭据路径在跑（mode1 与 mode2 互斥）。 */
   | 'ALREADY_ONLINE'
   /** 上线注册失败（SsoInfoSync 拒绝 / 超时）。 */
