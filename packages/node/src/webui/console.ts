@@ -389,6 +389,21 @@ export class ConsoleRuntime {
       delete botConfig.qq;
     }
 
+    // 把控制台探测到的 wrapper 交给 bot。
+    //
+    // 不交的后果是 Windows 上直接报 `SIGNER_REQUIRED`：native 的
+    // `resolveQqWrapperPath` 只认 `%PROGRAMFILES%\Tencent\QQNT\resources\app\
+    // wrapper.node` 与 `...\resources\app\versions\<ver>\`，而 QQ NT 的真实布局是
+    // `<qqRoot>\versions\<cur>\resources\app\` —— 层级相反，所以标准安装也会落空。
+    // 控制台这边的 `discoverQqPaths` 是按真实布局找的，有值就必须用上。
+    //
+    // 配置文件里的显式值仍然优先：用户手填 `native.wrapperPath` 说明他知道自己在
+    // 干什么（例如多版本共存时锁定某一个）。
+    const wrapperPath = this.options.config.native?.wrapperPath ?? environment.wrapperNode ?? null;
+    if (wrapperPath) {
+      botConfig.native = { ...botConfig.native, wrapperPath };
+    }
+
     const bot = this.botFactory({
       config: { ...botConfig, account: { uin } },
       native: this.options.native,
