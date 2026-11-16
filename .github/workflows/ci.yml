@@ -37,6 +37,10 @@ jobs:
       - name: pnpm verify
         run: pnpm verify
 
+      # 仓库公开，示例配置与测试里不该出现真实 QQ 号。
+      - name: 真实账号检查
+        run: pnpm anonymize:uin:check
+
       # 前端与文档站各自构建一遍：干净 clone 上构建不出来，发版时才发现的代价太大。
       - name: 构建 WebUI
         run: pnpm build:webui

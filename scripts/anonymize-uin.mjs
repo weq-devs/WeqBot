@@ -51,7 +51,9 @@ function isIgnored(path) {
     path.includes('node_modules/') ||
     path.includes('/dist/') ||
     path.includes('/cache/') ||
-    path.startsWith('schema/onebot-actions.json')
+    path.startsWith('schema/onebot-actions.json') ||
+    // 脚本自己的映射表当然含原文，跳过。
+    path === 'scripts/anonymize-uin.mjs'
   );
 }
 
