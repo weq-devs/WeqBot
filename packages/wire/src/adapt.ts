@@ -122,6 +122,8 @@ export interface RawNativeBinding {
     secTokenSource?: string;
   }>;
   warmupSigner?(wrapperPath: string): Promise<{ signCoreRva: number; vmRva: number }>;
+  /** native 初始化状态：0 成功、-1 过期、-200 损坏、-201 被篡改。 */
+  getInitStatus?(): number;
   getBuildInfo?(): NativeBuildInfo;
 
   /** FTF → TTF 字体转换（进程层能力）。 */

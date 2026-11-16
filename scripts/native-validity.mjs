@@ -56,7 +56,7 @@ export function isStale(validity) {
   );
 }
 
-/** 「还剩 3.2 天（有效期 30 天）」这种给人看的措辞；未知时返回 null。 */
+/** 「还剩 3.2 天（有效期 60 天）」这种给人看的措辞；未知时返回 null。 */
 export function validityText(validity) {
   if (validity.remainingDays === undefined) return null;
   const left = validity.remainingDays;

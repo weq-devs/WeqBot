@@ -62,18 +62,49 @@ export function resolveNativePath(options: LoadNativeOptions = {}): string {
   );
 }
 
+/** nt_helper 的 napi `InitStatus`；只在错误文案里用，不参与有效期计算。 */
+export const NATIVE_INIT_STATUS = {
+  success: 0,
+  expired: -1,
+  damaged: -200,
+  tampered: -201,
+} as const;
+
+/**
+ * 把 `.node` 自报的初始化状态翻译成加载错误。
+ *
+ * **天数不在这里算。** 有效期由 nt_helper 的 `common::BUILD_VALIDITY_SECS` 决定，
+ * 二进制通过 `getInitStatus()` 给出结论；这里只负责把 -1 翻译成用户能看懂的话。
+ * 旧产物没有该导出时跳过，交给具体 API 自己报错。
+ */
+export function assertNativeInitStatus(status: number | undefined): void {
+  if (status === undefined || status === NATIVE_INIT_STATUS.success) return;
+  if (status === NATIVE_INIT_STATUS.expired) {
+    throw new Error('原生组件已过期，请更新 nt_helper 构建（pnpm native:fetch）');
+  }
+  if (status === NATIVE_INIT_STATUS.damaged) {
+    throw new Error('原生组件安装损坏，请重新安装或更新（pnpm native:fetch）');
+  }
+  if (status === NATIVE_INIT_STATUS.tampered) {
+    throw new Error('原生组件被篡改，请重新安装或更新（pnpm native:fetch）');
+  }
+  throw new Error(`原生组件初始化失败（getInitStatus()=${status}），请重新安装或更新`);
+}
+
 /**
  * 加载并做最小自检。
  *
- * 注意：**不校验有效期，也不许在这里写死天数**。时效由 native 自报
- * `getBuildInfo()`（`buildTime` / `expireTime` / `validitySecs`）或 `getInitStatus()`，
- * 天数只在 nt_helper 的 Rust 里定义一处（`common::BUILD_VALIDITY_SECS`）。
- * 本地 `cargo` 构建的 `isDev: true`，根本不过期；release 构建迟早也要取消时效。
+ * 先看 native 自报的 `getInitStatus()`：过期 / 损坏 / 篡改在加载时给出明确错误，
+ * 而不是等到第一次 native 调用才抛出 `Environment validation failed`。
+ * 天数只在 nt_helper 的 Rust 里定义一处（`common::BUILD_VALIDITY_SECS`），
+ * 这里不计算、也不写死；本地 `cargo` 构建的 `isDev: true` 同样由二进制判定。
  */
 export function loadNative(options: LoadNativeOptions = {}): LoadedNative {
   const nativePath = resolveNativePath(options);
   const require = createRequire(import.meta.url);
   const binding = require(nativePath) as RawNativeBinding;
+
+  assertNativeInitStatus(binding.getInitStatus?.());
 
   if (typeof binding.sendPacket !== 'function' || typeof binding.sendOidbPacket !== 'function') {
     throw new Error(`原生组件缺少发包出口：${nativePath}`);
