@@ -15,14 +15,5 @@ cd WeqBot
 pnpm install
 pnpm dev
 ```
-
-`docs/` 是 [WeqBotDocs](https://github.com/weq-devs/WeqBotDocs) 的 submodule ——
-克隆时带 `--recurse-submodules`，否则文档目录是空的（不影响代码运行）。
-
-```bash
-pnpm verify       # 架构护栏 + 类型检查 + 文档快照一致性 + 测试
-pnpm docs:dev     # 本地预览文档（http://127.0.0.1:5175）
 ```
 
-OneBot 动作文档由代码自动生成：改了 `packages/onebot/src/actions/` 后跑
-`pnpm docs:actions` 更新 `schema/onebot-actions.json`。
