@@ -31,6 +31,10 @@ jobs:
       - uses: actions/checkout@v4
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
+          # `docs/` 是 submodule，且在 pnpm-workspace.yaml 里占一个槽位：
+          # 不拉子模块时 pnpm-lock.yaml 的 `importers["docs"]` 找不到 package.json，
+          # `pnpm install --frozen-lockfile` 会直接报 ERR_PNPM_OUTDATED_LOCKFILE。
+          submodules: recursive
 
       # 先校验 tag，再装依赖 / 构建：拼错的 tag 几秒内失败，而不是跑完 40 分钟。
       - name: 解析版本

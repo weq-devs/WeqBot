@@ -1,6 +1,6 @@
 {
   "name": "@weqbot/common",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "零业务依赖的叶子层：日志 / 错误码 / 事件总线 / 退避 / 字节工具",

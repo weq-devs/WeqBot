@@ -1,6 +1,6 @@
 {
   "name": "@weqbot/webui",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "WebUI 前端（纯静态 SPA）：访问令牌 / 账号登录 / 总览 / 网络 / 日志 / 调试。产物由 @weqbot/node 托管；不 import 任何 @weqbot 运行时包",

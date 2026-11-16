@@ -1,6 +1,6 @@
 {
   "name": "@weqbot/control",
-  "version": "0.0.0",
+  "version": "0.1.0",
   "private": true,
   "type": "module",
   "description": "desktop ↔ sidecar 控制通道：信封类型 + NDJSON 编解码（无 socket 实现）",
