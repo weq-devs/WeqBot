@@ -201,6 +201,12 @@ export class PushBridge {
       ...(message.sender.name ? { name: message.sender.name } : {}),
     };
 
+    // 私聊的 peer 就是对方本人：wire 上常没有名字（`forward.friendName` 多为空），
+    // 要回退到身份表。**两级都要查** —— 好友列表预热只写 uin，只有聊天消息才写
+    // uid；只查 uid 会让预热永远不生效（日志里「输入中 u_xxx」但消息行有名字就是这因）。
+    const privateName =
+      this.identity.nameOfUid(message.sender.uid) ?? this.identity.nameOfUin(message.sender.uin);
+
     const peer: PeerRef =
       scene === 'group'
         ? {
@@ -211,9 +217,7 @@ export class PushBridge {
         : {
             id: String(message.sender.uin),
             ...(message.sender.uid ? { uid: message.sender.uid } : {}),
-            ...(this.identity.nameOfUid(message.sender.uid)
-              ? { name: this.identity.nameOfUid(message.sender.uid) }
-              : {}),
+            ...(privateName ? { name: privateName } : {}),
           };
 
     const inbound: InboundMessage = {

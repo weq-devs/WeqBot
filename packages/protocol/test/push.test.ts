@@ -39,7 +39,13 @@ function groupMessage(overrides: {
     responseHead: {
       fromUin: 10001,
       fromUid: 'u_sender',
-      grp: { groupUin: 55555, memberCard: '群名片', groupName: '测试群' },
+      // 名片是 bytes；type 2 = 字面昵称（真实推送里就是这样）。
+      grp: {
+        groupUin: 55555,
+        memberCard: new TextEncoder().encode('群名片'),
+        memberCardType: 2,
+        groupName: '测试群',
+      },
     },
     contentHead: {
       msgType: 82,
@@ -181,4 +187,63 @@ test('历史 / 合并转发节点走同一个解码器（PUSH_MSG_BODY）', () =
   ]);
   assert.equal(events.length, 1);
   assert.equal(events[0]?.message.dress.bubble, 5);
+});
+
+/**
+ * 下面三条覆盖「群名片是结构化 protobuf 却被当字符串解」这个线上问题。
+ *
+ * 真实样本取自 `logs/weqbot-2026-11-16.log` 里那条打印成
+ * `群 [悠悠果冻学院(938098977)] | [%ĀĀÓ\b022…]` 的日志 —— 名片字节是
+ * `08 25 c4 80 c4 80 07 c3 93 0a 08 12 06 <text> 10 00`：前 8 字节是版本等
+ * 字段（**不是合法 wire 格式**），`0a` = parts（tag 1）、`12` = text（**tag 2**）、
+ * `10 00` = control（tag 1）。
+ */
+const REAL_CARD_BYTES = Uint8Array.from(
+  '0825c480c48007c3930a081206e9b1bce584bf1000'.match(/../g)!.map((b) => Number.parseInt(b, 16)),
+);
+
+function messageWithCard(card: Uint8Array | undefined, cardType?: number): Record<string, unknown> {
+  return {
+    responseHead: {
+      fromUin: 2535909918,
+      fromUid: 'u_sender',
+      grp: {
+        groupUin: 938098977,
+        ...(card ? { memberCard: card } : {}),
+        ...(cardType !== undefined ? { memberCardType: cardType } : {}),
+        groupName: '悠悠果冻学院',
+      },
+    },
+    contentHead: { msgType: 82, msgId: 7, sequence: 1, timestamp: 1_700_000_000 },
+    body: { richText: { elems: [textElem('你好')] } },
+  };
+}
+
+test('结构化群名片：跳前缀后解出文本，不再打印二进制乱码', () => {
+  const events = decodePushBody(envelope([messageWithCard(REAL_CARD_BYTES, 1)]));
+  const event = events[0];
+  assert.ok(event && event.kind === 'message');
+  assert.equal(event.message.sender.name, '鱼儿');
+  assert.equal(event.message.sender.card, '鱼儿');
+});
+
+test('名片里带控制符的部分不输出文本，也不影响消息本体', () => {
+  // part 同时带 control(tag 1) 与 text(tag 2)：按 SnowLuma 口径整段丢弃。
+  const controlOnly = Uint8Array.from([0x0a, 0x06, 0x0a, 0x01, 0x14, 0x12, 0x01, 0x41]);
+  const events = decodePushBody(envelope([messageWithCard(controlOnly, 1)]));
+  const event = events[0];
+  assert.ok(event && event.kind === 'message');
+  // 名字退化成 undefined（交给身份表），消息本身照常解出。
+  assert.equal(event.message.sender.name, undefined);
+  assert.deepEqual(event.message.elements, [{ kind: 'text', textContent: '你好' }]);
+});
+
+test('memberCardType = 2 是字面昵称，直接按 UTF-8 读', () => {
+  const events = decodePushBody(
+    envelope([messageWithCard(new TextEncoder().encode('纯文本昵称'), 2)]),
+  );
+  const event = events[0];
+  assert.ok(event && event.kind === 'message');
+  assert.equal(event.message.sender.name, '纯文本昵称');
+  assert.equal(event.message.sender.card, '纯文本昵称');
 });

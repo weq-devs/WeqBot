@@ -21,8 +21,13 @@ const f = (
 
 export const RESPONSE_GRP: ProtoMessage = message([
   f('groupUin', 1, 'uint32'),
+  // 群历史拉取（SsoGetGroupMsg）才填；实时推送 / 合并转发节点为空，用 memberCard。
   f('memberName', 2, 'string'),
-  f('memberCard', 4, 'string'),
+  // **bytes，不是 string**：`memberCardType === 2` 时是字面昵称的 UTF-8，
+  // 其它值是结构化 `RichGroupCard` protobuf。按 string 解后者会得到二进制乱码。
+  f('memberCard', 4, 'bytes'),
+  // 2 = memberCard 装的是字面昵称；其余值是结构化名片。
+  f('memberCardType', 5, 'uint32'),
   f('groupName', 7, 'string'),
 ]);
 

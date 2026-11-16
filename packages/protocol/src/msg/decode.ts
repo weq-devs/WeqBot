@@ -12,6 +12,7 @@
 import { inflateSync } from 'node:zlib';
 import { decode } from '../protobuf';
 import { BUBBLE_VIDEO_PB } from '../highway/ntv2-schemas';
+import { decodeGroupMemberCard } from '../oidb/contacts/group-member-card';
 import {
   ELEM,
   FACE_COMMON_PB,
@@ -627,7 +628,18 @@ export interface DecodedMessage {
     clientSequence?: number;
     timestamp: number;
   };
-  sender: { uin: number; uid: string; name?: string };
+  sender: {
+    uin: number;
+    uid: string;
+    /** 显示名（群聊：群名片优先、否则昵称）。 */
+    name?: string;
+    /**
+     * 群名片（**不是**昵称）。仅在确定这名片是名片本身时才有值：
+     * `memberCardType === 2` 是字面昵称，结构化名片解出来的也是名片。
+     * OneBot 的 `sender.card` 用它；日志只消费 `name`。
+     */
+    card?: string;
+  };
   session: { uin: number; uid: string; name?: string };
   elements: Record<string, unknown>[];
   dress: DecodedDress;
@@ -641,7 +653,14 @@ export interface RawMessageBody {
     toUin?: number;
     toUid?: string;
     forward?: { friendName?: string };
-    grp?: { groupUin?: number; memberName?: string; memberCard?: string; groupName?: string };
+    grp?: {
+      groupUin?: number;
+      memberName?: string;
+      /** 原始名片字节：字面昵称（type 2）或结构化 `RichGroupCard`。 */
+      memberCard?: Uint8Array;
+      memberCardType?: number;
+      groupName?: string;
+    };
   };
   contentHead?: {
     msgType?: number;
@@ -656,6 +675,47 @@ export interface RawMessageBody {
     richText?: { elems?: Record<string, unknown>[]; notOnlineFile?: Record<string, unknown> };
     msgContent?: Uint8Array;
   };
+}
+
+/**
+ * 从 `ResponseGrp` 里取发送者的显示名与群名片。
+ *
+ * 口径照 SnowLuma `msg-push/decoders/group-message.ts`：`memberName` 只在群历史
+ * 拉取里出现，实时推送用 `memberCard`；`memberCardType === 2` 表示那串字节就是
+ * 字面昵称，其余值是结构化 `RichGroupCard`，必须走 `decodeGroupMemberCard` 解，
+ * 直接按 UTF-8 读会得到二进制乱码（线上日志里那条 `[%ĀĀÓ\b022…]` 就是）。
+ *
+ * 名片解不出来只丢名字，绝不影响消息本身 —— 名片是可选的展示字段。
+ */
+function senderDisplayName(
+  grp: NonNullable<RawMessageBody['responseHead']>['grp'],
+  friendName: string | undefined,
+): { name?: string; card?: string } {
+  const card = decodeCardQuietly(grp);
+  // 群历史带 memberName；实时推送只有名片。私聊只有 forward.friendName。
+  const name = grp?.memberName?.trim() || card || friendName?.trim();
+  return {
+    ...(name ? { name } : {}),
+    ...(card ? { card } : {}),
+  };
+}
+
+/** 解名片字节；类型 2 是字面昵称，其余按结构化名片解。失败返回 `undefined`。 */
+function decodeCardQuietly(
+  grp: NonNullable<RawMessageBody['responseHead']>['grp'],
+): string | undefined {
+  const bytes = grp?.memberCard;
+  if (!bytes || bytes.length === 0) return undefined;
+  try {
+    const text =
+      grp?.memberCardType === 2
+        ? new TextDecoder('utf-8', { fatal: true }).decode(bytes)
+        : decodeGroupMemberCard(bytes);
+    return text.trim() || undefined;
+  } catch {
+    // 名片格式不认识 / 不是合法 UTF-8：只丢名字，不动消息。
+    return undefined;
+  }
 }
 
 /** 把原始消息字节解码成简化 Message。 */
@@ -724,10 +784,7 @@ export function decodeMessageBody(raw: RawMessageBody): DecodedMessage {
     sender: {
       uin: sender.fromUin ?? 0,
       uid: sender.fromUid ?? '',
-      // 群名片优先，回退昵称；私聊只有 forward.friendName 可用。
-      ...(grp.memberCard || grp.memberName || sender.forward?.friendName
-        ? { name: grp.memberCard || grp.memberName || sender.forward?.friendName }
-        : {}),
+      ...senderDisplayName(grp, sender.forward?.friendName),
     },
     session: {
       uin: grp.groupUin ?? sender.toUin ?? 0,

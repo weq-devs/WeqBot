@@ -609,7 +609,11 @@ export function createBot(options: CreateBotOptions): Bot {
     try {
       const friends = await source.getFriendList?.();
       for (const friend of friends ?? []) {
-        identity.observeName({ uin: friend.userId }, friend.remark || friend.nickname);
+        // uid 一起写：私聊/输入状态/撤回的推送只带 uid，只写 uin 的名字查不到。
+        identity.observeName(
+          { uin: friend.userId, ...(friend.uid ? { uid: friend.uid } : {}) },
+          friend.remark || friend.nickname,
+        );
       }
     } catch (cause) {
       log.debug('读取好友列表失败（昵称表不完整）', { cause: describe(cause) });

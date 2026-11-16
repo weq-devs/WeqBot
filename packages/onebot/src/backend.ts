@@ -46,6 +46,8 @@ export interface LoginInfo {
 
 export interface FriendInfo {
   userId: number;
+  /** 好友的 uid（`u_...`）。好友列表接口回包里有，透出来供身份表预热。 */
+  uid?: string;
   nickname: string;
   remark: string;
   /** 好友分组编号（`get_friends_with_category` 会带上）。 */

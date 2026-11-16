@@ -7,6 +7,7 @@ import {
   MSG_PUSH_CMD,
   MSG_PUSH_ENVELOPE,
 } from '@weqbot/protocol';
+import { IdentityCache } from '../src/identity';
 import { PushBridge } from '../src/push';
 
 function frame(body: Uint8Array) {
@@ -18,7 +19,12 @@ function groupMessage(text: string, bubble: number): Record<string, unknown> {
     responseHead: {
       fromUin: 10001,
       fromUid: 'u_sender',
-      grp: { groupUin: 55555, memberCard: '群名片', groupName: '测试群' },
+      grp: {
+        groupUin: 55555,
+        memberCard: new TextEncoder().encode('群名片'),
+        memberCardType: 2,
+        groupName: '测试群',
+      },
     },
     contentHead: { msgType: 82, msgId: 42, sequence: 9001, timestamp: 1_700_000_000 },
     body: {
@@ -182,4 +188,32 @@ test('未建模的推送进入 unhandled，不丢帧', () => {
   assert.equal(result.events.length, 0);
   assert.equal(result.unhandled.length, 1);
   assert.equal(result.unhandled[0]?.kind, 'system');
+});
+
+test('私聊 peer 名走 uid 与 uin 两级回退（好友列表预热只写 uin）', () => {
+  // 模拟 seedIdentity 的行为：好友列表预热只写 uin，没有 uid。
+  const identity = new IdentityCache();
+  identity.observeName({ uin: 20002 }, '好友昵称');
+
+  const bridge = new PushBridge({ selfUin: '10002', selfUid: 'u_self', identity });
+  const result = bridge.handle(
+    frame(
+      encode(MSG_PUSH_ENVELOPE, {
+        messages: [
+          {
+            // 私聊消息 wire 上常没有名字（forward.friendName 为空）。
+            responseHead: { fromUin: 20002, fromUid: 'u_friend' },
+            contentHead: { msgType: 166, msgId: 11, sequence: 12, timestamp: 1_700_000_000 },
+            body: { richText: { elems: [{ text: { str: '在吗' } }] } },
+          },
+        ],
+      }),
+    ),
+  );
+
+  const event = result.events[0];
+  assert.ok(event && event.type === 'message');
+  assert.equal(event.message.scene, 'private');
+  // 只查 nameOfUid 会得到 undefined —— 修复前就是这样。
+  assert.equal(event.message.peer.name, '好友昵称');
 });

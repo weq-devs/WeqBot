@@ -1076,6 +1076,7 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       const { friends } = await fetchAllFriends(nt, sessionId);
       return friends.map(({ friend }) => ({
         userId: friend.uin,
+        ...(friend.uid ? { uid: friend.uid } : {}),
         nickname: friend.nickname,
         remark: friend.remark,
       }));
