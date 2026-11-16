@@ -5,7 +5,7 @@
  */
 
 import assert from 'node:assert/strict';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { request } from 'node:http';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -23,6 +23,12 @@ interface Harness {
   port: number;
   /** `reloadOneBot` 收到的配置（用来断言令牌保留等副作用）。 */
   reloaded: unknown[];
+  /** 路由交给 `saveQqPaths` 的补丁。 */
+  qqPathSaves: unknown[];
+  /** 交给 `setQqPathOverrides` 的值。 */
+  qqPathOverrideCalls: unknown[];
+  /** 最近一次 `environment(refresh)` 收到的参数。 */
+  environmentRefreshes: boolean[];
   close(): Promise<void>;
 }
 
@@ -33,7 +39,12 @@ function fakeRuntime(state: {
   result?: { status: string; retcode: number; data: unknown };
   calls?: Array<{ name: string; params: unknown }>;
   onebot?: boolean;
-}): ConsoleRuntime & { reloaded: unknown[] } {
+}): ConsoleRuntime & {
+  reloaded: unknown[];
+  environmentRefreshes: boolean[];
+  qqPathOverrideCalls: unknown[];
+  qqPathSaves: unknown[];
+} {
   const actions = state.actions ?? ['get_login_info', 'send_group_msg'];
   const adapter = {
     actions: () => actions,
@@ -57,8 +68,22 @@ function fakeRuntime(state: {
     stop: async () => {},
   };
   const reloaded: unknown[] = [];
+  const environmentRefreshes: boolean[] = [];
+  const qqPathOverrideCalls: unknown[] = [];
+  const qqPathSaves: unknown[] = [];
+  let current: { installDir?: string | null; dataDir?: string | null } | null = null;
   return {
     reloaded,
+    environmentRefreshes,
+    qqPathOverrideCalls,
+    qqPathSaves,
+    get qqPathOverrides() {
+      return current;
+    },
+    setQqPathOverrides(next: typeof current) {
+      current = next;
+      qqPathOverrideCalls.push(next);
+    },
     currentPhase: (state.phase ?? 'online') as never,
     currentBot:
       state.onebot === false
@@ -70,15 +95,18 @@ function fakeRuntime(state: {
             },
           } as never),
     accounts: async () => [],
-    environment: async () => ({
-      platform: process.platform,
-      qqExe: null,
-      installRoot: null,
-      wrapperNode: null,
-      majorNode: null,
-      dataRoot: null,
-      loginDbs: [],
-    }),
+    environment: async (refresh = false) => {
+      environmentRefreshes.push(refresh);
+      return {
+        platform: process.platform,
+        qqExe: null,
+        installRoot: null,
+        wrapperNode: null,
+        majorNode: null,
+        dataRoot: null,
+        loginDbs: [],
+      };
+    },
     startAccount: async () => {},
     startQrLogin: async () => ({ state: 'waiting-scan', expiresAt: Date.now() + 45_000 }),
     cancelQrLogin: () => {},
@@ -92,7 +120,12 @@ function fakeRuntime(state: {
     logout: async () => {},
     consoleEvents: { on: () => () => {} },
     close: async () => {},
-  } as unknown as ConsoleRuntime & { reloaded: unknown[] };
+  } as unknown as ConsoleRuntime & {
+    reloaded: unknown[];
+    environmentRefreshes: boolean[];
+    qqPathOverrideCalls: unknown[];
+    qqPathSaves: unknown[];
+  };
 }
 
 async function start(
@@ -103,6 +136,8 @@ async function start(
     phase?: string;
     onebot?: boolean;
     config?: BotOneBotConfig;
+    /** 注入 `saveQqPaths`；不给时路由层不落盘（只改内存）。 */
+    saveQqPaths?: (patch: unknown) => Promise<void>;
   } = {},
 ): Promise<Harness> {
   const auth = new WebUiAuth(TOKEN);
@@ -118,6 +153,7 @@ async function start(
     console: runtime,
     observability,
     readConfig: () => options.config,
+    ...(options.saveQqPaths ? { saveQqPaths: options.saveQqPaths } : {}),
   });
   const server = createWebUiServer({
     port: 0,
@@ -128,6 +164,9 @@ async function start(
   return {
     port: handle.port,
     reloaded: runtime.reloaded as unknown[],
+    qqPathSaves: runtime.qqPathSaves,
+    qqPathOverrideCalls: runtime.qqPathOverrideCalls,
+    environmentRefreshes: runtime.environmentRefreshes,
     close: () => handle.close(),
   };
 }
@@ -536,6 +575,156 @@ test('PUT /api/onebot/config：端口冲突被拒', async () => {
     });
     assert.equal(reply.status, 400);
     assert.equal(JSON.parse(reply.body).code, 'PORT_CONFLICT');
+  } finally {
+    await harness.close();
+  }
+});
+
+// ─────────────────────────── QQ 路径设置 ───────────────────────────
+
+test('GET /api/settings?refresh=1 让 environment 跳过缓存', async () => {
+  const harness = await start();
+  try {
+    const cookie = await login(harness.port);
+    const reply = await call(harness.port, '/api/settings?refresh=1', { headers: { cookie } });
+    assert.equal(reply.status, 200);
+    assert.equal(harness.environmentRefreshes.at(-1), true);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('GET /api/login/environment 不带 refresh 时用缓存', async () => {
+  const harness = await start();
+  try {
+    const cookie = await login(harness.port);
+    const reply = await call(harness.port, '/api/login/environment', { headers: { cookie } });
+    assert.equal(reply.status, 200);
+    assert.equal(harness.environmentRefreshes.at(-1), false);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('PUT /api/settings：qqPaths 类型错误 → 400', async () => {
+  const harness = await start();
+  try {
+    const cookie = await login(harness.port);
+    for (const qqPaths of [
+      { installDir: 123 },
+      { dataDir: true },
+      { installDir: '../relative' },
+      42,
+    ]) {
+      const reply = await call(harness.port, '/api/settings', {
+        method: 'PUT',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ qqPaths }),
+      });
+      assert.equal(reply.status, 400, `应拒绝 ${JSON.stringify(qqPaths)}`);
+      assert.equal(JSON.parse(reply.body).code, 'BAD_QQ_PATHS');
+    }
+  } finally {
+    await harness.close();
+  }
+});
+
+test('PUT /api/settings：路径不存在 → 400，且信息里带路径', async () => {
+  const harness = await start();
+  try {
+    const cookie = await login(harness.port);
+    const reply = await call(harness.port, '/api/settings', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ qqPaths: { installDir: '/definitely/not/here/qq' } }),
+    });
+    assert.equal(reply.status, 400);
+    const payload = JSON.parse(reply.body);
+    assert.equal(payload.code, 'BAD_QQ_PATHS');
+    assert.match(payload.message, /\/definitely\/not\/here\/qq/);
+  } finally {
+    await harness.close();
+  }
+});
+
+test('PUT /api/settings：不认识的键 → 400', async () => {
+  const harness = await start();
+  try {
+    const cookie = await login(harness.port);
+    const reply = await call(harness.port, '/api/settings', {
+      method: 'PUT',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: JSON.stringify({ qqPaths: { installRoot: '/opt/QQ' } }),
+    });
+    assert.equal(reply.status, 400);
+    assert.equal(JSON.parse(reply.body).code, 'BAD_QQ_PATHS');
+  } finally {
+    await harness.close();
+  }
+});
+
+test('PUT /api/settings：有效路径落盘并写进运行时；空串等价清除', async () => {
+  const saves: unknown[] = [];
+  const harness = await start({
+    saveQqPaths: async (patch) => {
+      saves.push(patch);
+    },
+  });
+  try {
+    const cookie = await login(harness.port);
+    // 用临时目录当「存在的路径」，避免依赖本机 QQ 安装。
+    const dir = await mkdtemp(join(tmpdir(), 'weqbot-qq-settings-'));
+    try {
+      const reply = await call(harness.port, '/api/settings', {
+        method: 'PUT',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ qqPaths: { installDir: dir, dataDir: dir } }),
+      });
+      assert.equal(reply.status, 200);
+      assert.equal(saves.length, 1);
+      assert.deepEqual(saves[0], { installDir: dir, dataDir: dir });
+      assert.deepEqual(harness.qqPathOverrideCalls.at(-1), { installDir: dir, dataDir: dir });
+
+      const snapshot = JSON.parse(reply.body);
+      assert.deepEqual(snapshot.qqPaths, { installDir: dir, dataDir: dir });
+
+      // 空串 = 清除覆盖。
+      const cleared = await call(harness.port, '/api/settings', {
+        method: 'PUT',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ qqPaths: { installDir: '' } }),
+      });
+      assert.equal(cleared.status, 200);
+      assert.deepEqual(saves[1], { installDir: null });
+      assert.deepEqual(harness.qqPathOverrideCalls.at(-1), { dataDir: dir });
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  } finally {
+    await harness.close();
+  }
+});
+
+test('PUT /api/settings：落盘失败时运行时不被改动', async () => {
+  const harness = await start({
+    saveQqPaths: async () => {
+      throw new Error('磁盘只读');
+    },
+  });
+  try {
+    const cookie = await login(harness.port);
+    const dir = await mkdtemp(join(tmpdir(), 'weqbot-qq-settings-'));
+    try {
+      const reply = await call(harness.port, '/api/settings', {
+        method: 'PUT',
+        headers: { cookie, 'content-type': 'application/json' },
+        body: JSON.stringify({ qqPaths: { installDir: dir } }),
+      });
+      assert.equal(reply.status, 500);
+      assert.equal(harness.qqPathOverrideCalls.length, 0, '落盘失败不能留下半生效的状态');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   } finally {
     await harness.close();
   }

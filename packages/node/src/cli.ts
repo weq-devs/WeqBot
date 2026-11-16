@@ -14,7 +14,7 @@ import { createBot, describeBot } from '@weqbot/bot';
 import { configureLogging, createLogger, type LogLevel } from '@weqbot/common';
 import { FileCredentialVault } from '@weqbot/session';
 import { adaptNativeBinding, inspectNative } from '@weqbot/wire';
-import { ConfigError, loadConfigFile, mergeConfig } from './config';
+import { ConfigError, loadConfigFile, mergeConfig, type LoadedConfig } from './config';
 import { loadNative } from './loader';
 import { runSidecar } from './sidecar';
 import { runWebUi } from './webui';
@@ -36,6 +36,24 @@ function resolveLogLevel(values: { verbose?: boolean; trace?: boolean }): LogLev
   if (values.trace) return 'trace';
   if (values.verbose) return 'debug';
   return undefined;
+}
+
+/**
+ * 从配置文件里挑出控制台要用的 QQ 路径。
+ *
+ * 一个都没配时返回 undefined，让 `runWebUi` 完全走自动探测（避免传进去一个空对象
+ * 后 `sources` 里多出一项 `override`）。
+ */
+function pickQqPaths(
+  qq: LoadedConfig['qq'],
+): { installDir?: string; dataDir?: string } | undefined {
+  const installDir = qq?.installDir;
+  const dataDir = qq?.dataDir;
+  if (!installDir && !dataDir) return undefined;
+  return {
+    ...(installDir ? { installDir } : {}),
+    ...(dataDir ? { dataDir } : {}),
+  };
 }
 
 const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
@@ -73,6 +91,11 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
   WEQBOT_LOG_DIR       日志落盘目录（默认 ./logs；设为 off 关闭落盘）
   WEQBOT_LOG_LEVEL     终端日志级别：trace / debug / info / warn / error
   WEQBOT_LOG_FILE_LEVEL 落盘级别（默认 debug；trace 不落盘）
+  WEQBOT_QQ_INSTALL_DIR QQ 安装根（含 qq / QQ.exe 的目录；macOS 是 QQ.app）
+  WEQBOT_QQ_ROOT       QQ 数据根（默认 ~/.config/QQ 等；不是安装目录）
+  WEQBOT_QQ_EXE        QQ 可执行文件（等价于指定安装根，优先级低于上面两个）
+
+控制台「设置」页填的路径存在配置文件 qq.installDir / qq.dataDir，优先级最高。
 `;
 
 async function main(argv: string[]): Promise<number> {
@@ -218,6 +241,8 @@ async function main(argv: string[]): Promise<number> {
   }
 
   const qqDbPath = values['qq-db'] ?? process.env.WEQBOT_QQ_DB;
+  // 配置文件里的手动路径只喂给控制台探测；bot 只认 `qq.dbPath`。
+  const qqPaths = pickQqPaths(fileConfig?.qq);
   const baseConfig = mergeConfig({
     ...(fileConfig ? { file: fileConfig } : {}),
     ...(values.account ? { uin: values.account } : { uin: '' }),
@@ -238,6 +263,7 @@ async function main(argv: string[]): Promise<number> {
         onebotByUin: fileConfig?.onebotByUin ?? {},
         ...(values.config ? { configPath: values.config } : {}),
         ...(qqDbPath ? { qqDbPath } : {}),
+        ...(qqPaths ? { qqPaths } : {}),
         ...(values['webui-host'] ? { host: values['webui-host'] } : {}),
         ...(values['webui-port'] ? { port: Number(values['webui-port']) } : {}),
         ...(process.env.WEQBOT_WEBUI_TOKEN ? { token: process.env.WEQBOT_WEBUI_TOKEN } : {}),

@@ -3,7 +3,9 @@
     "wrapperPath": "/opt/QQNT/resources/app/wrapper.node"
   },
   "qq": {
-    "dbPath": "/home/you/.config/QQ/naive/nt_qq/nt_msg.db"
+    "dbPath": "/home/you/.config/QQ/naive/nt_qq/nt_msg.db",
+    "installDir": "/opt/QQ",
+    "dataDir": "/home/you/.config/QQ"
   },
   "session": {
     "syncGraceMs": 15000

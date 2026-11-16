@@ -22,7 +22,7 @@ import type { CredentialVault } from '@weqbot/session';
 import type { NativePort, RawNativeBinding } from '@weqbot/wire';
 import { WebUiAuth } from './auth';
 import { ConsoleRuntime } from './console';
-import { saveOneBotConfig } from './config-file';
+import { saveOneBotConfig, saveQqPaths } from './config-file';
 import { HttpError } from './http-util';
 import { Observability } from './observability';
 import { createWebUiRouter } from './routes';
@@ -42,6 +42,12 @@ export interface RunWebUiOptions {
   configPath?: string;
   /** `qq.dbPath`，用于登录页的「QQ 是否在线」。 */
   qqDbPath?: string;
+  /**
+   * 配置文件里手动指定的 QQ 路径（`qq.installDir` / `qq.dataDir`）。
+   *
+   * 优先级高于环境变量与自动探测；设置页保存后也会写回这一份的落盘点。
+   */
+  qqPaths?: { installDir?: string; dataDir?: string };
   host?: string;
   port?: number;
   /** 固定访问令牌（`WEQBOT_WEBUI_TOKEN`）；不给则每次启动随机生成。 */
@@ -81,6 +87,7 @@ export async function runWebUi(options: RunWebUiOptions): Promise<WebUiHandle> {
     config: options.config,
     ...(options.onebotByUin ? { onebotByUin: options.onebotByUin } : {}),
     ...(options.qqDbPath ? { qqDbPath: options.qqDbPath } : {}),
+    ...(options.qqPaths ? { qqPathsOverride: options.qqPaths } : {}),
     // WebUI 自己的日志器挂上观测 sink：终端照常输出，页面也能看到。
     logger: log,
     observability,
@@ -99,6 +106,10 @@ export async function runWebUi(options: RunWebUiOptions): Promise<WebUiHandle> {
       if (!uin) throw new HttpError(409, 'NO_ACCOUNT', '先登录账号，再保存这个账号的网络配置');
       if (options.configPath) await saveOneBotConfig(options.configPath, uin, config);
       runtime.rememberOneBotConfig(uin, config);
+    },
+    // QQ 路径不属于任何账号，任何阶段都能改。
+    saveQqPaths: async (patch) => {
+      if (options.configPath) await saveQqPaths(options.configPath, patch);
     },
   });
 
@@ -141,6 +152,8 @@ export async function runWebUi(options: RunWebUiOptions): Promise<WebUiHandle> {
 }
 
 export { WebUiAuth } from './auth';
-export { ConsoleRuntime } from './console';
+export { ConsoleRuntime, type LoginEnvironment } from './console';
 export { Observability } from './observability';
-export { discoverQqPaths } from './qq-paths';
+export { discoverQqPaths, type QqPathOverrides, type QqPaths } from './qq-paths';
+export { detectQqHints, ensureQqHints, type QqHints } from './qq-detect';
+export { findNtMsgDb } from './qq-account';

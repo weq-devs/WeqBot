@@ -31,7 +31,9 @@ import type { BotEventMap, CredentialVault, StoredAccount } from '@weqbot/sessio
 import type { DeviceProfile, NativePort, QuickLoginResult, RawNativeBinding } from '@weqbot/wire';
 import { HttpError } from './http-util';
 import type { Observability } from './observability';
-import { discoverQqPaths, LOGIN_DB_KEY, type QqPaths } from './qq-paths';
+import { findNtMsgDb } from './qq-account';
+import { clearQqHintsCache, ensureQqHints } from './qq-detect';
+import { discoverQqPaths, LOGIN_DB_KEY, type QqPathOverrides, type QqPaths } from './qq-paths';
 
 export type ConsolePhase = 'no-account' | 'starting' | 'online' | 'offline';
 
@@ -104,7 +106,13 @@ export interface LoginEnvironment {
   loginDbs: string[];
   /** `major.node` 解析出的客户端身份；缺 major.node 时为 undefined。 */
   client?: { appid: string; qua?: string; version?: string; build?: string };
-  /** QQ 本体是否在线（按 `nt_msg.db` 锁）；没有 dbPath 时 undefined。 */
+  /** `resources/app/package.json` 的版本；native 解析失败时的第二条来源。 */
+  version?: string;
+  /** 每一项是怎么来的（设置页显示「手动 / 环境变量 / 自动」）。 */
+  sources?: QqPaths['sources'];
+  /** 这次预检用的 `nt_msg.db`（显式配置或从账号目录推导），供排障显示。 */
+  qqDbPath?: string;
+  /** QQ 本体是否在线（按 `nt_msg.db` 锁）；拿不到 dbPath 时 undefined。 */
   qqRunning?: boolean;
 }
 
@@ -130,15 +138,33 @@ export interface ConsoleOptions {
   onebotByUin?: Record<string, BotOneBotConfig>;
   /** 配置文件中出现过的 `qq.dbPath`（由调用方传入，用于「QQ 是否在线」）。 */
   qqDbPath?: string;
+  /**
+   * 用户在设置页 / 配置文件里手动指定的路径。优先级高于环境变量与自动探测。
+   *
+   * 可变：设置页保存时直接改这一份（见 `setQqPathOverrides`）。
+   */
+  qqPathsOverride?: QqPathOverrides | null;
   /** WebUI 自己的日志器：会挂上 `Observability.logSink`。 */
   logger: Logger;
   observability: Observability;
   /** 注入点：测试用假 Bot。 */
   botFactory?: (options: Parameters<typeof createBot>[0]) => Bot;
+  /** 注入点：探测 QQ 路径（测试用来计数 / 短路真实磁盘）。 */
+  discoverPaths?: () => Promise<QqPaths>;
+  /** 路径缓存 TTL；默认 30 秒，测试可调小。 */
+  qqPathsTtlMs?: number;
 }
 
 /** 二维码登录单飞的窗口：45 秒硬超时（V45），期间重复请求复用同一次。 */
 const QR_TIMEOUT_MS = 45_000;
+
+/**
+ * 路径探测结果的有效期。
+ *
+ * 与 `login.db` 行缓存的 30 秒一致：QQ 升级 / 用户换目录之后不必重启进程，
+ * 最迟半分钟内生效。探测本身有 disk `existsSync` + 一次性注册表查询，不便宜也不贵。
+ */
+const QQ_PATHS_TTL_MS = 30_000;
 
 export interface QrSnapshot {
   /** 二维码 PNG（base64，不带 data: 前缀）。 */
@@ -170,7 +196,20 @@ export class ConsoleRuntime {
   /** `login.db` 行缓存（TTL 30s）：解密是同步 SQLite 打开，不该每个请求都跑一遍。 */
   private loginRowsCache: { rows: LoginRow[]; at: number } | undefined;
   private unsubscribers: Array<() => void> = [];
-  private qqPaths: QqPaths | undefined;
+  /**
+   * 路径探测结果缓存。TTL 与 `environment()` 的 30 秒一致：QQ 升级 / 用户换目录
+   * 之后不必重启进程，最迟半分钟内生效。
+   */
+  private qqPathsCache: { value: QqPaths; at: number } | undefined;
+  /** 同一时刻只跑一次探测（「重新检查」连点、登录页与设置页并发请求都会撞上）。 */
+  private qqPathsPending: Promise<QqPaths> | undefined;
+  /**
+   * `login.db` 路径列表的镜像。
+   *
+   * `readLoginDbAccounts()` 是同步的（解密是同步 SQLite 打开），不能 `await`；
+   * 由 `refreshLoginAccounts()` 预热后填进来，路径变了就清空。
+   */
+  private loginPathsCache: string[] | undefined;
   /** uin → OneBot 配置。内存镜像与配置文件同步，切换账号时读取。 */
   private readonly onebotByUin: Map<string, BotOneBotConfig>;
 
@@ -211,10 +250,13 @@ export class ConsoleRuntime {
 
   // ─────────────────────────── 登录页 ───────────────────────────
 
-  /** 环境检查：QQ 安装 / 数据根 / wrapper / major / QQ 是否在线。结果缓存 30 秒。 */
-  async environment(): Promise<LoginEnvironment> {
-    const paths = this.paths();
-    const installRoot = paths.qqExe ? dirnameOf(paths.qqExe) : null;
+  /**
+   * 环境检查：QQ 安装 / 数据根 / wrapper / major / QQ 是否在线。
+   *
+   * 路径结果缓存 30 秒；`refresh` 为 true 时立即作废重算（设置页的「重新检查」）。
+   */
+  async environment(refresh = false): Promise<LoginEnvironment> {
+    const paths = await this.paths(refresh);
     let client: LoginEnvironment['client'];
     if (paths.majorNode && this.options.binding.resolveAppidFromMajor) {
       try {
@@ -229,23 +271,30 @@ export class ConsoleRuntime {
         this.log.warn('major.node 解析失败', { cause: messageOf(cause) });
       }
     }
+
+    // 「QQ 本体在线」用哪个 nt_msg.db：显式配置优先，其次按当前账号推导。
+    const qqDbPath = await this.ntMsgDbForBoundAccount(paths);
     let qqRunning: boolean | undefined;
-    if (this.options.qqDbPath && this.options.native.isQqLoggedIn) {
+    if (qqDbPath && this.options.native.isQqLoggedIn) {
       try {
-        qqRunning = await this.options.native.isQqLoggedIn(this.options.qqDbPath);
+        qqRunning = await this.options.native.isQqLoggedIn(qqDbPath);
       } catch (cause) {
         this.log.warn('isQqLoggedIn 失败', { cause: messageOf(cause) });
       }
     }
+
     return {
       platform: process.platform,
       qqExe: paths.qqExe,
-      installRoot,
+      installRoot: paths.installRoot,
       wrapperNode: paths.wrapperNode,
       majorNode: paths.majorNode,
       dataRoot: paths.dataRoot,
       loginDbs: paths.loginDbs,
       ...(client ? { client } : {}),
+      ...(paths.version ? { version: paths.version } : {}),
+      ...(Object.keys(paths.sources).length > 0 ? { sources: paths.sources } : {}),
+      ...(qqDbPath ? { qqDbPath } : {}),
       ...(qqRunning !== undefined ? { qqRunning } : {}),
     };
   }
@@ -301,7 +350,7 @@ export class ConsoleRuntime {
     }
     if (!/^[1-9]\d{4,19}$/.test(uin)) throw new HttpError(400, 'BAD_UIN', 'uin 不合法');
 
-    const paths = this.paths();
+    const paths = await this.paths();
     const environment = await this.environment();
 
     // 1. 凭据：vault 优先，其次 login.db。
@@ -319,6 +368,26 @@ export class ConsoleRuntime {
     const botConfig: Omit<BotConfig, 'account'> = { ...this.options.config };
     if (onebot) botConfig.onebot = onebot;
     else delete botConfig.onebot;
+
+    // `qq.installDir` / `qq.dataDir` 只是给控制台探测用的提示，bot 不消费；
+    // `dbPath` 才是它真正读的字段 —— 显式配置优先，否则按账号目录推导。
+    const { installDir: _installDir, dataDir: _dataDir, ...qqRest } = this.options.config.qq ?? {};
+    void _installDir;
+    void _dataDir;
+    const derivedDbPath =
+      qqRest.dbPath ??
+      findNtMsgDb({
+        platform: paths.platform,
+        dataRoot: paths.dataRoot,
+        uin,
+        ...(stored.uid ? { uid: stored.uid } : {}),
+      }) ??
+      undefined;
+    if (derivedDbPath || Object.keys(qqRest).length > 0) {
+      botConfig.qq = { ...qqRest, ...(derivedDbPath ? { dbPath: derivedDbPath } : {}) };
+    } else {
+      delete botConfig.qq;
+    }
 
     const bot = this.botFactory({
       config: { ...botConfig, account: { uin } },
@@ -453,7 +522,7 @@ export class ConsoleRuntime {
     if (!environment.client) {
       throw new HttpError(400, 'NO_CLIENT_META', '找不到可解析的 major.node，无法开始扫码');
     }
-    const paths = this.paths();
+    const paths = await this.paths();
     const guid = this.readGuid(paths.dataRoot);
     if (!guid) throw new HttpError(400, 'NO_GUID', '读不到设备 guid，无法开始扫码');
 
@@ -747,9 +816,116 @@ export class ConsoleRuntime {
     this.events.emit('console', { qr: snapshot } as never);
   }
 
-  private paths(): QqPaths {
-    this.qqPaths ??= discoverQqPaths();
-    return this.qqPaths;
+  /**
+   * 取路径探测结果（TTL 缓存 + 单飞）。
+   *
+   * `refresh` 为 true 时不等 TTL，立刻作废并重算 —— 「重新检查」按钮走这条路。
+   */
+  private async paths(refresh = false): Promise<QqPaths> {
+    const ttl = this.options.qqPathsTtlMs ?? QQ_PATHS_TTL_MS;
+    if (!refresh && this.qqPathsCache && Date.now() - this.qqPathsCache.at < ttl) {
+      return this.qqPathsCache.value;
+    }
+    if (refresh) {
+      this.invalidateQqPaths();
+    } else if (this.qqPathsPending) {
+      return this.qqPathsPending;
+    }
+
+    const pending = this.probePaths().finally(() => {
+      if (this.qqPathsPending === pending) this.qqPathsPending = undefined;
+    });
+    this.qqPathsPending = pending;
+    return pending;
+  }
+
+  private async probePaths(): Promise<QqPaths> {
+    const discover = this.options.discoverPaths;
+    let paths: QqPaths;
+    if (discover) {
+      paths = await discover();
+    } else {
+      const hints = await ensureQqHints();
+      paths = discoverQqPaths({
+        ...(this.options.qqPathsOverride ? { overrides: this.options.qqPathsOverride } : {}),
+        hints,
+      });
+    }
+    this.qqPathsCache = { value: paths, at: Date.now() };
+    this.loginPathsCache = paths.loginDbs;
+    return paths;
+  }
+
+  /**
+   * 作废路径与前缀缓存。
+   *
+   * 三样必须一起清，否则会出现「路径新、账号还是旧的」这种半新半旧状态：
+   * 路径缓存、`login.db` 路径镜像、`login.db` 行缓存与探测缓存。
+   */
+  invalidateQqPaths(): void {
+    this.qqPathsCache = undefined;
+    this.qqPathsPending = undefined;
+    this.loginPathsCache = undefined;
+    this.loginRowsCache = undefined;
+    this.probeCache.clear();
+    // 注册表 / Spotlight 的探测结果同样可能随 QQ 重装而变。
+    clearQqHintsCache();
+  }
+
+  /**
+   * 设置页保存后调用：写入手动覆盖并立即失效。
+   *
+   * 直接改 `options.qqPathsOverride`（与「网络页改 `options.config`」同一模式），
+   * 下次 `paths()` 就用新值。
+   */
+  setQqPathOverrides(next: QqPathOverrides | null): void {
+    this.options.qqPathsOverride = next;
+    this.invalidateQqPaths();
+  }
+
+  /** 当前生效的手动覆盖（设置页预填输入框用）。 */
+  get qqPathOverrides(): QqPathOverrides | null {
+    return this.options.qqPathsOverride ?? null;
+  }
+
+  /**
+   * 当前账号要用的 `nt_msg.db`：显式配置优先，否则按账号目录推导。
+   *
+   * 推导依赖账号上下文（win32 要 uin、unix 要 uid），所以只在已经绑定账号时有用。
+   */
+  private async ntMsgDbForBoundAccount(paths: QqPaths): Promise<string | null> {
+    if (this.options.qqDbPath) return this.options.qqDbPath;
+    const uin = this.startedAccount;
+    if (!uin) return null;
+    const uid = await this.uidOfAccount(uin);
+    return findNtMsgDb({
+      platform: paths.platform,
+      dataRoot: paths.dataRoot,
+      uin,
+      ...(uid ? { uid } : {}),
+    });
+  }
+
+  /**
+   * 找这个 uin 的 uid：vault 优先（凭据里一定有），其次 `login.db` 的解码结果。
+   *
+   * 设置页可能在没进过登录页时直接打开，此时 `loginRowsCache` 还是空的；这里补一次
+   * 预热，让 `nt_msg.db` 的推导不依赖用户的操作顺序。
+   */
+  private async uidOfAccount(uin: string): Promise<string | undefined> {
+    const cached = this.loginRowsCache?.rows.find((item) => item.uin === uin);
+    if (cached) return cached.uid;
+
+    const stored = await this.options.vault.get(uin);
+    if (stored?.uid) return stored.uid;
+
+    try {
+      const rows = await this.refreshLoginAccounts();
+      return rows.find((item) => item.uin === uin)?.uid;
+    } catch (cause) {
+      this.log.warn('推导 nt_msg.db 时读 login.db 失败', { cause: messageOf(cause) });
+      return undefined;
+    }
   }
 
   /** 解 `login.db`；任何一步失败都返回空表（登录页应当能看到「没有账号」而不是 500）。 */
@@ -759,7 +935,7 @@ export class ConsoleRuntime {
     const binding = this.options.binding;
     if (!binding.testDatabaseKey || !binding.decryptLoginDb) return [];
     const rows: LoginRow[] = [];
-    for (const dbPath of this.paths().loginDbs) {
+    for (const dbPath of this.loginPathsCache ?? []) {
       try {
         const probe = binding.testDatabaseKey(dbPath, LOGIN_DB_KEY);
         // native 的 `testDatabaseKey` 是 async，这里必须同步拿算法 —— 用缓存的
@@ -795,8 +971,13 @@ export class ConsoleRuntime {
    */
   async refreshLoginAccounts(): Promise<LoginRow[]> {
     const binding = this.options.binding;
-    if (!binding.testDatabaseKey || !binding.decryptLoginDb) return [];
-    for (const dbPath of this.paths().loginDbs) {
+    // 无论如何先拿到路径：即使没有解密能力，`accounts()` 也要用 `loginDbs` 之外的信息。
+    const paths = await this.paths();
+    if (!binding.testDatabaseKey || !binding.decryptLoginDb) {
+      this.loginPathsCache = paths.loginDbs;
+      return [];
+    }
+    for (const dbPath of paths.loginDbs) {
       if (this.probeCache.has(dbPath)) continue;
       try {
         this.probeCache.set(dbPath, await binding.testDatabaseKey(dbPath, LOGIN_DB_KEY));
@@ -954,11 +1135,6 @@ function systemSnapshot(): ConsoleSystem {
 function avatarUrlOf(uin: string): string {
   // 走同源代理；页面的 CSP 不放行外网图片域名。
   return `/api/avatar/${encodeURIComponent(uin)}`;
-}
-
-function dirnameOf(path: string): string {
-  const index = Math.max(path.lastIndexOf('/'), path.lastIndexOf('\\'));
-  return index <= 0 ? path : path.slice(0, index);
 }
 
 function messageOf(cause: unknown): string {

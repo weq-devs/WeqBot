@@ -85,7 +85,35 @@ export async function loadConfigFile(path: string): Promise<LoadedConfig> {
   // `onebotByUin` 是最常被写错的一块（少个 networks、networks 里少一类）。
   if (record.onebotByUin !== undefined) validateOneBotMap(path, record.onebotByUin);
 
+  if (record.qq !== undefined) validateQq(path, record.qq);
+
   return record as LoadedConfig;
+}
+
+/** `qq` 段允许的键。拼错的键要报错，否则「配了但没生效」最难查。 */
+const QQ_KEYS = new Set(['dbPath', 'installDir', 'dataDir']);
+
+/**
+ * 校验 `qq` 段。
+ *
+ * 只查**形状**，不查路径是否存在 —— 数据盘可能暂时没挂载、QQ 可能还没装完，
+ * 这时把配置文件判成无效只会让用户先去修一个不是问题的问题。
+ */
+function validateQq(path: string, value: unknown): void {
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+    throw new ConfigError(path, 'qq 必须是对象');
+  }
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (!QQ_KEYS.has(key)) {
+      throw new ConfigError(path, `qq 里不认识的键 "${key}"（可用：${[...QQ_KEYS].join(' / ')}）`);
+    }
+    if (typeof item !== 'string') {
+      throw new ConfigError(path, `qq.${key} 必须是字符串（绝对路径）`);
+    }
+    if (item.trim().length === 0) {
+      throw new ConfigError(path, `qq.${key} 不能是空串：要清除就删掉这个键`);
+    }
+  }
 }
 
 function validateOneBotMap(path: string, value: unknown): void {
