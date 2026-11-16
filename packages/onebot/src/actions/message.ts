@@ -210,7 +210,8 @@ export const getVersionInfo: ActionDefinition<
   summary: '实现与协议版本',
   run: async () => ({
     app_name: 'WeqBot',
-    app_version: '0.0.0',
+    // 发布包由 build-release.mjs 在打包时把这里替换成 tag 版本；源码 / 测试环境回退占位。
+    app_version: process.env.WEQBOT_VERSION ?? '0.0.0',
     protocol_version: 'v11',
   }),
 };

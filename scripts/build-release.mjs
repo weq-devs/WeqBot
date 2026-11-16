@@ -232,7 +232,7 @@ function readmeText(version, platform, variant) {
 // ─────────────────────────── 打包 ───────────────────────────
 
 /** 把 CLI 打成单文件 ESM。 */
-async function bundleCli() {
+async function bundleCli(version) {
   await mkdir(dirname(bundleFile), { recursive: true });
   await build({
     entryPoints: [join(root, 'packages', 'node', 'src', 'cli.ts')],
@@ -243,6 +243,9 @@ async function bundleCli() {
     target: 'node22',
     legalComments: 'none',
     logLevel: 'warning',
+    // `get_version_info` 的 app_version 在发布包里固定成 tag 版本；
+    // 开发 / 测试不走打包，回退到源码里的 0.0.0 占位。
+    define: { 'process.env.WEQBOT_VERSION': JSON.stringify(version) },
     // 依赖里还有 CJS（ws）：ESM 输出里没有 `require`，用 createRequire 补上，
     // 否则 CJS 模块内部的 `require('events')` 会在启动时就抛错。
     banner: {
@@ -335,7 +338,7 @@ async function main() {
 
   log(`版本 ${version}；平台 ${platforms.join(' / ')}；变体 ${variants.join(' / ')}`);
   log(`Node ${nodeVersion}（with-node 变体自带）`);
-  await bundleCli();
+  await bundleCli(version);
 
   const produced = [];
   for (const platform of platforms) {

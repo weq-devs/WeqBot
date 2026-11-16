@@ -32,6 +32,20 @@ jobs:
         with:
           ref: ${{ github.event.inputs.tag || github.ref }}
 
+      # 先校验 tag，再装依赖 / 构建：拼错的 tag 几秒内失败，而不是跑完 40 分钟。
+      - name: 解析版本
+        id: version
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          if ! printf '%s' "$INPUT_TAG" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+([-+][0-9A-Za-z.-]+)?$'; then
+            echo "::error::tag 不是 vX.Y.Z 形式（可带 -prerelease / +build）：$INPUT_TAG"
+            exit 1
+          fi
+          version="${INPUT_TAG#v}"
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
       - uses: pnpm/action-setup@v4
 
       - uses: actions/setup-node@v4
@@ -56,24 +70,13 @@ jobs:
       - name: 准备打包工具
         run: sudo apt-get update -qq && sudo apt-get install -y -qq zip unzip
 
-      - name: 解析版本
-        id: version
-        env:
-          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: |
-          version="${INPUT_TAG#v}"
-          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'; then
-            echo "::error::tag 不是 vX.Y.Z 形式：$INPUT_TAG"
-            exit 1
-          fi
-          echo "tag=v$version" >> "$GITHUB_OUTPUT"
-          echo "version=$version" >> "$GITHUB_OUTPUT"
-
       - name: 打包（5 平台 × 2 变体）
         run: node scripts/build-release.mjs --version "${{ steps.version.outputs.version }}" --out dist/release
 
       - name: 写发布说明
         env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
           VERSION: ${{ steps.version.outputs.version }}
           TAG: ${{ steps.version.outputs.tag }}
         run: |
@@ -97,6 +100,15 @@ jobs:
           解压前先校验：\`sha256sum -c SHA256SUMS.txt\`（Windows 用 \`certutil\` 或 \`Get-FileHash\` 对照）。
           原生组件目录可用 \`--native-dir\` / \`WEQBOT_NATIVE_DIR\` 改到别处。
           EOF
+
+          # 在固定说明后追加 GitHub 自动生成的 commit / PR 列表。
+          # 首个 tag 或 API 暂时不可用时留空，不影响发版。
+          changes=$(gh api "repos/${REPO}/releases/generate-notes" \
+            -f tag_name="$TAG" --jq '.body' 2>/dev/null || true)
+          if [ -n "$changes" ]; then
+            printf '\n### 变更\n\n%s\n' "$changes" >> "$RUNNER_TEMP/notes.md"
+          fi
+
           cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
 
       - name: 发布到 GitHub Releases
@@ -108,7 +120,11 @@ jobs:
           prerelease=""
           case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
           if gh release view "$TAG" >/dev/null 2>&1; then
-            # 重跑同一次 release：覆盖资产，不新建。
+            # 重跑同一次 release：正文 / 标题 / 预发布标记也一起刷新，再覆盖资产。
+            gh release edit "$TAG" \
+              --title "WeqBot $TAG" \
+              --notes-file "$RUNNER_TEMP/notes.md" \
+              $prerelease
             gh release upload "$TAG" dist/release/* --clobber
           else
             gh release create "$TAG" dist/release/* \
