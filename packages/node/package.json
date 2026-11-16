@@ -1,6 +1,6 @@
 {
   "name": "@weqbot/node",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "独立宿主：唯一允许加载 .node 的包（native 加载器 + CLI）。WeQ 嵌入时不得依赖本包",

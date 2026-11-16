@@ -1,6 +1,6 @@
 {
   "name": "@weqbot/onebot",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "private": true,
   "type": "module",
   "description": "OneBot v11 适配器：action 注册表 / 事件转换 / WS + HTTP 网络层 / message_id 映射",
