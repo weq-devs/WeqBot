@@ -700,7 +700,12 @@ export function createBot(options: CreateBotOptions): Bot {
         ...(selfUid ? { uid: selfUid } : {}),
         state: machine.state,
         ...(session ? { sessionId: session.sessionId } : {}),
-        ...(onlineSince !== undefined && machine.state === 'online' ? { onlineSince } : {}),
+        // `degraded` 是重连窗口：会话还没结束，在线时长要继续走，
+        // 否则页面会在每次重连时跳回「在线 0 秒」。
+        ...(onlineSince !== undefined &&
+        (machine.state === 'online' || machine.state === 'degraded')
+          ? { onlineSince }
+          : {}),
         ...(storedAccount ? { device: storedAccount.device } : {}),
         reconnects,
         ...(secTokenRotatesAt !== undefined ? { secTokenRotatesAt } : {}),

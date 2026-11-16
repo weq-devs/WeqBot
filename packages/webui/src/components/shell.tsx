@@ -22,10 +22,10 @@ import {
   MoreVertical,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { api } from '../api';
 import type { ConsolePhase, Overview } from '../api/types';
-import { usePolling } from '../lib/hooks';
+import { useNow, usePolling } from '../lib/hooks';
 import { EASE_OUT, enterRise, enterStagger, screenExit } from '../lib/motion';
 import { formatDuration, PHASE_LABEL } from '../lib/format';
 import { Logo } from './logo';
@@ -88,10 +88,12 @@ export function Shell({
   }, []);
 
   const account = overview?.account;
-  const onlineLabel = useMemo(() => {
-    if (phase !== 'online' || !account?.onlineSince) return PHASE_LABEL[phase] ?? phase;
-    return `在线 ${formatDuration(Date.now() - account.onlineSince)}`;
-  }, [phase, account?.onlineSince]);
+  // 顶栏时长要跟着秒走，不能只在 overview 轮询时重算（否则会停在「在线 0 秒」）。
+  const now = useNow();
+  const onlineLabel =
+    phase === 'online' && account?.onlineSince
+      ? `在线 ${formatDuration(now - account.onlineSince)}`
+      : (PHASE_LABEL[phase] ?? phase);
 
   const logout = useCallback(
     async (forgetCredential: boolean) => {

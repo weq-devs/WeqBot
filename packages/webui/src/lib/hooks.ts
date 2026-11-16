@@ -46,6 +46,22 @@ export function useSubscription<T>(
   return { data, error, loading, reload };
 }
 
+/**
+ * 每 `intervalMs` 返回一次当前时间。
+ *
+ * 相对时长（「在线 47 分」）不能只在数据刷新时算一次：`onlineSince` 是常量，
+ * 把它放进 `useMemo` 的依赖里会让文案永远停在第一次算出的值（常见表现是
+ * 一直显示「在线 0 秒」）。需要走时的组件用这个钩子拿到每秒变化的时间。
+ */
+export function useNow(intervalMs = 1000): number {
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), intervalMs);
+    return () => clearInterval(timer);
+  }, [intervalMs]);
+  return now;
+}
+
 /** 按间隔轮询一个异步函数（页面不在前台时暂停）。 */
 export function usePolling<T>(
   load: () => Promise<T>,

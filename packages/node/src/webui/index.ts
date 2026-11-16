@@ -88,15 +88,12 @@ export async function runWebUi(options: RunWebUiOptions): Promise<WebUiHandle> {
     observability,
     logger: log,
     readConfig: () => options.config.onebot,
-    ...(options.configPath
-      ? {
-          saveConfig: async (config: BotOneBotConfig) => {
-            await saveOneBotConfig(options.configPath!, config);
-            // 进程内也要跟着变：下次上线 / 热重启用的是这一份。
-            options.config.onebot = config;
-          },
-        }
-      : {}),
+    // 没有 `--config` 时也要把新配置写回本进程：否则网络页保存后，这次会话
+    // 能临时生效，但退出重登 / 下次上线又变回「未启用」。
+    saveConfig: async (config: BotOneBotConfig) => {
+      if (options.configPath) await saveOneBotConfig(options.configPath, config);
+      options.config.onebot = config;
+    },
   });
 
   const staticDir = options.staticDir ?? defaultStaticDir();

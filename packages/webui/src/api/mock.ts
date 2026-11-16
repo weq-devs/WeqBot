@@ -423,7 +423,7 @@ export const mockApi = {
   debug: {
     async actions() {
       await sleep(latency(100));
-      return ACTIONS;
+      return { actions: ACTIONS, phase: state.phase, onebot: true };
     },
     async run(name: string, params: Record<string, unknown>) {
       await sleep(latency(320));

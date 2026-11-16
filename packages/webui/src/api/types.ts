@@ -247,6 +247,13 @@ export interface ActionInfo {
   write: boolean;
 }
 
+/** `GET /api/actions`：列表 + 为空时的原因（账号阶段 / OneBot 是否启用）。 */
+export interface ActionsSnapshot {
+  actions: ActionInfo[];
+  phase: ConsolePhase;
+  onebot: boolean;
+}
+
 export interface ActionRunResult {
   status: 'ok' | 'failed';
   retcode: number;
@@ -256,7 +263,7 @@ export interface ActionRunResult {
 }
 
 export interface DebugApi {
-  actions(): Promise<ActionInfo[]>;
+  actions(): Promise<ActionsSnapshot>;
   run(name: string, params: Record<string, unknown>): Promise<ActionRunResult>;
 }
 

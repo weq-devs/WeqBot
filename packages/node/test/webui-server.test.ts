@@ -29,6 +29,7 @@ function fakeRuntime(state: {
   actions?: string[];
   result?: { status: string; retcode: number; data: unknown };
   calls?: Array<{ name: string; params: unknown }>;
+  onebot?: boolean;
 }): ConsoleRuntime {
   const actions = state.actions ?? ['get_login_info', 'send_group_msg'];
   const adapter = {
@@ -56,12 +57,15 @@ function fakeRuntime(state: {
   return {
     reloaded,
     currentPhase: (state.phase ?? 'online') as never,
-    currentBot: {
-      onebot: adapter,
-      reloadOneBot: async (config: unknown) => {
-        reloaded.push(config);
-      },
-    } as never,
+    currentBot:
+      state.onebot === false
+        ? undefined
+        : ({
+            onebot: adapter,
+            reloadOneBot: async (config: unknown) => {
+              reloaded.push(config);
+            },
+          } as never),
     accounts: async () => [],
     environment: async () => ({
       platform: process.platform,
@@ -93,6 +97,8 @@ async function start(
     staticDir?: string;
     actions?: string[];
     result?: { status: string; retcode: number; data: unknown };
+    phase?: string;
+    onebot?: boolean;
   } = {},
 ): Promise<Harness> {
   const auth = new WebUiAuth(TOKEN);
@@ -100,6 +106,8 @@ async function start(
   const runtime = fakeRuntime({
     ...(options.actions ? { actions: options.actions } : {}),
     ...(options.result ? { result: options.result } : {}),
+    ...(options.phase ? { phase: options.phase } : {}),
+    ...(options.onebot === false ? { onebot: false } : {}),
   });
   const router = createWebUiRouter({
     auth,
@@ -351,11 +359,14 @@ test('GET /api/actions 列出 group / write；POST 执行并把结果回给前�
 
     const list = await call(harness.port, '/api/actions', { headers: { cookie } });
     assert.equal(list.status, 200);
-    const actions = JSON.parse(list.body).actions as Array<{
-      name: string;
-      group: string;
-      write: boolean;
-    }>;
+    const snapshot = JSON.parse(list.body) as {
+      actions: Array<{ name: string; group: string; write: boolean }>;
+      phase: string;
+      onebot: boolean;
+    };
+    assert.equal(snapshot.phase, 'online');
+    assert.equal(snapshot.onebot, true);
+    const actions = snapshot.actions;
     assert.equal(actions.length, 2);
     assert.deepEqual(
       actions.find((item) => item.name === 'send_group_msg'),
@@ -390,7 +401,55 @@ test('未知 action 404；没有 OneBot 适配器时 409', async () => {
   }
 });
 
+test('409 文案区分「账号不在线」与「在线但 OneBot 未启用」', async () => {
+  const offline = await start({ phase: 'offline', onebot: false });
+  try {
+    const cookie = await login(offline.port);
+    const reply = await call(offline.port, '/api/actions/get_login_info', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(reply.status, 409);
+    assert.match(JSON.parse(reply.body).message, /账号不在线/);
+  } finally {
+    await offline.close();
+  }
+
+  const online = await start({ phase: 'online', onebot: false });
+  try {
+    const cookie = await login(online.port);
+    const reply = await call(online.port, '/api/actions/get_login_info', {
+      method: 'POST',
+      headers: { cookie, 'content-type': 'application/json' },
+      body: '{}',
+    });
+    assert.equal(reply.status, 409);
+    assert.match(JSON.parse(reply.body).message, /OneBot 网络未启用/);
+  } finally {
+    await online.close();
+  }
+});
+
 // ─────────────────────────── 网络配置 ───────────────────────────
+
+test('GET /api/onebot/config 在未配置时返回空骨架', async () => {
+  const harness = await start();
+  try {
+    const cookie = await login(harness.port);
+    const reply = await call(harness.port, '/api/onebot/config', { headers: { cookie } });
+    assert.equal(reply.status, 200);
+    const config = JSON.parse(reply.body).config;
+    assert.deepEqual(config.networks, {
+      httpServers: [],
+      httpClients: [],
+      wsServers: [],
+      wsClients: [],
+    });
+  } finally {
+    await harness.close();
+  }
+});
 
 test('PUT /api/onebot/config：accessToken 打码值不会被写回成字面量', async () => {
   const harness = await start();

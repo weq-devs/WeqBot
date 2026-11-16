@@ -17,10 +17,10 @@ import {
   Wifi,
 } from 'lucide-react';
 import { motion } from 'motion/react';
-import { type ReactNode, useCallback, useEffect, useState } from 'react';
+import { type ReactNode, useCallback } from 'react';
 import { api } from '../../api';
 import type { LogStats, NetworkSnapshot } from '../../api/types';
-import { usePolling } from '../../lib/hooks';
+import { useNow, usePolling } from '../../lib/hooks';
 import {
   formatCompact,
   formatDateTime,
@@ -35,11 +35,7 @@ import './overview.css';
 
 export function OverviewPage({ overview, phase, reloadOverview }: PageProps) {
   // 每秒刷新「在线时长」这类相对时间，避免只跟着 3 秒轮询跳。
-  const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    const timer = setInterval(() => setNow(Date.now()), 1000);
-    return () => clearInterval(timer);
-  }, []);
+  const now = useNow();
 
   const loadStats = useCallback(() => api.logs.stats(), []);
   const { data: stats } = usePolling(loadStats, 5000);
@@ -49,7 +45,8 @@ export function OverviewPage({ overview, phase, reloadOverview }: PageProps) {
   }
 
   const account = overview.account;
-  const online = account.onlineSince ? now - account.onlineSince : 0;
+  // 掉线重连期间 `onlineSince` 可能缺失；缺失时显示「—」，不要显示成 0 秒。
+  const online = account.onlineSince ? now - account.onlineSince : undefined;
   const actions = stats?.actions;
 
   return (
@@ -68,7 +65,7 @@ export function OverviewPage({ overview, phase, reloadOverview }: PageProps) {
           <p className="ov-account-facts">
             <span>
               <Clock size={14} aria-hidden="true" />
-              已在线 {formatDuration(online)}
+              已在线 {online === undefined ? '—' : formatDuration(online)}
             </span>
             {account.device && (
               <span>

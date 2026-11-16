@@ -19,7 +19,7 @@ import {
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { api, ApiError } from '../../api';
-import type { ActionInfo, ActionRunResult } from '../../api/types';
+import type { ActionInfo, ActionRunResult, ActionsSnapshot } from '../../api/types';
 import { Button } from '../../components/button';
 import { ACTION_GROUP_LABEL, formatMs } from '../../lib/format';
 import './debug.css';
@@ -27,7 +27,7 @@ import './debug.css';
 const NICHE_EMPTY = '{}';
 
 export function DebugPage() {
-  const [actions, setActions] = useState<ActionInfo[]>();
+  const [snapshot, setSnapshot] = useState<ActionsSnapshot>();
   const [selected, setSelected] = useState<string>();
   const [filter, setFilter] = useState('');
   const [params, setParams] = useState('');
@@ -41,10 +41,10 @@ export function DebugPage() {
     let active = true;
     api.debug
       .actions()
-      .then((list) => {
+      .then((value) => {
         if (!active) return;
-        setActions(list);
-        if (list[0] && !selected) setSelected(list[0].name);
+        setSnapshot(value);
+        if (value.actions[0] && !selected) setSelected(value.actions[0].name);
       })
       .catch((cause) => {
         if (active) setFailure(describe(cause));
@@ -62,8 +62,8 @@ export function DebugPage() {
     setFailure(undefined);
   }, [selected]);
 
-  const groups = useMemo(() => groupActions(actions ?? [], filter), [actions, filter]);
-  const current = actions?.find((action) => action.name === selected);
+  const groups = useMemo(() => groupActions(snapshot?.actions ?? [], filter), [snapshot, filter]);
+  const current = snapshot?.actions.find((action) => action.name === selected);
   const parsed = useMemo(() => parseParams(params), [params]);
 
   const run = useCallback(async () => {
@@ -110,10 +110,10 @@ export function DebugPage() {
           />
         </label>
         <div className="dbg-action-list">
-          {actions === undefined ? (
+          {snapshot === undefined ? (
             <p className="dbg-empty">正在读取…</p>
-          ) : actions.length === 0 ? (
-            <p className="dbg-empty">账号不在线，没有可执行的 action。</p>
+          ) : snapshot.actions.length === 0 ? (
+            <p className="dbg-empty">{emptyReasonOf(snapshot)}</p>
           ) : groups.length === 0 ? (
             <p className="dbg-empty">没有匹配的 action。</p>
           ) : (
@@ -286,6 +286,21 @@ export function DebugPage() {
       </section>
     </div>
   );
+}
+
+/** 空列表要说清楚是哪一种，否则用户会被「账号不在线」引到错误方向。 */
+function emptyReasonOf(snapshot: ActionsSnapshot): string {
+  if (snapshot.phase === 'starting') return '账号正在上线，action 还没有注册。';
+  if (snapshot.phase === 'no-account' || snapshot.phase === 'offline') {
+    return '账号不在线，没有可执行的 action。';
+  }
+  if (snapshot.onebot === false) {
+    return '账号在线，但 OneBot 网络未启用。请到「网络」页添加一个网络并保存。';
+  }
+  if (snapshot.phase === 'online' && snapshot.onebot === true) {
+    return 'OneBot 已启动，但没有注册 action。';
+  }
+  return '没有可执行的 action（账号不在线，或 OneBot 未启用）。';
 }
 
 function groupActions(

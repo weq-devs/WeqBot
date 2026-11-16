@@ -131,7 +131,9 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
 
       if (path === '/api/onebot/config') {
         if (request.method === 'GET') {
-          return ok(response, { config: maskConfig(options.readConfig()) });
+          // 没配置过 OneBot 时也给一份空骨架：网络页要能直接「添加」并保存，
+          // 而不是拿到 undefined 后连草稿都建不出来。
+          return ok(response, { config: maskConfig(options.readConfig() ?? EMPTY_ONEBOT_CONFIG) });
         }
         if (request.method === 'PUT') {
           const body = await readJson<{ config?: unknown }>(request);
@@ -161,7 +163,13 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
 
       if (path === '/api/actions') {
         requireMethod(request, 'GET');
-        return ok(response, { actions: listActions(runtime) });
+        // 空列表有两种完全不同的原因：账号不在线，或账号在线但 OneBot 没启用。
+        // 页面需要这个区分，否则只能看到一句误导性的「账号不在线」。
+        return ok(response, {
+          actions: listActions(runtime),
+          phase: runtime.currentPhase,
+          onebot: Boolean(runtime.currentBot?.onebot),
+        });
       }
 
       const actionMatch = /^\/api\/actions\/([A-Za-z0-9_]+)$/.exec(path);
@@ -300,7 +308,16 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
     name: string,
   ): Promise<boolean> {
     const adapter = runtime.currentBot?.onebot;
-    if (!adapter) throw new HttpError(409, 'NOT_ONLINE', '账号不在线，没有可执行的 action');
+    if (!adapter) {
+      // 在线但没有 OneBot 时别报「不在线」：那会把用户引到错误的排查方向。
+      throw new HttpError(
+        409,
+        'NOT_ONLINE',
+        runtime.currentPhase === 'online'
+          ? '账号在线，但 OneBot 网络未启用；请到「网络」页添加网络并保存'
+          : '账号不在线，没有可执行的 action',
+      );
+    }
     if (!adapter.actions().includes(name)) {
       throw new HttpError(404, 'NO_ACTION', `未知的 action：${name}`);
     }
@@ -390,6 +407,11 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
 function isStreamName(value: string): value is StreamName {
   return value === 'logs' || value === 'actions' || value === 'events';
 }
+
+/** 未配置 OneBot 时网络页使用的空骨架（`networks` 四类都要在）。 */
+const EMPTY_ONEBOT_CONFIG: BotOneBotConfig = {
+  networks: { httpServers: [], httpClients: [], wsServers: [], wsClients: [] },
+};
 
 /** `GET /api/onebot/config` 把 accessToken 打码；`PUT` 时原样保留（见 `validateOneBotConfig`）。 */
 function maskConfig(config: BotOneBotConfig | undefined): BotOneBotConfig | undefined {
