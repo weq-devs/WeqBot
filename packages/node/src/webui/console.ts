@@ -37,14 +37,13 @@ import { discoverQqPaths, LOGIN_DB_KEY, type QqPathOverrides, type QqPaths } fro
 
 export type ConsolePhase = 'no-account' | 'starting' | 'online' | 'offline';
 
+/** 可以直接上线的本机账号（没有 a1 的不在列表里，见 `accounts()`）。 */
 export interface ConsoleAccount {
   uin: string;
   uid: string;
   nickname?: string;
   avatarUrl?: string;
   lastLoginAt?: number;
-  /** 本机 vault 里是否有这个账号的 a1。 */
-  hasA1: boolean;
 }
 
 export interface ConsoleOverview {
@@ -302,18 +301,21 @@ export class ConsoleRuntime {
   /**
    * 本机账号列表：`login.db` 解出来的行 + vault 里已有的凭据合并。
    *
-   * **不返回 a1**。`hasA1` 只看 vault（`login.db` 的 `a1Payload` 不落盘，
-   * 要用的时候在 `startAccount` 里现解）。
+   * **只返回能直接上线的账号** —— 没有 a1 的行不出现。列表是「点一下就能登录」的
+   * 入口，而 `startAccount` 拿不到 a1 时必然报 `NO_CREDENTIAL`；把这些行一起列出来
+   * 只会让用户点进去再被打回来。没有 a1 的账号去扫码登录。
+   *
+   * **不返回 a1**（`login.db` 的 `a1Payload` 只在 `startAccount` 的局部变量里活一次）。
    */
   async accounts(): Promise<ConsoleAccount[]> {
     const vaultAccounts = await this.options.vault.list();
     const merged = new Map<string, ConsoleAccount>();
+    // vault 里的凭据一定有 a1（`get()` 读不出 a1 会直接抛 CREDENTIAL_CORRUPT）。
     for (const account of vaultAccounts) {
       merged.set(account.uin, {
         uin: account.uin,
         uid: account.uid,
         avatarUrl: avatarUrlOf(account.uin),
-        hasA1: true,
         ...(account.lastOnlineAt ? { lastLoginAt: account.lastOnlineAt } : {}),
       });
     }
@@ -321,6 +323,8 @@ export class ConsoleRuntime {
     await this.refreshLoginAccounts();
     for (const row of this.readLoginDbAccounts()) {
       const existing = merged.get(row.uin);
+      // 两处都没有 a1 就不该出现在列表里，见方法注释。
+      if (!existing && !row.a1Payload) continue;
       merged.set(row.uin, {
         uin: row.uin,
         uid: row.uid,
@@ -329,7 +333,6 @@ export class ConsoleRuntime {
         // `avatarUrl`（thirdqq.qlogo.cn 带 k/kti 签名）需要服务端原样转发才有。
         avatarUrl: avatarUrlOf(row.uin),
         ...(row.lastLoginAt ? { lastLoginAt: row.lastLoginAt * 1000 } : {}),
-        hasA1: existing?.hasA1 ?? Boolean(row.a1Payload),
       });
       // 代理用的上游 URL 留在服务端，不发给页面。
       if (row.avatarUrl) this.avatarSources.set(row.uin, row.avatarUrl);

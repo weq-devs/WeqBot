@@ -99,20 +99,19 @@ const ENVIRONMENT: LoginEnvironment = {
   qqRunning: false,
 };
 
+// 服务端只返回有 a1 的账号（没有 a1 的点了必然失败），mock 保持一致。
 const ACCOUNTS: LoginAccount[] = [
   {
     uin: '10002',
     uid: 'u_LKt3AdAIMP-CUfn6ydzDzw',
     nickname: '冬眠的猫',
     lastLoginAt: Date.now() - 3 * 60 * 60 * 1000,
-    hasA1: true,
   },
   {
     uin: '10001',
     uid: 'u_9kPq2SdLmNx6RtVw8YzAbc',
     nickname: '小号测试',
     lastLoginAt: Date.now() - 9 * 24 * 60 * 60 * 1000,
-    hasA1: false,
   },
 ];
 

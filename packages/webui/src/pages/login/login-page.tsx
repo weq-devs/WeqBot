@@ -215,11 +215,6 @@ export function LoginPage({ phase, onLocked }: { phase: ConsolePhase; onLocked()
                                   : ''}
                               </span>
                             </span>
-                            {!account.hasA1 && (
-                              <span className="login-badge" data-tone="warning">
-                                无 a1
-                              </span>
-                            )}
                             <span className="login-account-action">
                               {starting === account.uin ? (
                                 <LoaderCircle size={16} className="spin" aria-label="正在登录" />
@@ -370,8 +365,11 @@ function EmptyAccounts({ onRescan }: { onRescan(): void }) {
   return (
     <div className="login-empty">
       <AlertTriangle size={20} aria-hidden="true" />
-      <strong>没有找到本机账号</strong>
-      <p>这台机器上还没有 QQ 的登录记录，或者 login.db 读不出来。用手机扫码登录更直接。</p>
+      <strong>没有可以登录的本机账号</strong>
+      <p>
+        这台机器上没有 QQ 的登录记录、login.db 读不出来，或者记录里没有可用的 a1。
+        用手机扫码登录更直接。
+      </p>
       <Button variant="secondary" onClick={onRescan}>
         <RefreshCw size={15} aria-hidden="true" />
         重新检测

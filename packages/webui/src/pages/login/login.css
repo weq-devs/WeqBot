@@ -173,22 +173,6 @@
   color: var(--accent-text);
 }
 
-/* 徽标：小面积 + 文字，不用纯色块（配色纪律第 3 条）。 */
-.login-badge {
-  flex: none;
-  padding: 2px 7px;
-  border: 1px solid var(--border-strong);
-  border-radius: var(--radius-full);
-  color: var(--text-muted);
-  font-size: 11px;
-  white-space: nowrap;
-}
-
-.login-badge[data-tone="warning"] {
-  border-color: color-mix(in oklch, var(--status-warning) 40%, transparent);
-  color: color-mix(in oklch, var(--status-warning) 80%, var(--text));
-}
-
 .skeleton-row {
   height: 60px;
   background: linear-gradient(90deg, var(--bg-sunken), var(--bg-hover), var(--bg-sunken));

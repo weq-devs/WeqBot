@@ -48,13 +48,17 @@ export interface LoginEnvironment {
   qqRunning?: boolean;
 }
 
+/**
+ * 可以直接上线的本机账号。
+ *
+ * 服务端只返回有 a1 的账号 —— 没有 a1 的行点进去必然失败，不做成可点条目。
+ */
 export interface LoginAccount {
   uin: string;
   uid: string;
   nickname?: string;
   avatarUrl?: string;
   lastLoginAt?: number;
-  hasA1: boolean;
 }
 
 export type QrState =
