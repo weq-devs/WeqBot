@@ -22,6 +22,7 @@
     "check:pure-ts": "node scripts/check-pure-ts.mjs",
     "test": "node --import tsx --test \"packages/*/test/*.test.ts\"",
     "verify": "pnpm run check:pure-ts && pnpm run typecheck && pnpm run docs:actions:check && pnpm run test",
+    "package:release": "node scripts/build-release.mjs",
     "native:fetch": "node scripts/fetch-native.mjs",
     "native:check": "node scripts/fetch-native.mjs --check",
     "sign:audit": "tsx scripts/sign-audit.mjs",
@@ -34,6 +35,7 @@
   "devDependencies": {
     "@biomejs/biome": "^2.6.7",
     "@types/node": "^26.6.6",
+    "esbuild": "^0.28.2",
     "tsx": "^4.23.15",
     "typescript": "^7.0.2"
   }

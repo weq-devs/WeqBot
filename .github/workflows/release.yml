@@ -1,0 +1,128 @@
+name: Release
+
+# 打 tag 即发版：git tag v0.1.0 && git push origin v0.1.0
+# 也可以在 Actions 页面手动跑，给一个已存在的 tag。
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '要发布的 tag（形如 v0.1.0，必须已存在）'
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    name: 五平台 × 两变体
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    env:
+      # 与 scripts/build-release.mjs 的默认值一致；改这里就同时改了自带运行时和 CI 的 Node。
+      WEQBOT_NODE_VERSION: 22.23.5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.WEQBOT_NODE_VERSION }}
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # 发版前跑一遍门禁：护栏 / 类型 / 文档快照 / 测试，红了就不发。
+      - name: pnpm verify
+        run: pnpm verify
+
+      - name: 构建 WebUI
+        run: pnpm build:webui
+
+      # 按 native/pinned.json 锚定的 tag 取五个平台的 nt_helper.node。
+      - name: 取原生组件
+        run: pnpm native:fetch --all
+
+      - name: 准备打包工具
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zip unzip
+
+      - name: 解析版本
+        id: version
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          version="${INPUT_TAG#v}"
+          if ! printf '%s' "$version" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+'; then
+            echo "::error::tag 不是 vX.Y.Z 形式：$INPUT_TAG"
+            exit 1
+          fi
+          echo "tag=v$version" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: 打包（5 平台 × 2 变体）
+        run: node scripts/build-release.mjs --version "${{ steps.version.outputs.version }}" --out dist/release
+
+      - name: 写发布说明
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          cat > "$RUNNER_TEMP/notes.md" <<EOF
+          WeqBot ${VERSION} 的预编译包，五个平台各有两种形态：
+
+          | 形态 | 资产后缀 | 需要本机 Node |
+          | --- | --- | --- |
+          | 自带运行时 | `-with-node` | 不需要（包内自带 Node ${WEQBOT_NODE_VERSION}） |
+          | 自带 Node | 无后缀 | 需要 Node.js ≥ 22.12.0 |
+
+          平台：`win32-x64`、`linux-x64`、`linux-arm64`、`darwin-x64`、`darwin-arm64`。
+          每个包都带该平台的原生组件与 WebUI 静态资源，解压后：
+
+          \`\`\`bash
+          ./weqbot --help          # Windows: weqbot.cmd --help
+          ./weqbot                 # 起控制台，浏览器里选账号登录
+          ./weqbot --account <uin> # 直接上线某个账号
+          \`\`\`
+
+          解压前先校验：\`sha256sum -c SHA256SUMS.txt\`（Windows 用 \`certutil\` 或 \`Get-FileHash\` 对照）。
+          原生组件目录可用 \`--native-dir\` / \`WEQBOT_NATIVE_DIR\` 改到别处。
+          EOF
+          cat "$RUNNER_TEMP/notes.md" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: 发布到 GitHub Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          prerelease=""
+          case "$VERSION" in *-*) prerelease="--prerelease" ;; esac
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            # 重跑同一次 release：覆盖资产，不新建。
+            gh release upload "$TAG" dist/release/* --clobber
+          else
+            gh release create "$TAG" dist/release/* \
+              --verify-tag \
+              --title "WeqBot $TAG" \
+              --notes-file "$RUNNER_TEMP/notes.md" \
+              $prerelease
+          fi
+
+      - name: 汇总资产
+        run: |
+          {
+            echo "### 已发布资产"
+            echo '```'
+            ls -lh dist/release | tail -n +2 | awk '{print $5"\t"$9}'
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"

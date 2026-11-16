@@ -1,6 +1,8 @@
 node_modules/
 dist/
 out/
+# scripts/build-release.mjs 的暂存区与 Node 运行时缓存
+.release/
 *.tsbuildinfo
 *.log
 # 只忽略根目录的运行时日志。**不能**写成 `logs/`：那会连

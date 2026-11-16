@@ -1,0 +1,45 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: 护栏 / 类型 / 测试 / 构建
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # 不写 version：从根 package.json 的 packageManager 读（pnpm@12.8.1）。
+      - uses: pnpm/action-setup@v4
+
+      # 与发布包里自带的 Node 同版本，CI 才算真跑过发布用的运行时。
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22.23.5
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      # 架构护栏 + 全量类型检查 + OneBot 文档快照 + 契约测试。
+      - name: pnpm verify
+        run: pnpm verify
+
+      # 前端与文档站各自构建一遍：干净 clone 上构建不出来，发版时才发现的代价太大。
+      - name: 构建 WebUI
+        run: pnpm build:webui
+
+      - name: 构建文档站
+        run: pnpm docs:build
