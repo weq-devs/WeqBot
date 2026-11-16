@@ -263,8 +263,8 @@ export function Shell({
                       onClick={() => void logout(true)}
                     >
                       <ShieldOff size={15} aria-hidden="true" />
-                      退出并删除本机凭据
-                      <span className="shell-menu-hint">下次要重新登录</span>
+                      退出并删除凭据
+                      <span className="shell-menu-hint">下次重新登录</span>
                     </button>
                     <hr className="shell-menu-sep" />
                     <button
