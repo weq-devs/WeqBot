@@ -75,6 +75,37 @@ function run(command, args, options = {}) {
   }
 }
 
+/** `cmd.exe /c` 下单参数转义：只给含空白 / 元字符的参数加引号。 */
+function quoteForCmd(arg) {
+  return /[\s"&|<>^()]/.test(arg) ? `"${arg.replace(/"/g, '""')}"` : arg;
+}
+
+/**
+ * 拼出能真正被 spawn 的 pnpm 调用。
+ *
+ * Windows 上 PATH 里的 `pnpm` 是 `pnpm.CMD`（batch 脚本），CreateProcess 不能直接执行它，
+ * `spawnSync('pnpm')` 会 ENOENT / EINVAL。这里优先复用调用方给的 `npm_execpath`
+ * （`pnpm dev` 时它直接指向 pnpm 可执行文件）；没有时在 Windows 上交给 cmd.exe 解析 PATH。
+ */
+function pnpmInvocation(args) {
+  const execPath = process.env.npm_execpath;
+  if (execPath && (process.env.npm_config_user_agent ?? '').startsWith('pnpm/')) {
+    return /\.(cjs|mjs|js)$/i.test(execPath)
+      ? { command: process.execPath, args: [execPath, ...args] }
+      : { command: execPath, args };
+  }
+  if (process.platform !== 'win32') return { command: 'pnpm', args };
+  return {
+    command: process.env.ComSpec || 'cmd.exe',
+    args: ['/d', '/s', '/c', 'pnpm', ...args.map(quoteForCmd)],
+  };
+}
+
+function runPnpm(args) {
+  const { command, args: commandArgs } = pnpmInvocation(args);
+  run(command, commandArgs);
+}
+
 /** 在隔离子进程里问一份 `.node` 导出了哪些函数（与 `native:fetch` 的探测口径一致）。 */
 function capabilitiesOf(addonPath) {
   const result = spawnSync(
@@ -144,7 +175,7 @@ function newestMtime(dir) {
 
 if (!existsSync(join(root, 'node_modules', '.pnpm', 'lock.yaml'))) {
   log('node_modules 不完整，先安装依赖');
-  run('pnpm', ['install', '--frozen-lockfile']);
+  runPnpm(['install', '--frozen-lockfile']);
 }
 
 // ─────────────────────────── 2. 原生组件 ───────────────────────────
@@ -211,7 +242,7 @@ if (noBuild) {
   log('跳过前端构建（--no-build）');
 } else if (forceRebuild || distIsStale()) {
   log(forceRebuild ? '重建前端（--rebuild）' : '前端产物缺失或比源码旧，重新构建');
-  run('pnpm', ['--filter', '@weqbot/webui', 'build']);
+  runPnpm(['--filter', '@weqbot/webui', 'build']);
 } else {
   log('前端产物是最新的，跳过构建');
 }
