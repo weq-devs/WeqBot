@@ -20,6 +20,10 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
+        with:
+          # `docs/` 是 submodule；下面的 `pnpm docs:build` 需要它。
+          # submodule 是 public，默认 token 就够。
+          submodules: recursive
 
       # 不写 version：从根 package.json 的 packageManager 读（pnpm@12.8.1）。
       - uses: pnpm/action-setup@v4
