@@ -413,16 +413,34 @@ function loginDbsOf(
 
 // ─────────────────────────── Windows 专属 ───────────────────────────
 
+/**
+ * Windows 数据根候选，按 QQ 实际认的顺序排列。
+ *
+ * `UserDataSavePathType` 决定 QQ 真正用哪个目录：`2` 才认 `UserDataSavePath`，
+ * `1` 是 `Documents/Tencent Files`，其余取值（0、3、未知、字段缺失）是旧版
+ * 布局 `Documents/QQ`。只有 type=2 时 savePath 才排第一；其它情况下 QQ 会忽略
+ * 它，但用户手工改 ini 指回旧数据的情况真实存在，所以仍留作降级候选。
+ */
 function win32DataRootCandidates(home: string, path: typeof posix): string[] {
   const roots: string[] = [];
-  const fromIni = tencentFilesRootFromUserDataInfo(home, path);
-  if (fromIni) roots.push(fromIni);
-  roots.push(path.join(home, 'Documents', 'Tencent Files'));
+  const info = readUserDataInfo(home, path);
+  const savePath = info?.savePath ?? null;
+  const savePathType = info?.savePathType ?? null;
+  if (savePathType === 2 && savePath) roots.push(savePath);
+  roots.push(
+    savePathType === 1
+      ? path.join(home, 'Documents', 'Tencent Files')
+      : path.join(home, 'Documents', 'QQ'),
+  );
+  if (savePathType !== 2 && savePath) roots.push(savePath);
   roots.push(path.join(home, 'Tencent Files'));
   try {
     for (const entry of readdirSync(home)) {
       if (!entry.toLowerCase().startsWith('admin')) continue;
-      roots.push(path.join(home, entry, 'Documents', 'Tencent Files'));
+      roots.push(
+        path.join(home, entry, 'Documents', 'Tencent Files'),
+        path.join(home, entry, 'Documents', 'QQ'),
+      );
     }
   } catch {
     // home 不可读：只用静态候选。
@@ -472,8 +490,23 @@ export function resolveQqVersionDir(qqRoot: string, path: typeof posix = win32):
   return null;
 }
 
-/** `%PUBLIC%\Documents\Tencent\QQ\UserDataInfo.ini` 里的 `UserDataSavePath`。 */
-function tencentFilesRootFromUserDataInfo(home: string, path: typeof posix = win32): string | null {
+/** `[UserDataSet]` 里与数据根有关的两项。 */
+export interface UserDataInfo {
+  /**
+   * `UserDataSavePathType`：`2` 才认 `UserDataSavePath`，`1` 是
+   * `Documents/Tencent Files`，其余取值（0、3、未知、字段缺失）是旧版
+   * 布局 `Documents/QQ`。
+   */
+  savePathType: number | null;
+  /** `UserDataSavePath` 原始值（未判断 type）；缺失或为空时 null。 */
+  savePath: string | null;
+}
+
+/**
+ * 读 `%PUBLIC%\Documents\Tencent\QQ\UserDataInfo.ini`（即 home 同级的
+ * `Public`）。ini 缺失 / 读不了时返回 null；只认 `[UserDataSet]` 段。
+ */
+export function readUserDataInfo(home: string, path: typeof posix = win32): UserDataInfo | null {
   const ini = path.join(
     path.dirname(home),
     'Public',
@@ -488,6 +521,7 @@ function tencentFilesRootFromUserDataInfo(home: string, path: typeof posix = win
   } catch {
     return null;
   }
+  const info: UserDataInfo = { savePathType: null, savePath: null };
   let inUserDataSet = false;
   for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim();
@@ -498,11 +532,15 @@ function tencentFilesRootFromUserDataInfo(home: string, path: typeof posix = win
     if (!inUserDataSet) continue;
     const eq = line.indexOf('=');
     if (eq === -1) continue;
-    if (line.slice(0, eq).trim().toLowerCase() !== 'userdatasavepath') continue;
+    const key = line.slice(0, eq).trim().toLowerCase();
     const value = line.slice(eq + 1).trim();
-    return value.length > 0 ? value : null;
+    if (key === 'userdatasavepath') {
+      info.savePath = value.length > 0 ? value : null;
+    } else if (key === 'userdatasavepathtype') {
+      info.savePathType = /^-?\d+$/.test(value) ? Number(value) : null;
+    }
   }
-  return null;
+  return info;
 }
 
 // ─────────────────────────── 小工具 ───────────────────────────
