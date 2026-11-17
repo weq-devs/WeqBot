@@ -1,6 +1,6 @@
 {
   "name": "@weqbot/bot",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "门面层：createBot() 组装 native 端口 + 会话 + 事件 + OneBot，WeQ 嵌入时只依赖这一层（纯 TS）",

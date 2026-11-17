@@ -1,6 +1,6 @@
 {
   "name": "weqbot",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "WeQ Bot — 独立 QQ bot 框架（mode2 自建上线），可作为纯 TS 嵌入 WeQ desktop",
