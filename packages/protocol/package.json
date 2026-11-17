@@ -21,5 +21,8 @@
   "dependencies": {
     "@weqbot/common": "workspace:*",
     "@weqbot/wire": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6"
   }
 }

@@ -209,7 +209,11 @@ importers:
         specifier: workspace:*
         version: link:../wire
 
-  packages/common: {}
+  packages/common:
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.6
+        version: 26.6.6
 
   packages/control:
     dependencies:
@@ -265,6 +269,10 @@ importers:
       '@weqbot/wire':
         specifier: workspace:*
         version: link:../wire
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.6
+        version: 26.6.6
 
   packages/session:
     dependencies:
@@ -317,6 +325,10 @@ importers:
       '@weqbot/common':
         specifier: workspace:*
         version: link:../common
+    devDependencies:
+      '@types/node':
+        specifier: ^26.6.6
+        version: 26.6.6
 
 packages:
 
