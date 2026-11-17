@@ -129,6 +129,46 @@ test('Windows 布局：login.db 在 nt_qq 下，版本目录来自 config.json',
   }
 });
 
+test('Windows：UserDataSavePathType 决定数据根（2=自定义 / 1=Tencent Files / 其它=QQ）', async () => {
+  // `<home>/../Public/.../UserDataInfo.ini` 是 QQ 记录的保存设置：type=2 才认
+  // savePath；1 是 Documents/Tencent Files；其余（含 0、3、字段缺失）是旧版
+  // Documents/QQ —— 重装系统后历史记录仍留在那里的情况就是这一种。
+  const cases: Array<{ type: string | null; dir: 'custom' | 'Tencent Files' | 'QQ' }> = [
+    { type: '2', dir: 'custom' },
+    { type: '1', dir: 'Tencent Files' },
+    { type: '0', dir: 'QQ' },
+    { type: '3', dir: 'QQ' },
+    { type: null, dir: 'QQ' },
+  ];
+  for (const { type, dir } of cases) {
+    const base = await fixture();
+    const home = join(base, 'home');
+    const custom = join(base, 'custom-data');
+    const expected = dir === 'custom' ? custom : join(home, 'Documents', dir);
+    await mkdir(expected, { recursive: true });
+    const iniDir = join(base, 'Public', 'Documents', 'Tencent', 'QQ');
+    await mkdir(iniDir, { recursive: true });
+    await writeFile(
+      join(iniDir, 'UserDataInfo.ini'),
+      [
+        '[UserDataSet]',
+        ...(type === null ? [] : [`UserDataSavePathType=${type}`]),
+        `UserDataSavePath=${custom}`,
+      ].join('\r\n'),
+    );
+
+    const previousRoot = process.env.WEQBOT_QQ_ROOT;
+    delete process.env.WEQBOT_QQ_ROOT;
+    try {
+      // 旧签名：Linux 上模拟 Windows 布局时用 POSIX 方言拼串。
+      const paths = discoverQqPaths('win32', home);
+      assert.equal(paths.dataRoot, expected, `type=${String(type)}`);
+    } finally {
+      restore('WEQBOT_QQ_ROOT', previousRoot);
+    }
+  }
+});
+
 test('数据根与 login.db 找不到时返回 null / 空数组，不抛错', async () => {
   // 安装目录会命中本机真实路径（`/opt/QQ/qq` 等固定候选），所以这里只断言
   // 数据侧 —— 「什么都没装」在装了 QQ 的开发机上不是可复现的前提。
