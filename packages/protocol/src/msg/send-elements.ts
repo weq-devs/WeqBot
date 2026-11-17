@@ -34,6 +34,7 @@ import {
   type MediaSource,
   type MediaUploadResult,
   type MediaUploadTarget,
+  type UploadImageParams,
   uploadImageMsgInfo,
   uploadPttMsgInfo,
   uploadVideoMsgInfo,
@@ -177,6 +178,8 @@ export interface SendMarkdownElement {
   kind: 'markdown';
   markdownContent: string;
   markdownTextSummary?: string;
+  /** 转发闪传卡片时保留文件集身份，与收侧 commonElem 的 tag 7 对齐。 */
+  flashTransferInfo?: { fileSetId: string };
 }
 
 /**
@@ -329,6 +332,10 @@ export interface SendDress {
 /** 图片：上传后拼成 `commonElem(serviceType=48, businessType=20)`。 */
 export interface SendImageElement {
   kind: 'image';
+  /** 转发原图的下载标识，服务层接入统一媒体下载服务。 */
+  download?: { fileToken: string; originalUrl?: string };
+  /** 服务层注入的惰性取图回调，不经 IPC 传输。 */
+  resolveSource?: UploadImageParams['resolveSource'];
   /** 本地路径或内存字节。给 `fingerprint` 时可留空（不读）。 */
   source: MediaSource;
   /** 收端显示的文件名；缺省 `<md5><扩展名>`。 */
@@ -361,7 +368,7 @@ export interface SendImageElement {
  * 抓包（2026-10-28 私聊）实测取值，可作参照：
  *   fileName = '97CB548233A112AC73308617CB37044A.jpg'（大写 md5 + 扩展名）
  *   fileSize = 99944、md5Hex = '97cb548233a112ac73308617cb37044a'
- *   downloadPath = resId = '/10002-2151786634-97CB548233A112AC73308617CB37044A'
+ *   downloadPath = resId = '/2863253201-2151786634-97CB548233A112AC73308617CB37044A'
  *   imgType = 1000（jpg）、picHeight = 1920、picWidth = 864
  *   md5Str = 'D4A0354FCDD29D896673E4C87E7C7156'
  */
@@ -930,6 +937,7 @@ function buildSendElem(element: SendElement): Record<string, unknown> {
               'markdown',
             ),
             markdownTextSummary: element.markdownTextSummary,
+            ...(element.flashTransferInfo ? { flashTransferInfo: element.flashTransferInfo } : {}),
           }),
           businessType: 1,
         },
@@ -1086,14 +1094,16 @@ export function buildDressElems(dress: SendDress | undefined): Record<string, un
   const font1 = fontId1Raw > 0 ? fontId1Raw : fontId;
   const font2 = fontId2Raw > 0 ? fontId2Raw : fontId2 > 0 ? swapFontId16(fontId2) : 0;
   if (widgetId > 0 || font1 > 0 || font2 > 0) {
-    const generalFlags: Record<string, unknown> = {};
-    if (widgetId > 0) generalFlags.widgetId = widgetId;
-    if (font1 > 0 || font2 > 0) {
-      const font: Record<string, unknown> = {};
-      if (font1 > 0) font.fontId1 = font1;
-      if (font2 > 0) font.fontId2 = font2;
-      generalFlags.font = font;
-    }
+    const generalFlags: Record<string, unknown> = {
+      // 真机（qqhook 16:02:55 抓包）里 `.1` 与 `.17` **每条都写**（`.17 = 0` 表示
+      // 没有挂件）；`.16 = 0` 只在该条消息带挂件时出现。三者都是 schema 上的
+      // force 字段，少写会让收端把整格 generalFlags 当残缺数据忽略掉 —— 表现就是
+      // 气泡正常（独立 bubble elem）、挂件丢失。
+      bubbleDiyTextId: 0,
+      widgetId,
+    };
+    if (widgetId > 0) generalFlags.flag16 = 0;
+    generalFlags.font = buildFontBlock(font1, font2);
     out.push({ generalFlags });
   }
 
@@ -1101,6 +1111,53 @@ export function buildDressElems(dress: SendDress | undefined): Record<string, un
   if (bubbleId > 0) out.push({ bubble: { id: bubbleId } });
 
   return out;
+}
+
+/** 真机「没有字体」时 tag 15 写的就是这个值：只有 bit16 标志位、低 16 位为 0。 */
+const NO_FONT_FLAG = 0x10000;
+
+/**
+ * `generalFlags.font`(19) —— 按真机骨架补全。
+ *
+ * 抓包（qqhook 16:02:55）里**每一条**带 generalFlags 的消息都写这一格，哪怕一个字
+ * 体都没用 —— 无字体时 `.15 = 65536`（只有 bit16 标志位）。收端很可能以「这一格在
+ * 不在」判断整条消息带不带装扮，省掉它会让同一格里的挂件一起失效。
+ *
+ * 两种形状（照抄真机字节，不能合并）：
+ * - 无字体：`.15=65536 .25/.30/.31/.34=0 nested73{ .2=0 } .96=0`
+ * - 有字体：在上面基础上多 `.41=0 .51=2 .52=8 .54/.55/.56=0 .71=2 .72=0`
+ *   与 `nested73` 的五个零值子字段
+ *
+ * `.51/.52/.71` 是那款字体自带的元数据（对应 40801 的 41520~41522），当前模型没
+ * 携带，这里按抓包里的值固定写 2 / 8 / 2 —— 抓到的两款不同字体都是这三个值。
+ * `.109`（`{1:1, 4:<8 字节>}`，逐条不同）来源未知，同样不填。
+ */
+function buildFontBlock(font1: number, font2: number): Record<string, unknown> {
+  const hasFont = font1 > 0 || font2 > 0;
+  const font: Record<string, unknown> = {};
+  if (font1 > 0) font.fontId1 = font1;
+  font.fontId2 = font2 > 0 ? font2 : NO_FONT_FLAG;
+  Object.assign(font, { flag25: 0, flag30: 0, flag31: 0, flag34: 0 });
+  if (!hasFont) {
+    font.nested73 = { flag2: 0 };
+    font.flag96 = 0;
+    return font;
+  }
+  Object.assign(font, {
+    flag41: 0,
+    flag51: 2,
+    flag52: 8,
+    flag54: 0,
+    flag55: 0,
+    // tag 56 就是 fontId1 槽位：真机用回退槽（fontId2）时也会显式写 0。
+    // 位置照抄真机 wire（.55 之后、.71 之前）。
+    fontId1: font.fontId1 ?? 0,
+    flag71: 2,
+    flag72: 0,
+    nested73: { flag1: 0, flag2: 0, flag3: 0, flag4: 0, flag7: 0 },
+    flag96: 0,
+  });
+  return font;
 }
 
 /**
