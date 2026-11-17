@@ -116,10 +116,33 @@ export interface RawNativeBinding {
     holders: Array<{ pid: number; name: string }>;
   };
   /**
-   * 从 QQ 进程内存读一次会话物料（进程层诊断能力）。
+   * 列出映射了指定 `.node` 的进程（只读进程元数据，不附加、不读内存）。
    *
-   * 不进 `NativePort`：mode 2 自己登录，不需要借别人的会话；只有 `--print-capabilities`
-   * 这类诊断会直接调它，看 `secTokenSource` / TTL。
+   * 登录页「有头模式」用它找正在运行的 QQ：传 `wrapper.node` 就只剩 QQ 主进程。
+   * 与 `probeDbLock` 互补 —— 那个从「账号的库」反查 pid，这个从「进程」正查。
+   */
+  listProcessesWithModule?(moduleHint: string): Array<{
+    pid: number;
+    ppid: number;
+    name: string;
+    cmdline: string;
+    modules: string[];
+  }>;
+  /**
+   * 运行中 QQ 进程的 `wrapper.node` / `major.node` 路径。
+   *
+   * 有头模式必须用它签名：用户可能装了多个 QQ 版本，磁盘上静态探测到的那个
+   * 未必是正在跑的这一个。`null` = 该 pid 没映射 QQ 的模块。
+   */
+  resolveQqRuntimeModules?(pid: number): { wrapperPath: string; majorPath: string } | null;
+  /**
+   * 从 QQ 进程内存读一次会话物料（进程层能力）。
+   *
+   * 不进 `NativePort`：mode 2 自己登录，不需要借别人的会话；诊断
+   * （`--print-capabilities`）与 WebUI 的**有头模式**直接调它。
+   *
+   * 需要提权：Linux 要 root/CAP_SYS_PTRACE 且 yama 放行、macOS 要 root、
+   * Windows 同用户进程免提权。失败时抛错，错误信息本身就是提权提示。
    */
   scanSessionMaterial?(
     pid: number,

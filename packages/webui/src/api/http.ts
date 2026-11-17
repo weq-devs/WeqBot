@@ -14,6 +14,8 @@ import {
   type ActionRunResult,
   type ActionsSnapshot,
   type Api,
+  type AttachSnapshot,
+  type AttachStartResult,
   type ConsoleStateEvent,
   type HealthSnapshot,
   type LoginAccount,
@@ -147,6 +149,19 @@ export const httpApi: Api = {
       }),
     startQr: () => request<QrSnapshot>('/api/login/qr', { method: 'POST', body: {} }),
     cancelQr: () => request<void>('/api/login/qr', { method: 'DELETE' }),
+    attach: {
+      instances: () => request<AttachSnapshot>('/api/login/instances'),
+      start: (uin, options) =>
+        request<AttachStartResult>('/api/login/attach', {
+          method: 'POST',
+          body: {
+            uin,
+            ...(options?.pid !== undefined ? { pid: options.pid } : {}),
+            // 密码只这一次往返：页面不留副本，也不写进任何本地存储。
+            ...(options?.password ? { password: options.password } : {}),
+          },
+        }),
+    },
   },
 
   overview: {

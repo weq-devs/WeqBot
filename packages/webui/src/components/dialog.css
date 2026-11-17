@@ -1,0 +1,84 @@
+/* ───────────────────────────── 模态框 ───────────────────────────── */
+
+.dialog-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 80;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+}
+
+/*
+ * 遮罩：用 <button> 承载「点空白处关闭」。
+ * 深色下 0.42 的黑会压住氛围背景，所以两种模式用同一个值、靠 blur 分层。
+ */
+.dialog-scrim {
+  position: absolute;
+  inset: 0;
+  border: 0;
+  padding: 0;
+  background: oklch(0.2 0.02 262 / 0.44);
+  backdrop-filter: blur(6px);
+  cursor: default;
+}
+
+.dialog {
+  position: relative;
+  display: grid;
+  gap: 16px;
+  padding: 22px;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-xl);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg), var(--highlight);
+}
+
+.dialog-head {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.dialog-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border-radius: var(--radius-md);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+}
+
+.dialog-heading {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.dialog-heading h2 {
+  margin: 0;
+  font-size: var(--text-lg);
+  font-weight: 600;
+  letter-spacing: -0.01em;
+}
+
+.dialog-heading p {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: var(--text-sm);
+  line-height: 1.55;
+}
+
+.dialog-foot {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dialog-scrim {
+    backdrop-filter: none;
+  }
+}

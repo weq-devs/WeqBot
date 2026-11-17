@@ -19,6 +19,7 @@ import {
   KeyRound,
   LoaderCircle,
   LogIn,
+  Plug,
   QrCode,
   RefreshCw,
   ScanLine,
@@ -41,10 +42,11 @@ import { usePolling } from '../../lib/hooks';
 import { enterPop, enterRise, enterStagger, screenExit } from '../../lib/motion';
 import { formatRelative } from '../../lib/format';
 import type { LoginHint } from '../../app';
+import { AttachPanel } from './attach-panel';
 import './login.css';
 
-/** 三个 tab：两个账号来源 + 扫码。 */
-type Tab = 'saved' | 'local' | 'qr';
+/** 四个 tab：两个账号来源 + 有头接入 + 扫码。 */
+type Tab = 'saved' | 'local' | 'attach' | 'qr';
 
 const ACCOUNT_SOURCE_OF: Record<'saved' | 'local', AccountSource> = {
   saved: 'vault',
@@ -206,8 +208,8 @@ export function LoginPage({
         </motion.div>
         <motion.h1 variants={enterRise}>登录 QQ 账号</motion.h1>
         <motion.p variants={enterRise}>
-          用已经保存的凭据或本机 QQ 的登录记录上线，也可以用手机扫码。同一时刻只有一个账号在线；
-          本机 QQ 的在线状态每 4 秒自动检查一次。
+          用已经保存的凭据或本机 QQ 的登录记录上线，接上正在运行的 QQ，也可以用手机扫码。
+          同一时刻只有一个账号在线；本机 QQ 的在线状态每 4 秒自动检查一次。
         </motion.p>
       </header>
 
@@ -237,6 +239,7 @@ export function LoginPage({
                 [
                   ['saved', '已保存', KeyRound],
                   ['local', 'QQ 记录', CircleUserRound],
+                  ['attach', '有头模式', Plug],
                   ['qr', '扫码登录', QrCode],
                 ] as const
               ).map(([key, label, Icon]) => (
@@ -272,6 +275,17 @@ export function LoginPage({
                   transition={{ duration: 0.16 }}
                 >
                   <QrPanel qr={qr} expired={qrExpired} onRefresh={() => void startQr()} />
+                </motion.div>
+              ) : tab === 'attach' ? (
+                <motion.div
+                  key="attach"
+                  className="login-panel"
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  transition={{ duration: 0.16 }}
+                >
+                  <AttachPanel />
                 </motion.div>
               ) : (
                 <motion.div

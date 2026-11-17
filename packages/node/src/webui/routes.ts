@@ -144,6 +144,41 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
         return ok(response, { accounts: await runtime.accounts() });
       }
 
+      if (path === '/api/login/instances') {
+        requireMethod(request, 'GET');
+        return ok(response, await runtime.attachSnapshot());
+      }
+
+      if (path === '/api/login/attach') {
+        requireMethod(request, 'POST');
+        const body = await readJson<{ uin?: unknown; pid?: unknown; password?: unknown }>(request);
+        const uin = typeof body.uin === 'string' ? body.uin.trim() : '';
+        if (!uin) throw new HttpError(400, 'BAD_UIN', '缺少 uin');
+
+        let pid: number | undefined;
+        if (body.pid !== undefined && body.pid !== null) {
+          const parsed = typeof body.pid === 'number' ? body.pid : Number(body.pid);
+          if (!Number.isInteger(parsed) || parsed <= 0) {
+            throw new HttpError(400, 'BAD_PID', 'pid 不合法');
+          }
+          pid = parsed;
+        }
+
+        // 提权密码：只在本次请求的栈上活一次 —— 不进日志、不进配置、不进 vault。
+        // 长度上限只是防把请求体当传输带；空串等于没给（用户点了取消）。
+        const password =
+          typeof body.password === 'string' && body.password.length > 0 ? body.password : undefined;
+        if (password !== undefined && password.length > 1024) {
+          throw new HttpError(400, 'BAD_PASSWORD', '密码过长');
+        }
+
+        const result = await runtime.attachAccount(uin, {
+          ...(pid !== undefined ? { pid } : {}),
+          ...(password !== undefined ? { password } : {}),
+        });
+        return ok(response, { phase: runtime.currentPhase, pid: result.pid });
+      }
+
       if (path === '/api/login/start') {
         requireMethod(request, 'POST');
         const body = await readJson<{ uin?: unknown; source?: unknown }>(request);

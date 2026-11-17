@@ -13,6 +13,13 @@ export {
   type LoadNativeOptions,
   type LoadedNative,
 } from './loader';
+export { runDaemon, type DaemonHandle, type DaemonOptions } from './daemon';
+export {
+  createControlHost,
+  failureOf,
+  type ControlHost,
+  type ControlHostOptions,
+} from './control-host';
 export { runSidecar, type SidecarHandle, type SidecarOptions } from './sidecar';
 export {
   ConfigError,

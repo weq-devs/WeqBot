@@ -10,13 +10,15 @@
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { parseArgs } from 'node:util';
-import { createBot, describeBot } from '@weqbot/bot';
+import { createBot, describeBot, type BotConfig } from '@weqbot/bot';
 import { configureLogging, createLogger, type LogLevel } from '@weqbot/common';
 import { FileCredentialVault } from '@weqbot/session';
 import { adaptNativeBinding, inspectNative } from '@weqbot/wire';
 import { ConfigError, loadConfigFile, mergeConfig, type LoadedConfig } from './config';
 import { loadNative } from './loader';
+import { runDaemon } from './daemon';
 import { runSidecar } from './sidecar';
+import { ATTACH_WORKER_FLAG, runAttachWorker } from './webui/attach';
 import { runWebUi } from './webui';
 
 /** 独立进程的默认凭据目录；`WEQBOT_VAULT_DIR` 可覆盖（测试 / 多实例）。 */
@@ -56,6 +58,22 @@ function pickQqPaths(
   };
 }
 
+/**
+ * `--sidecar` / `--serve` 的启动期配置：账号由参数定，凭据只从控制通道来。
+ *
+ * 配置文件里的 `account` 是「上次登录的账号」，不能让sidecar 继承 —— 会变成
+ * 一个可被控制通道之外的来源意外切换的账号。
+ */
+function startupConfig(
+  fileConfig: LoadedConfig | undefined,
+  uin: string,
+): Omit<BotConfig, 'account'> | undefined {
+  if (!fileConfig) return undefined;
+  const { account: _account, ...rest } = mergeConfig({ file: fileConfig, uin });
+  void _account;
+  return rest;
+}
+
 const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
 
 用法:
@@ -67,6 +85,7 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
   weqbot --print-capabilities --qq-pid <pid> --account <uin>
                                     额外打印从 QQ 内存读到的 secToken 来源与 TTL
   weqbot --sidecar --account <uin>  desktop 托管模式：控制通道走 stdio
+  weqbot --serve --account <uin>    desktop 常驻模式：控制通道走 socket（客户端断开不退出）
 
 选项:
   --account <uin>      账号 uin；不给则只起控制台
@@ -82,6 +101,8 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
                        （需要 root / CAP_SYS_PTRACE）
   --check              自检模式
   --sidecar            desktop 拉起的托管模式（NDJSON over stdio，见 @weqbot/control）
+  --serve              常驻 daemon 模式（NDJSON over socket；宿主退出不影响 OneBot）
+  --socket <path>      --serve 监听的路径（默认 $XDG_RUNTIME_DIR/weqbot/weqbot-<uin>.sock）
   --verbose            打开 debug 日志
   --trace              打开 trace 日志：完整打印收发包（不脱敏，只进终端）
   -h, --help           显示本帮助
@@ -99,6 +120,21 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
 `;
 
 async function main(argv: string[]): Promise<number> {
+  /**
+   * 提权子进程入口：必须在 `parseArgs` 之前。
+   *
+   * 这个模式只收位置参数（native 路径 / pid / uin / uid），而且会以 **root** 跑，
+   * 所以不能走正常 CLI 的配置读取、日志落盘和 native 自检 —— 那些一旦报错，
+   * 用户会看到一句看不懂的 root 侧报错，而真正原因（密码 / 权限）反而被淹掉。
+   */
+  const workerIndex = argv.indexOf(ATTACH_WORKER_FLAG);
+  if (workerIndex !== -1) {
+    await runAttachWorker(argv.slice(workerIndex + 1));
+    // runAttachWorker 正常返回只可能是 process.exit 没执行到；不继续往下走，
+    // 否则会带着 worker 的位置参数进 parseArgs。
+    return 0;
+  }
+
   const { values } = parseArgs({
     args: argv,
     options: {
@@ -112,6 +148,8 @@ async function main(argv: string[]): Promise<number> {
       'no-webui': { type: 'boolean', default: false },
       check: { type: 'boolean', default: false },
       sidecar: { type: 'boolean', default: false },
+      serve: { type: 'boolean', default: false },
+      socket: { type: 'string' },
       'print-capabilities': { type: 'boolean', default: false },
       verbose: { type: 'boolean', default: false },
       trace: { type: 'boolean', default: false },
@@ -217,15 +255,7 @@ async function main(argv: string[]): Promise<number> {
       return 2;
     }
     // 凭据只从控制通道拿；事件写回 stdout，日志走 stderr（stdout 是协议流）。
-    const sidecarConfig = (() => {
-      if (!fileConfig) return undefined;
-      const { account: _account, ...rest } = mergeConfig({
-        file: fileConfig,
-        uin: values.account!,
-      });
-      void _account;
-      return rest;
-    })();
+    const sidecarConfig = startupConfig(fileConfig, values.account);
     runSidecar({
       uin: values.account,
       native,
@@ -237,6 +267,38 @@ async function main(argv: string[]): Promise<number> {
       ...(sidecarConfig ? { config: sidecarConfig } : {}),
     });
     log.info('sidecar 已就绪，等待控制通道指令', { uin: values.account });
+    return -1;
+  }
+
+  if (values.serve) {
+    if (!values.account) {
+      process.stderr.write('--serve 需要 --account <uin>\n');
+      return 2;
+    }
+    const daemonConfig = startupConfig(fileConfig, values.account);
+    const daemon = await runDaemon({
+      uin: values.account,
+      native,
+      vault,
+      logger: log,
+      ...(daemonConfig ? { config: daemonConfig } : {}),
+      ...(values.socket ? { socketPath: values.socket } : {}),
+    });
+
+    // 信号 → close：走 `bot.stop()` → `closeSession` → `UnRegister`，手机端才会
+    // 摘掉「电脑在线」。客户端断开不走这条路（那只是没人看，不是下线）。
+    const stop = (signal: string): void => {
+      log.info('收到退出信号，开始下线', { signal });
+      void daemon.close(signal);
+    };
+    for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP'] as const) {
+      process.once(signal, () => stop(signal));
+    }
+
+    log.info('daemon 已上线，等待客户端', {
+      uin: values.account,
+      socket: daemon.socketPath,
+    });
     return -1;
   }
 

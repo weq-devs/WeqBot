@@ -80,6 +80,66 @@ export interface LoginStartResult {
   endedQq: number;
 }
 
+// ─────────────────────────── 有头模式 ───────────────────────────
+
+/**
+ * 读取运行中 QQ 的内存要多少权限。
+ *
+ * - `none`：不需要（Windows 同用户进程）；
+ * - `sudo`：要一次管理员密码（linux / darwin）；
+ * - `uac`：只能靠「以管理员身份运行」（Windows 被策略拦住时）。
+ */
+export type ElevationMechanism = 'none' | 'sudo' | 'uac';
+
+export interface ElevationState {
+  platform: string;
+  /** 控制台进程已经是 root。 */
+  elevated: boolean;
+  /** sudo 凭据还在缓存里：这次多半不用再输密码。 */
+  cached: boolean;
+  mechanism: ElevationMechanism;
+  /** Linux 的 `yama/ptrace_scope`；读不到时没有这一项。 */
+  ptraceScope?: number;
+  /** 服务端给的一句话说明。 */
+  hint: string;
+}
+
+/** 一个正在运行的 QQ 进程。`uin` 缺失 = 认不出账号身份，不能接入。 */
+export interface QqInstance {
+  pid: number;
+  uin?: string;
+  uid?: string;
+  nickname?: string;
+  avatarUrl?: string;
+  /** 运行中 QQ 的版本（取自它的 `major.node`）。 */
+  qqVersion?: string;
+  attachable: boolean;
+  /** 不能接入时的一句话原因。 */
+  note?: string;
+}
+
+export interface AttachSnapshot {
+  elevation: ElevationState;
+  instances: QqInstance[];
+}
+
+/** `POST /api/login/attach` 的结果。 */
+export interface AttachStartResult {
+  phase: ConsolePhase;
+  pid: number;
+}
+
+export interface AttachApi {
+  /** 正在运行的 QQ 实例 + 提权状态。 */
+  instances(): Promise<AttachSnapshot>;
+  /**
+   * 有头接入：借用运行中 QQ 的会话（不改动 QQ，也不结束它）。
+   *
+   * 首次可能抛 `ApiError(409, 'ELEVATION_REQUIRED')` —— 拿到密码后再调一次。
+   */
+  start(uin: string, options?: { pid?: number; password?: string }): Promise<AttachStartResult>;
+}
+
 export type QrState =
   | 'waiting-scan'
   | 'waiting-confirm'
@@ -111,6 +171,8 @@ export interface LoginApi {
   /** 起一次扫码（45s 硬超时，重复调用复用同一次）。 */
   startQr(): Promise<QrSnapshot>;
   cancelQr(): Promise<void>;
+  /** 有头模式（借运行中 QQ 的会话）。 */
+  attach: AttachApi;
 }
 
 // ─────────────────────────── 总览 ───────────────────────────

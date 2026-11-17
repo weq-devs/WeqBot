@@ -49,11 +49,60 @@ import { createMediaUrlResolver } from './media-url';
 import { createProtocolBackend } from './onebot-backend';
 import { generateSecToken } from './sec-token';
 
+/**
+ * 有头模式（attach）的会话物料。
+ *
+ * 全部来自**运行中 QQ 进程的内存**（`scanSessionMaterial`），只在本进程内活一次，
+ * 不进 vault、不落盘、不进日志。宿主（`@weqbot/node` 的控制台）负责提权与扫描，
+ * 本包只消费结果。
+ *
+ * 与 mode 2 的区别是语义上的：这里不 login、不注册、不发 `UnRegister`。账号的在线
+ * 状态归 QQ 所有，我们只是搭它的 SSO 通道发协议包。因此 QQ 退出 = 会话结束，
+ * 不能自动重登（重登等于替用户重新登录一次 QQ）。
+ */
+export interface AttachMaterial {
+  /** 正在运行、持有该账号会话的 QQ 进程。 */
+  pid: number;
+  /** 扫出来的账号 uin。必须与 `config.account.uin` 一致（错号接入是最危险的失误）。 */
+  uin: string;
+  /** 账号 uid（`u_...`）；配置里只有 uin。 */
+  uid: string;
+  /** 设备 guid（离线从数据根读）。mode 1 只用于 SSO 头，不参与注册。 */
+  guid: string;
+  /** a2（hex）。 */
+  a2: string;
+  /** d2（hex）。 */
+  d2: string;
+  /** d2Key（32 位 hex）。 */
+  d2Key: string;
+  /**
+   * QQ 自己的 `SecToken`（12 字符 base64 原文）。
+   *
+   * **原样透传，不轮换**：这串由 QQ 持有并参与它自己的签名。我们自己生成一个
+   * 只会让两边算出不同的包签名。
+   */
+  secToken?: string;
+  /** SSO 头字段，取运行中 QQ 的 `major.node`。 */
+  subAppId: number;
+  clientVersion?: string;
+  qua?: string | null;
+  /** 运行中 QQ 进程的 `wrapper.node`；不给时退回配置 / 静态探测。 */
+  wrapperPath?: string;
+}
+
 export interface CreateBotOptions {
   config: BotConfig;
   /** 宿主注入的原生端口。 */
   native: NativePort;
   vault: CredentialVault;
+  /**
+   * 有头模式：借用运行中的 QQ 会话（mode 1）。
+   *
+   * 给了它就**完全不碰 vault / quickLogin** —— 不换票、不注册、不发 UnRegister。
+   * 与 `config.qq.dbPath` 的「QQ 本体不能在线」红线互斥（有头模式的前提恰恰是 QQ
+   * 在线），所以 `assertQqOffline` 在这条链路上不执行。
+   */
+  attach?: AttachMaterial;
   logger?: Logger;
   /** 覆盖 secToken 生成（测试 / 逆向实验用）。 */
   secToken?: (account: StoredAccount) => string;
@@ -143,6 +192,8 @@ export function createBot(options: CreateBotOptions): Bot {
   let offStatus: (() => void) | undefined;
   let storedAccount: StoredAccount | undefined;
   let onebot: OneBotAdapter | undefined;
+  /** 本实例是否走有头模式：决定重登与 SecToken 轮换的行为。 */
+  const attach = options.attach;
   /** OneBot 后端：上线后用来预热昵称表（好友 / 群 / 登录信息）。 */
   let backend: ReturnType<typeof createProtocolBackend> | undefined;
   /** 当前账号 uid（登录后才有）。 */
@@ -436,6 +487,96 @@ export function createBot(options: CreateBotOptions): Bot {
       opened.synced = true;
       opened.state = 'online';
     }
+    await connect(opened, uid, '已注册且首屏同步完成');
+  }
+
+  /**
+   * 有头模式：用扫出来的物料借 QQ 的会话（mode 1）。
+   *
+   * 与 {@link bringOnline} 的区别是**没有登录**：不读 vault、不 `quickLogin`、
+   * 不注册、不发 `UnRegister`。账号的在线状态完全归 QQ 所有，我们只是搭它的
+   * SSO 通道发协议包 —— 这也是它能在 QQ 在线时使用的原因（mode 2 会被
+   * `assertQqOffline` 拦下）。
+   */
+  async function bringOnlineAttached(material: AttachMaterial): Promise<void> {
+    capabilities.requireAll(
+      ['sendPacket', 'sendOidb', 'openSession', 'pushSink'],
+      '有头模式需要带 openSession / pushSink 的构建',
+    );
+    if (material.uin !== uin) {
+      throw new WeqBotError(
+        'LOGIN_FAILED',
+        `有头模式扫到的账号是 ${material.uin}，但本次实例绑定的是 ${uin}`,
+        { fields: { uin } },
+      );
+    }
+
+    // 签名必须用**正在跑的那个** wrapper：多版本共存时磁盘上探测到的未必是它。
+    const wrapperPath =
+      material.wrapperPath ??
+      config.native?.wrapperPath ??
+      (native.resolveWrapperPath ? await native.resolveWrapperPath() : null);
+    if (!wrapperPath) {
+      throw new WeqBotError(
+        'SIGNER_REQUIRED',
+        '有头模式找不到运行中 QQ 的 wrapper.node，无法签名；请确认 QQ 仍在运行',
+        { fields: { uin, pid: material.pid } },
+      );
+    }
+
+    selfUid = material.uid;
+    identity.observe(material.uid, uin);
+    log.info('有头模式：接管运行中的 QQ 会话', {
+      uin,
+      pid: material.pid,
+      wrapperPath,
+      hasSecToken: Boolean(material.secToken),
+    });
+
+    // 状态机不允许跳步（preflight 只能去 logging-in），这里的 logging-in 表示
+    // 「从 QQ 手里拿会话」而不是「换票」，但阶段语义仍然是「还没上线」。
+    machine.transition('logging-in', `有头模式：读取 pid ${material.pid} 的会话`);
+    machine.transition('logged-in', '已读到 QQ 的会话物料（仅内存）');
+    machine.transition('registering', `openSession(mode=1, pid=${material.pid})`);
+
+    const opened = await native.openSession!({
+      session: {
+        uin,
+        uid: material.uid,
+        a2: hexToBytes(material.a2),
+        d2: hexToBytes(material.d2),
+        d2Key: hexToBytes(material.d2Key),
+        guid: material.guid,
+        subAppId: material.subAppId,
+        clientVersion: material.clientVersion,
+        qua: material.qua ?? null,
+        secToken: material.secToken ?? null,
+      },
+      mode: 1,
+      signer: { wrapperPath },
+    });
+
+    if (!Number.isInteger(opened.sessionId) || opened.sessionId < 1) {
+      throw new WeqBotError('REGISTER_FAILED', `native 返回了非法会话 ID ${opened.sessionId}`);
+    }
+    if (opened.uin && opened.uin !== uin) {
+      throw new WeqBotError('LOGIN_FAILED', `native 打开的会话属于 ${opened.uin}，不是 ${uin}`, {
+        fields: { uin },
+      });
+    }
+
+    // mode 1 没有注册与首屏同步：`registered` / `synced` 恒 false 是预期值，
+    // 不按 mode 2 的标准去校验它们。
+    await connect(opened, material.uid, `已接管 pid ${material.pid} 的会话`);
+  }
+
+  /**
+   * 会话就绪之后的公共接线：协议门面 / 推送桥 / 两条 sink / OneBot。
+   *
+   * mode 2 与有头模式共用这一段 —— 差别只在「怎么拿到 session」，拿到之后的行为
+   * 必须一致，否则两条链路会慢慢漂移。
+   */
+  async function connect(opened: OpenedSession, uid: string, detail: string): Promise<void> {
     session = opened;
     protocol = createProtocolClient({ native, sessionId: opened.sessionId });
     pushBridge = new PushBridge({
@@ -484,7 +625,7 @@ export function createBot(options: CreateBotOptions): Bot {
       },
     );
 
-    machine.transition('online', '已注册且首屏同步完成');
+    machine.transition('online', detail);
     events.emit('online', { type: 'online', uin, at: Date.now() });
 
     if (native.attachStatusSink) {
@@ -495,7 +636,14 @@ export function createBot(options: CreateBotOptions): Bot {
 
     reloginAttempts = 0;
     onlineSince = Date.now();
-    scheduleTokenRotation();
+    // 有头模式的 SecToken 归 QQ 所有：我们自己生成一个只会让签名与 QQ 分叉。
+    if (attach) {
+      if (!attach.secToken) {
+        log.warn('有头模式没有读到 SecToken，签名可能被服务端拒绝', { uin });
+      }
+    } else {
+      scheduleTokenRotation();
+    }
     await startOneBot();
   }
 
@@ -684,6 +832,13 @@ export function createBot(options: CreateBotOptions): Bot {
 
   /** 网络掉线：退避后重走 `logging-in`；次数用尽才真正下线。 */
   function scheduleRelogin(reason: OfflineReason): void {
+    // 有头模式不能重登：重登等于替用户再登录一次 QQ，而 QQ 的会话本来就由它
+    // 自己维护。QQ 退出 / 会话失效时直接下线，把控制权交回用户。
+    if (attach) {
+      log.info('有头模式不自动重登（会话归 QQ 所有）', { uin, reason });
+      void stop(reason === 'network' ? 'network' : reason);
+      return;
+    }
     const max = config.maxReloginAttempts ?? 5;
     if (reason !== 'network' || reloginAttempts >= max) {
       void stop(reason === 'network' ? 'relogin-failed' : reason);
@@ -722,6 +877,14 @@ export function createBot(options: CreateBotOptions): Bot {
   async function start(): Promise<void> {
     if (machine.state !== 'idle') {
       throw new WeqBotError('UNKNOWN', `bot 已经在 ${machine.state}，不能重复 start`);
+    }
+
+    if (attach) {
+      // 有头模式不碰 vault：会话物料直接由宿主递进来，连凭据都不读
+      // （vault 里没有这个账号也不影响接管）。
+      machine.transition('preflight', '有头模式：校验会话物料');
+      await bringOnlineAttached(attach);
+      return;
     }
 
     machine.transition('preflight', '读取凭据');
@@ -852,6 +1015,23 @@ const NATIVE_OS: Record<DeviceProfile['os'], { os: string; platform: number }> =
   darwin: { os: 'Mac', platform: 5 },
   win32: { os: 'Windows', platform: 4 },
 };
+
+/**
+ * hex → bytes（有头模式的物料）。
+ *
+ * native 的扫描接口交出来的是十六进制串，`SsoSessionConfig` 要字节。奇数长度
+ * 或非 hex 字符是扫描侧的错，不能静默截断成别的值（那会让签名对不上）。
+ */
+function hexToBytes(hex: string): Uint8Array {
+  if (hex.length === 0 || hex.length % 2 !== 0 || /[^0-9a-fA-F]/.test(hex)) {
+    throw new WeqBotError('LOGIN_FAILED', '有头模式拿到的会话物料不是合法 hex，无法打开会话');
+  }
+  const bytes = new Uint8Array(hex.length / 2);
+  for (let index = 0; index < bytes.length; index += 1) {
+    bytes[index] = Number.parseInt(hex.slice(index * 2, index * 2 + 2), 16);
+  }
+  return bytes;
+}
 
 /** 供 CLI / 测试使用的最小健康检查（不启动任何连接）。 */
 export function describeBot(options: Pick<CreateBotOptions, 'config' | 'native'>): string {

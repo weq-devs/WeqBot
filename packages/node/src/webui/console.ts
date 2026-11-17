@@ -35,6 +35,14 @@ import type {
   QuickLoginResult,
   RawNativeBinding,
 } from '@weqbot/wire';
+import {
+  AttachError,
+  describeElevation,
+  listQqInstances,
+  looksLikeQqProcess,
+  scanSessionMaterial,
+  type ElevationState,
+} from './attach';
 import { HttpError } from './http-util';
 import type { Observability } from './observability';
 import { findNtMsgDb } from './qq-account';
@@ -62,6 +70,43 @@ export interface ConsoleAccount {
    * （否则同一账号双端在线，消息会出现两处）。探测不到时省略。
    */
   qqOnline?: boolean;
+  /**
+   * 正持有这个账号 `nt_msg.db` 的 QQ 进程。
+   *
+   * 有头模式用它拿「接哪个进程」；没有 `probeDbLock` 能力时省略。
+   */
+  qqPid?: number;
+}
+
+/** 一个正在运行的 QQ 进程（登录页「有头模式」的列表项）。 */
+export interface ConsoleInstance {
+  pid: number;
+  /** 认出账号身份时才有；否则只能看到 pid。 */
+  uin?: string;
+  uid?: string;
+  nickname?: string;
+  avatarUrl?: string;
+  /** 运行中 QQ 的版本（来自它的 `major.node`）。 */
+  qqVersion?: string;
+  /** 能直接接入（账号身份已知 + 原生能力齐）。 */
+  attachable: boolean;
+  /** 不能接入时的一句话原因。 */
+  note?: string;
+}
+
+/** `GET /api/login/instances` 的返回。 */
+export interface AttachSnapshot {
+  elevation: ElevationState;
+  /** 按 pid 升序；空数组 = 本机没有运行中的 QQ。 */
+  instances: ConsoleInstance[];
+}
+
+/** `attachAccount` 的选项。 */
+export interface AttachOptions {
+  /** 目标进程；不传时按账号的库锁反查。 */
+  pid?: number;
+  /** 刚在提权框里输入的 `sudo` 密码；只在 `ELEVATION_REQUIRED` 后给一次。 */
+  password?: string;
 }
 
 /** 账号来源：我们自己的凭据库，或本机 `login.db`。 */
@@ -398,45 +443,220 @@ export class ConsoleRuntime {
     // 「QQ 本体在线」按 uin 探测一次（同一 uin 可能在两个来源里各有一条）。
     // 探测不到（推不出 dbPath / native 缺能力）时不给这个字段 —— 页面据此
     // 区分「已知不在线」与「不知道」，不用 `false` 冒充结论。
-    const onlineByUin = new Map<string, boolean | undefined>();
+    const stateByUin = new Map<string, QqAccountState>();
     for (const item of out) {
-      if (onlineByUin.has(item.uin)) continue;
-      onlineByUin.set(item.uin, await this.qqOnlineOf(item.uin, item.uid, paths));
+      if (stateByUin.has(item.uin)) continue;
+      stateByUin.set(item.uin, await this.qqStateOf(item.uin, item.uid, paths));
     }
 
     return out
       .map((item) => {
-        const online = onlineByUin.get(item.uin);
-        return online === undefined ? item : { ...item, qqOnline: online };
+        const state = stateByUin.get(item.uin) ?? {};
+        return {
+          ...item,
+          ...(state.online !== undefined ? { qqOnline: state.online } : {}),
+          // pid 给有头模式用：它要的是「接哪个进程」，而不只是「在不在线」。
+          ...(state.pid !== undefined ? { qqPid: state.pid } : {}),
+        };
       })
       .sort((a, b) => (b.lastLoginAt ?? 0) - (a.lastLoginAt ?? 0));
   }
 
   /**
-   * 这个账号是否在 QQ 本体里在线。
+   * 有头模式的入口数据：提权状态 + 正在运行的 QQ 实例。
    *
-   * 优先用 `probeDbLock`（能同时拿到 pid，登录前要用它结束进程）；没有这个
-   * 能力时退回 `isQqLoggedIn` 的布尔结论。两者都没有 / 推不出 dbPath 时返回
-   * `undefined`：页面不应该把「不知道」显示成「不在线」。
+   * 实例列表**不是**账号列表的子集：它按进程来（一个 QQ 多开就有多条），
+   * 账号身份靠「谁持有那个 uin 的 nt_msg.db」串起来。串不上的进程仍然列出来，
+   * 但标成不可接入 —— 让用户看到「QQ 在跑但认不出账号」比默默消失好。
    */
-  private async qqOnlineOf(
+  async attachSnapshot(): Promise<AttachSnapshot> {
+    const elevation = await describeElevation();
+    const accounts = await this.accounts();
+    const byPid = new Map<number, ConsoleAccount>();
+    for (const account of accounts) {
+      if (account.qqPid !== undefined) byPid.set(account.qqPid, account);
+    }
+
+    const processes = listQqInstances(this.options.binding);
+    // 旧构建没有 `listProcessesWithModule` 时退回「按库锁反查到的 pid」：
+    // 探测方式可以降级，接入能力不该因此消失。
+    const pids = processes.length > 0 ? processes.map((process) => process.pid) : [...byPid.keys()];
+
+    const instances = pids.map((pid): ConsoleInstance => {
+      const account = byPid.get(pid);
+      const process = processes.find((item) => item.pid === pid);
+      let version: string | undefined;
+      if (process?.majorPath && this.options.binding.resolveAppidFromMajor) {
+        try {
+          const info = this.options.binding.resolveAppidFromMajor(process.majorPath);
+          version = info.version
+            ? `${info.version}${info.build ? `-${info.build}` : ''}`
+            : undefined;
+        } catch {
+          version = undefined;
+        }
+      }
+      if (!account) {
+        return {
+          pid,
+          attachable: false,
+          note: '认不出这个 QQ 进程属于哪个账号（可能刚启动），有头模式需要知道账号身份',
+          ...(version ? { qqVersion: version } : {}),
+        };
+      }
+      return {
+        pid,
+        uin: account.uin,
+        uid: account.uid,
+        ...(account.nickname ? { nickname: account.nickname } : {}),
+        ...(account.avatarUrl ? { avatarUrl: account.avatarUrl } : {}),
+        ...(version ? { qqVersion: version } : {}),
+        attachable: true,
+      };
+    });
+
+    return { elevation, instances };
+  }
+
+  /**
+   * 有头模式上线：借运行中 QQ 的会话（mode 1）。
+   *
+   * 与 {@link startAccount} 的三个关键差异：
+   *
+   * 1. **不结束 QQ**：有头模式的前提就是 QQ 在跑；
+   * 2. **不读凭据**：a2/d2/d2key 从 QQ 内存里扫，vault 与 `login.db` 都不碰；
+   * 3. **可能需要提权**：第一次抛 `ELEVATION_REQUIRED`，页面拿到密码后再调一次。
+   *
+   * 账号配置仍按 uin 取（`onebotByUin[uin]`）—— 同一个账号无论用哪种方式上线，
+   * 网络配置都是同一份。
+   */
+  async attachAccount(uin: string, options: AttachOptions = {}): Promise<{ pid: number }> {
+    if (this.phase === 'online' || this.phase === 'starting') {
+      throw new HttpError(409, 'ALREADY_ONLINE', '已有账号在线，先退出登录再切换');
+    }
+    if (!/^[1-9]\d{4,19}$/.test(uin)) throw new HttpError(400, 'BAD_UIN', 'uin 不合法');
+
+    const paths = await this.paths();
+    const environment = await this.environment();
+    const account = (await this.accounts()).find((item) => item.uin === uin);
+    if (!account) {
+      throw new HttpError(404, 'NO_ACCOUNT', '本机没有这个账号的记录，无法有头接入');
+    }
+
+    const processes = listQqInstances(this.options.binding);
+    const pid = options.pid ?? account.qqPid;
+    if (pid === undefined) {
+      throw new HttpError(
+        409,
+        'QQ_OFFLINE',
+        '这个账号的本机 QQ 不在运行；有头模式要求 QQ 先登录好，否则请用无头方式或扫码',
+      );
+    }
+    // 显式指定了别的账号的 pid：宁可报错，也不能接错人。
+    if (options.pid !== undefined && account.qqPid !== undefined && options.pid !== account.qqPid) {
+      throw new HttpError(
+        409,
+        'WRONG_INSTANCE',
+        `pid ${options.pid} 持有的不是 ${uin} 的会话（该账号在 pid ${account.qqPid}）`,
+      );
+    }
+
+    const device = deviceProfileOf(environment);
+    const guid = this.readGuid(paths.dataRoot);
+    if (!guid) {
+      throw new HttpError(400, 'NO_GUID', '读不到设备 guid，无法有头接入');
+    }
+
+    this.phase = 'starting';
+    this.emitPhase('starting', `读取 pid ${pid} 的会话`);
+
+    let material: Awaited<ReturnType<typeof scanSessionMaterial>>;
+    try {
+      material = await scanSessionMaterial({
+        binding: this.options.binding,
+        logger: this.log,
+        pid,
+        uin,
+        uid: account.uid,
+        ...(options.password ? { password: options.password } : {}),
+      });
+    } catch (cause) {
+      this.phase = 'offline';
+      this.emitPhase('offline', messageOf(cause));
+      throw attachHttpError(cause);
+    }
+
+    const onebot = this.oneBotConfigFor(uin);
+    const botConfig: Omit<BotConfig, 'account'> = { ...this.options.config };
+    if (onebot) botConfig.onebot = onebot;
+    else delete botConfig.onebot;
+    // `qq.dbPath` 只服务 mode 2 的「QQ 本体不能在线」预检；有头模式不读库。
+    delete botConfig.qq;
+
+    const instance = processes.find((item) => item.pid === pid);
+    const wrapperPath =
+      instance?.wrapperPath ??
+      this.options.config.native?.wrapperPath ??
+      environment.wrapperNode ??
+      undefined;
+
+    const bot = this.botFactory({
+      config: { ...botConfig, account: { uin } },
+      native: this.options.native,
+      vault: this.options.vault,
+      logger: this.log.child('bot'),
+      onActionCall: (entry) => this.observability.recordAction(entry),
+      attach: {
+        pid,
+        uin,
+        uid: account.uid,
+        guid,
+        a2: material.a2!,
+        d2: material.d2!,
+        d2Key: material.d2Key!,
+        ...(material.secToken ? { secToken: material.secToken } : {}),
+        subAppId: device.subAppId,
+        clientVersion: device.clientVersion,
+        qua: device.qua,
+        ...(wrapperPath ? { wrapperPath } : {}),
+      },
+    });
+    this.bot = bot;
+    this.startedAccount = uin;
+    this.wireBot(bot);
+
+    await this.bringUp(bot, uin);
+    this.log.info('有头模式已上线', { uin, pid });
+    return { pid };
+  }
+
+  /**
+   * 这个账号在 QQ 本体里的状态：在不在线，以及正持有它是哪个进程。
+   *
+   * 优先用 `probeDbLock`（能同时拿到 pid：登录前要用它结束进程，有头模式要用
+   * 它接会话）；没有这个能力时退回 `isQqLoggedIn` 的布尔结论。两者都没有 /
+   * 推不出 dbPath 时返回空对象：页面不应该把「不知道」显示成「不在线」。
+   */
+  private async qqStateOf(
     uin: string,
     uid: string | undefined,
     paths: QqPaths,
-  ): Promise<boolean | undefined> {
+  ): Promise<QqAccountState> {
     const dbPath = this.accountDbPath(uin, uid, paths);
-    if (!dbPath) return undefined;
+    if (!dbPath) return {};
     const holders = this.qqProcesses(dbPath);
-    if (holders) return holders.length > 0;
-    if (!this.options.native.isQqLoggedIn) return undefined;
+    if (holders && holders.length > 0) return { online: true, pid: holders[0]!.pid };
+    // 有探针且一个持有者都没有 = 确定不在线；没有探针才是「不知道」。
+    if (holders) return { online: false };
+    if (!this.options.native.isQqLoggedIn) return {};
     try {
-      return await this.options.native.isQqLoggedIn(dbPath);
+      return { online: await this.options.native.isQqLoggedIn(dbPath) };
     } catch (cause) {
       this.log.warn('isQqLoggedIn 失败（在线状态未知）', {
         dbPath,
         cause: messageOf(cause),
       });
-      return undefined;
+      return {};
     }
   }
 
@@ -474,7 +694,7 @@ export class ConsoleRuntime {
       const result = probe(dbPath);
       if (!result.success) return [];
       return result.holders
-        .filter((holder) => isQqProcessName(holder.name))
+        .filter((holder) => looksLikeQqProcess(holder.name))
         .map((holder) => ({ pid: holder.pid }))
         .filter((holder) => holder.pid > 0);
     } catch (cause) {
@@ -612,12 +832,23 @@ export class ConsoleRuntime {
     this.startedAccount = uin;
     this.wireBot(bot);
 
+    await this.bringUp(bot, uin);
+    this.log.info('账号已上线', { uin, endedQq });
+    return { endedQq };
+  }
+
+  /**
+   * `bot.start()` + 预期内错误的翻译。
+   *
+   * 本机凭据、扫码、有头模式三条链路共用这一段 —— 错误文案与阶段迁移必须
+   * 一致，否则同一个错误在不同入口下会给出不同结论（比如 a1 失效在扫码下有
+   * 提示、在手输路径下只给 INTERNAL）。
+   */
+  private async bringUp(bot: Bot, uin: string): Promise<void> {
     try {
       await bot.start();
       this.phase = 'online';
       this.emitPhase('online', '已上线');
-      this.log.info('账号已上线', { uin, endedQq });
-      return { endedQq };
     } catch (cause) {
       this.phase = 'offline';
       this.emitPhase('offline', messageOf(cause));
@@ -1370,10 +1601,10 @@ function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
  * 与 nt_helper 的 `is_qq_process_name` 同一条规则：不剥 `.exe` 会漏掉 Windows，
  * 不转小写会漏掉 Linux。名字拿不到（空串）一律不当成 QQ。
  */
-function isQqProcessName(name: string): boolean {
-  const trimmed = name.trim().toLowerCase();
-  if (!trimmed) return false;
-  return (trimmed.endsWith('.exe') ? trimmed.slice(0, -4) : trimmed) === 'qq';
+/** 账号在 QQ 本体里的状态：`online` 未知时省略，`pid` 拿不到时省略。 */
+interface QqAccountState {
+  online?: boolean;
+  pid?: number;
 }
 
 const OS_NAME: Record<DeviceProfile['os'], string> = {
@@ -1491,4 +1722,31 @@ function avatarUrlOf(uin: string): string {
 
 function messageOf(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);
+}
+
+/**
+ * 有头模式的错误 → HTTP。
+ *
+ * `ELEVATION_REQUIRED` 必须是稳定的 409 + code：页面靠它弹提权框。如果落到
+ * `guard()` 的兜底（500 INTERNAL），用户只会看到一句「内部错误」，而实际上
+ * 他只需要输一次密码。
+ */
+function attachHttpError(cause: unknown): HttpError {
+  if (cause instanceof HttpError) return cause;
+  if (cause instanceof AttachError) {
+    const message = cause.detail ? `${cause.message}。${cause.detail}` : cause.message;
+    switch (cause.code) {
+      case 'ELEVATION_REQUIRED':
+        return new HttpError(409, cause.code, message);
+      case 'ELEVATION_FAILED':
+        return new HttpError(403, cause.code, message);
+      case 'PROCESS_GONE':
+        return new HttpError(409, cause.code, message);
+      case 'NATIVE_MISSING_CAPABILITY':
+        return new HttpError(501, cause.code, message);
+      default:
+        return new HttpError(502, cause.code, message);
+    }
+  }
+  return new HttpError(502, 'ATTACH_FAILED', messageOf(cause));
 }

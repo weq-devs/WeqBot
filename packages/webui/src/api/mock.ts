@@ -11,6 +11,7 @@ import {
   type ActionCallEntry,
   type ConsolePhase,
   type ConsoleStateEvent,
+  type ElevationState,
   type LoginAccount,
   type LoginEnvironment,
   type LogEntry,
@@ -141,6 +142,21 @@ let ACCOUNTS: LoginAccount[] = [...BASE_ACCOUNTS];
 
 /** 开发面板的「模拟 a1 失效」开关：打开后 vault 来源的登录会报 409 A1_EXPIRED。 */
 const mockExpireA1 = { enabled: false };
+
+/**
+ * 有头模式的提权状态。
+ *
+ * mock 里固定成「需要 sudo、没缓存」—— 这是最常见的一种，也是唯一会弹提权框的
+ * 那一种；页面不该只在某个平台上才能走通。
+ */
+const MOCK_ELEVATION: ElevationState = {
+  platform: 'linux',
+  elevated: false,
+  cached: false,
+  mechanism: 'sudo',
+  ptraceScope: 1,
+  hint: '读取运行中 QQ 的内存需要一次管理员授权（sudo）。密码只用于这一次读取，不会保存。',
+};
 
 const ONLINE_SINCE = Date.now() - 1000 * 60 * 47;
 
@@ -489,6 +505,40 @@ export const mockApi = {
     },
     async cancelQr() {
       state.qr = null;
+    },
+    attach: {
+      async instances() {
+        await sleep(latency(180));
+        const running = ACCOUNTS.filter((item) => item.qqOnline && item.source === 'login-db');
+        return {
+          elevation: MOCK_ELEVATION,
+          instances: [
+            ...running.map((item, index) => ({
+              pid: 12_480 + index * 16,
+              uin: item.uin,
+              uid: item.uid,
+              ...(item.nickname ? { nickname: item.nickname } : {}),
+              ...(item.avatarUrl ? { avatarUrl: item.avatarUrl } : {}),
+              qqVersion: '3.2.35-54395',
+              attachable: true,
+            })),
+            {
+              pid: 13_240,
+              attachable: false,
+              note: '认不出这个 QQ 进程属于哪个账号（可能刚启动），有头模式需要知道账号身份',
+            },
+          ],
+        };
+      },
+      async start(_uin: string, options?: { pid?: number; password?: string }) {
+        await sleep(latency(800));
+        if (!options?.password) {
+          throw new ApiError(409, 'ELEVATION_REQUIRED', '读取运行中 QQ 的内存需要管理员权限');
+        }
+        // 有头接入不改动 QQ 的在线状态：QQ 继续在线，我们只是借它的会话。
+        state.phase = 'online';
+        return { phase: state.phase, pid: options.pid ?? 12_480 };
+      },
     },
   },
 

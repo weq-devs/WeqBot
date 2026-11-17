@@ -5,6 +5,17 @@ export {
   MAX_CONTROL_LINE_BYTES,
 } from './codec';
 export {
+  connectControlSocket,
+  ControlRemoteError,
+  defaultControlSocketPath,
+  listenControlSocket,
+  type ConnectControlOptions,
+  type ControlPeer,
+  type ControlServerPeer,
+  type ControlSocketServer,
+  type ControlSocketServerOptions,
+} from './socket';
+export {
   CONTROL_EVENTS,
   CONTROL_PROTOCOL_VERSION,
   controlEvent,
