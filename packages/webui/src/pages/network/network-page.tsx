@@ -30,6 +30,7 @@ import type {
 } from '../../api/types';
 import { Button } from '../../components/button';
 import { Switch } from '../../components/switch';
+import { useToast } from '../../components/toast';
 import { usePolling } from '../../lib/hooks';
 import { NETWORK_KIND_LABEL, NETWORK_STATE_LABEL } from '../../lib/format';
 import type { PageProps } from '../../components/shell';
@@ -52,6 +53,7 @@ export function NetworkPage({ overview, phase }: PageProps) {
   const [saving, setSaving] = useState(false);
   const [failure, setFailure] = useState<string>();
   const [savedAt, setSavedAt] = useState<number>();
+  const toast = useToast();
   /** 最后一次成功落盘的序列化内容：防抖保存据此判断是否真的改了。 */
   const lastSaved = useRef<string | undefined>(undefined);
   /** 最新草稿：保存回来时只在草稿没被继续编辑的前提下回填。 */
@@ -81,12 +83,21 @@ export function NetworkPage({ overview, phase }: PageProps) {
         setSavedAt(Date.now());
         reload();
       } catch (cause) {
-        setFailure(describe(cause));
+        const message = describe(cause);
+        setFailure(message);
+        // 自动保存失败时用户可能已经在看别处（比如刚改完 accessToken 就往下滚），
+        // 行内错误不一定在视野里 —— 再推一条 toast，用同一个 key 避免堆叠。
+        toast.push({
+          key: 'network-save',
+          tone: 'error',
+          title: '网络配置保存失败',
+          detail: message,
+        });
       } finally {
         setSaving(false);
       }
     },
-    [reload],
+    [reload, toast],
   );
 
   // 自动保存：改动停止 550ms 后提交。失败时保留草稿，用户改一下或点「重试」。

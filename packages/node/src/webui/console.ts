@@ -55,6 +55,13 @@ export interface ConsoleAccount {
   nickname?: string;
   avatarUrl?: string;
   lastLoginAt?: number;
+  /**
+   * 这个账号**在 QQ 本体里**是否在线（QQ 进程持有它的 `nt_msg.db`）。
+   *
+   * 登录页据此展示徽标并要求用户知情：登录 WeqBot 会先结束那个 QQ 进程
+   * （否则同一账号双端在线，消息会出现两处）。探测不到时省略。
+   */
+  qqOnline?: boolean;
 }
 
 /** 账号来源：我们自己的凭据库，或本机 `login.db`。 */
@@ -195,6 +202,12 @@ export interface ConsoleOptions {
 
 /** 二维码登录单飞的窗口：45 秒硬超时（V45），期间重复请求复用同一次。 */
 const QR_TIMEOUT_MS = 45_000;
+
+/** 登录前结束 QQ 本体后，等它释放 `nt_msg.db` 锁的最长时间。 */
+const QQ_KILL_WAIT_MS = 3000;
+
+/** 等锁释放时的轮询间隔。 */
+const QQ_KILL_POLL_MS = 150;
 
 /**
  * 路径探测结果的有效期。
@@ -352,6 +365,7 @@ export class ConsoleRuntime {
    * **不返回 a1**（`login.db` 的 `a1Payload` 只在 `startAccount` 的局部变量里活一次）。
    */
   async accounts(): Promise<ConsoleAccount[]> {
+    const paths = await this.paths();
     const out: ConsoleAccount[] = [];
     // vault 里的凭据一定有 a1（`get()` 读不出 a1 会直接抛 CREDENTIAL_CORRUPT）。
     for (const account of await this.options.vault.list()) {
@@ -381,16 +395,149 @@ export class ConsoleRuntime {
       if (row.avatarUrl) this.avatarSources.set(row.uin, row.avatarUrl);
     }
 
-    return out.sort((a, b) => (b.lastLoginAt ?? 0) - (a.lastLoginAt ?? 0));
+    // 「QQ 本体在线」按 uin 探测一次（同一 uin 可能在两个来源里各有一条）。
+    // 探测不到（推不出 dbPath / native 缺能力）时不给这个字段 —— 页面据此
+    // 区分「已知不在线」与「不知道」，不用 `false` 冒充结论。
+    const onlineByUin = new Map<string, boolean | undefined>();
+    for (const item of out) {
+      if (onlineByUin.has(item.uin)) continue;
+      onlineByUin.set(item.uin, await this.qqOnlineOf(item.uin, item.uid, paths));
+    }
+
+    return out
+      .map((item) => {
+        const online = onlineByUin.get(item.uin);
+        return online === undefined ? item : { ...item, qqOnline: online };
+      })
+      .sort((a, b) => (b.lastLoginAt ?? 0) - (a.lastLoginAt ?? 0));
+  }
+
+  /**
+   * 这个账号是否在 QQ 本体里在线。
+   *
+   * 优先用 `probeDbLock`（能同时拿到 pid，登录前要用它结束进程）；没有这个
+   * 能力时退回 `isQqLoggedIn` 的布尔结论。两者都没有 / 推不出 dbPath 时返回
+   * `undefined`：页面不应该把「不知道」显示成「不在线」。
+   */
+  private async qqOnlineOf(
+    uin: string,
+    uid: string | undefined,
+    paths: QqPaths,
+  ): Promise<boolean | undefined> {
+    const dbPath = this.accountDbPath(uin, uid, paths);
+    if (!dbPath) return undefined;
+    const holders = this.qqProcesses(dbPath);
+    if (holders) return holders.length > 0;
+    if (!this.options.native.isQqLoggedIn) return undefined;
+    try {
+      return await this.options.native.isQqLoggedIn(dbPath);
+    } catch (cause) {
+      this.log.warn('isQqLoggedIn 失败（在线状态未知）', {
+        dbPath,
+        cause: messageOf(cause),
+      });
+      return undefined;
+    }
+  }
+
+  /**
+   * 该账号的 `nt_msg.db`：按账号目录推导优先，其次显式配置的 `qq.dbPath`。
+   *
+   * 与 `startAccount` 给 bot 的推导顺序一致 —— 页面展示的在线状态必须就是
+   * 上线预检会看的那个库，否则会出现「页面说 QQ 在线、登录却报另一回事」。
+   */
+  private accountDbPath(uin: string, uid: string | undefined, paths: QqPaths): string | null {
+    return (
+      findNtMsgDb({
+        platform: paths.platform,
+        dataRoot: paths.dataRoot,
+        uin,
+        ...(uid ? { uid } : {}),
+      }) ??
+      this.options.qqDbPath ??
+      this.options.config.qq?.dbPath ??
+      null
+    );
+  }
+
+  /**
+   * 正持有该库的 QQ 进程。
+   *
+   * 只认进程名像 QQ 的持有者：三端探针都会把 WeQ / WeqBot 自己报进来，按名字
+   * 过滤才不会在登录前把我们自己的进程杀掉。`undefined` 表示没有 `probeDbLock`
+   * 能力（调用方退回 `isQqLoggedIn`）。
+   */
+  private qqProcesses(dbPath: string): Array<{ pid: number }> | undefined {
+    const probe = this.options.binding.probeDbLock;
+    if (!probe) return undefined;
+    try {
+      const result = probe(dbPath);
+      if (!result.success) return [];
+      return result.holders
+        .filter((holder) => isQqProcessName(holder.name))
+        .map((holder) => ({ pid: holder.pid }))
+        .filter((holder) => holder.pid > 0);
+    } catch (cause) {
+      this.log.warn('probeDbLock 失败（按不在线处理）', { dbPath, cause: messageOf(cause) });
+      return [];
+    }
+  }
+
+  /**
+   * 登录前接管账号：结束正持有该 `nt_msg.db` 的 QQ 进程。
+   *
+   * 页面在用户点账号时已经显示「QQ 本体在线，登录会先结束它」，这里不再二次询问。
+   * 只杀**名字像 QQ 且确实持有这个库**的进程，不碰其它进程；杀完等锁释放（最多
+   * {@link QQ_KILL_WAIT_MS}），释放不了就交给 `createBot` 的 `isQqLoggedIn` 预检
+   * 报 `ALREADY_ONLINE`。
+   *
+   * 返回结束掉的进程数，供页面提示。
+   */
+  private async stopQqBody(dbPath: string | null, uin: string): Promise<number> {
+    if (!dbPath) return 0;
+    const holders = this.qqProcesses(dbPath);
+    if (!holders || holders.length === 0) return 0;
+
+    let ended = 0;
+    for (const holder of holders) {
+      try {
+        process.kill(holder.pid);
+        ended += 1;
+        this.log.info('已结束本机 QQ 进程（登录前接管账号）', { uin, pid: holder.pid });
+      } catch (cause) {
+        this.log.warn('结束 QQ 进程失败（继续尝试上线）', {
+          uin,
+          pid: holder.pid,
+          cause: messageOf(cause),
+        });
+      }
+    }
+    if (ended === 0) return 0;
+
+    const deadline = Date.now() + QQ_KILL_WAIT_MS;
+    while (Date.now() < deadline) {
+      const remaining = this.qqProcesses(dbPath);
+      if (!remaining || remaining.length === 0) return ended;
+      await new Promise((resolve) => setTimeout(resolve, QQ_KILL_POLL_MS));
+    }
+    this.log.warn('QQ 进程已结束但 nt_msg.db 锁仍未释放', {
+      uin,
+      dbPath,
+      waitedMs: QQ_KILL_WAIT_MS,
+    });
+    return ended;
   }
 
   /**
    * 用本机凭据登录。
    *
-   * 顺序：取 a1（来源见 {@link resolveCredential}）→ `createBot().start()`。
+   * 顺序：取 a1（来源见 {@link resolveCredential}）→ 结束正用着这个账号的 QQ 本体
+   * （{@link stopQqBody}）→ `createBot().start()`。
    * `device` 取自 `major.node`，`guid` 取自数据根；两者缺一都明确失败，不猜。
+   *
+   * 返回登录前结束掉的 QQ 进程数，页面据此提示「已接管账号」。
    */
-  async startAccount(uin: string, options: StartAccountOptions = {}): Promise<void> {
+  async startAccount(uin: string, options: StartAccountOptions = {}): Promise<{ endedQq: number }> {
     if (this.phase === 'online' || this.phase === 'starting') {
       throw new HttpError(409, 'ALREADY_ONLINE', '已有账号在线，先退出登录再切换');
     }
@@ -431,6 +578,14 @@ export class ConsoleRuntime {
       delete botConfig.qq;
     }
 
+    // 本机 QQ 正用着这个账号：先结束它再上线。
+    //
+    // mode 2 与 QQ 双端在线技术上可行（V5），但消息会出现两处、回执语义混乱，
+    // 产品口径是「一个账号只在一端」。登录页已经在账号行上显示了「QQ 本体在线，
+    // 登录会先结束它」—— 用户点下去就是接管，这里不二次询问。
+    const endedQq = await this.stopQqBody(derivedDbPath ?? null, uin);
+    if (endedQq > 0) this.emitPhase('starting', `已结束本机 QQ 进程（${endedQq} 个），正在上线`);
+
     // 把控制台探测到的 wrapper 交给 bot。
     //
     // 不交的后果是 Windows 上直接报 `SIGNER_REQUIRED`：native 的
@@ -461,7 +616,8 @@ export class ConsoleRuntime {
       await bot.start();
       this.phase = 'online';
       this.emitPhase('online', '已上线');
-      this.log.info('账号已上线', { uin });
+      this.log.info('账号已上线', { uin, endedQq });
+      return { endedQq };
     } catch (cause) {
       this.phase = 'offline';
       this.emitPhase('offline', messageOf(cause));
@@ -1205,6 +1361,19 @@ function dedupeByUin(rows: LoginRow[]): LoginRow[] {
 
 function isPromise<T>(value: T | Promise<T>): value is Promise<T> {
   return typeof (value as Promise<T>)?.then === 'function';
+}
+
+/**
+ * 进程名是否是 QQ 本体（三端命名）：`QQ` / `QQ.exe`（Windows / macOS）或 `qq`
+ * （Linux `/proc/<pid>/comm`）。
+ *
+ * 与 nt_helper 的 `is_qq_process_name` 同一条规则：不剥 `.exe` 会漏掉 Windows，
+ * 不转小写会漏掉 Linux。名字拿不到（空串）一律不当成 QQ。
+ */
+function isQqProcessName(name: string): boolean {
+  const trimmed = name.trim().toLowerCase();
+  if (!trimmed) return false;
+  return (trimmed.endsWith('.exe') ? trimmed.slice(0, -4) : trimmed) === 'qq';
 }
 
 const OS_NAME: Record<DeviceProfile['os'], string> = {

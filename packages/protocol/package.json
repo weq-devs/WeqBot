@@ -1,6 +1,6 @@
 {
   "name": "@weqbot/protocol",
-  "version": "0.1.1",
+  "version": "0.1.3",
   "private": true,
   "type": "module",
   "description": "QQ 协议层：protobuf 运行时 / OIDB + trpc 业务 spec / 消息编解码 / highway / 推送解码",

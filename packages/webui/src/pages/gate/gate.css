@@ -421,35 +421,7 @@
   color: var(--accent-text);
 }
 
-/* 错误提示：展开 / 收起由 motion 驱动，外层只负责裁切。 */
-.gate-problem-wrap {
-  overflow: hidden;
-}
-
-.gate-problem {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 10px 0 0;
-  padding: 9px 12px;
-  border: 1px solid var(--status-critical-border);
-  border-radius: var(--radius-md);
-  background: var(--status-critical-soft);
-  color: var(--status-critical-text);
-  font-size: var(--text-sm);
-  line-height: 1.45;
-}
-
-.gate-problem svg {
-  flex: none;
-  margin-top: 1px;
-}
-
-.gate-problem[data-tone="neutral"] {
-  border-color: var(--border-strong);
-  background: var(--bg-sunken);
-  color: var(--text-secondary);
-}
+/* 校验失败的反馈走统一 toast（见 components/toast.tsx），这里只留表单本身的样式。 */
 
 .gate-submit-label {
   display: inline-flex;

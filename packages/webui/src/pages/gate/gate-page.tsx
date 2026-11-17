@@ -1,18 +1,10 @@
-import {
-  ArrowRight,
-  Check,
-  CircleAlert,
-  LoaderCircle,
-  LockKeyhole,
-  type LucideIcon,
-  Timer,
-  Unplug,
-} from 'lucide-react';
+import { ArrowRight, Check, LoaderCircle, LockKeyhole, Timer } from 'lucide-react';
 import { AnimatePresence, motion, useAnimate } from 'motion/react';
 import { type FormEvent, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { api } from '../../api';
 import { Button } from '../../components/button';
 import { Logo } from '../../components/logo';
+import { type ToastTone, useToast } from '../../components/toast';
 import { EASE_OUT, enterPop, enterRise, enterStagger, screenExit } from '../../lib/motion';
 import { isWellFormedToken } from '../../lib/token';
 import { TerminalHint } from './terminal-hint';
@@ -38,7 +30,9 @@ interface GatePageProps {
 const SHAKE = [0, -10, 9, -6, 4, -2, 0];
 
 const FIELD_ID = 'gate-token';
-const PROBLEM_ID = 'gate-problem';
+
+/** 令牌页的提示固定用同一个 key：连续输错也只保留最新一条。 */
+const TOAST_KEY = 'gate-token';
 
 /**
  * 访问令牌页：WebUI 的第一道门。
@@ -56,6 +50,7 @@ export function GatePage({ linkToken, onLinkTokenUsed, onAuthenticated }: GatePa
   const [cardRef, animateCard] = useAnimate<HTMLDivElement>();
   const inputRef = useRef<HTMLInputElement>(null);
   const linkTokenHandled = useRef(false);
+  const toast = useToast();
 
   const lockRemainingMs = problem?.kind === 'locked' ? Math.max(0, problem.until - now) : 0;
   const locked = lockRemainingMs > 0;
@@ -118,12 +113,24 @@ export function GatePage({ linkToken, onLinkTokenUsed, onAuthenticated }: GatePa
     if (card) void animateCard(card, { x: SHAKE }, { duration: 0.46, ease: 'easeInOut' });
   }
 
+  /**
+   * 令牌校验失败统一走这里：设置字段错误态（红框 / 锁定倒计时）+ 抖一下 + toast。
+   *
+   * 反馈放到右上角统一的 toast，而不是卡片里再展开一行 —— 不管用户有没有在看
+   * 输入框，都能看到「为什么没进去」；`key` 固定，连续输错不会叠一屏。
+   */
+  function report(next: Problem) {
+    setProblem(next);
+    shake();
+    const { tone, title, detail } = describeProblem(next);
+    toast.push({ key: TOAST_KEY, tone, title, detail });
+  }
+
   async function verify(candidate: string) {
     if (busy || locked) return;
     const value = candidate.trim();
     if (!isWellFormedToken(value)) {
-      setProblem({ kind: 'malformed' });
-      shake();
+      report({ kind: 'malformed' });
       return;
     }
 
@@ -131,21 +138,27 @@ export function GatePage({ linkToken, onLinkTokenUsed, onAuthenticated }: GatePa
     setPhase('verifying');
     const result = await api.auth.createSession(value);
     if (result.ok) {
+      toast.push({
+        key: TOAST_KEY,
+        tone: 'success',
+        title: '令牌验证通过',
+        detail: '正在进入控制台…',
+        ttl: 1600,
+      });
       setPhase('success');
       return;
     }
 
     setPhase('idle');
     if (result.reason === 'invalid') {
-      setProblem({ kind: 'invalid', remainingAttempts: result.remainingAttempts });
+      report({ kind: 'invalid', remainingAttempts: result.remainingAttempts });
     } else if (result.reason === 'locked') {
       const current = Date.now();
       setNow(current);
-      setProblem({ kind: 'locked', until: current + result.retryAfterMs });
+      report({ kind: 'locked', until: current + result.retryAfterMs });
     } else {
-      setProblem({ kind: 'unreachable' });
+      report({ kind: 'unreachable' });
     }
-    shake();
   }
 
   const submitLinkToken = useEffectEvent((value: string) => {
@@ -210,11 +223,7 @@ export function GatePage({ linkToken, onLinkTokenUsed, onAuthenticated }: GatePa
                 invalid={fieldInvalid}
                 readOnly={busy}
                 disabled={locked}
-                describedBy={problem ? PROBLEM_ID : undefined}
               />
-              <AnimatePresence initial={false}>
-                {problem && <ProblemNote key={problem.kind} problem={problem} />}
-              </AnimatePresence>
             </div>
 
             <Button
@@ -242,54 +251,40 @@ export function GatePage({ linkToken, onLinkTokenUsed, onAuthenticated }: GatePa
 }
 
 function describeProblem(problem: Problem): {
-  Icon: LucideIcon;
-  tone: 'critical' | 'neutral';
-  text: string;
+  tone: ToastTone;
+  title: string;
+  detail: string;
 } {
   switch (problem.kind) {
     case 'malformed':
       return {
-        Icon: CircleAlert,
-        tone: 'critical',
-        text: '格式不对：令牌以 wqb_ 开头，后面是 24 位字母或数字。',
+        tone: 'error',
+        title: '令牌格式不对',
+        detail: '令牌以 wqb_ 开头，后面是 24 位字母或数字。',
       };
     case 'invalid':
       return {
-        Icon: CircleAlert,
-        tone: 'critical',
-        text:
+        tone: 'error',
+        title: '令牌不正确',
+        detail:
           problem.remainingAttempts > 1
-            ? `令牌不正确，还可以再试 ${problem.remainingAttempts} 次。`
-            : '令牌不正确。再错一次会锁定 30 秒。',
+            ? `还可以再试 ${problem.remainingAttempts} 次；再错会把输入锁定 30 秒。`
+            : '再错一次会锁定 30 秒。令牌在启动 WeqBot 的终端里，每次启动都会变。',
       };
     case 'locked':
       // 倒计时只放在按钮上：这条提示是 role="alert"，每秒变一次会被读屏反复播报。
-      return { Icon: Timer, tone: 'critical', text: '尝试次数过多，已暂时锁定。' };
+      return {
+        tone: 'warning',
+        title: '尝试次数过多，已暂时锁定',
+        detail: '为避免暴力猜测，稍等片刻后再试；锁定期间输入框不可用。',
+      };
     case 'unreachable':
       return {
-        Icon: Unplug,
-        tone: 'neutral',
-        text: '连不上 WeqBot 进程。确认它还在运行，然后再试一次。',
+        tone: 'info',
+        title: '连不上 WeqBot 进程',
+        detail: '确认它还在运行（终端窗口没关），然后再试一次。',
       };
   }
-}
-
-function ProblemNote({ problem }: { problem: Problem }) {
-  const { Icon, tone, text } = describeProblem(problem);
-  return (
-    <motion.div
-      className="gate-problem-wrap"
-      initial={{ height: 0, opacity: 0 }}
-      animate={{ height: 'auto', opacity: 1 }}
-      exit={{ height: 0, opacity: 0 }}
-      transition={{ duration: 0.28, ease: EASE_OUT }}
-    >
-      <p id={PROBLEM_ID} className="gate-problem" data-tone={tone} role="alert">
-        <Icon size={15} aria-hidden="true" />
-        <span>{text}</span>
-      </p>
-    </motion.div>
-  );
 }
 
 function SubmitLabel({ phase, lockRemainingMs }: { phase: Phase; lockRemainingMs: number }) {

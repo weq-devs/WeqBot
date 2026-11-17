@@ -125,6 +125,10 @@
   --status-good: oklch(0.6 0.15 155);
   --status-warning: oklch(0.7 0.15 70);
   --status-critical: oklch(0.58 0.2 27);
+  /* 状态色的文字版本：`--status-*` 本身是给圆点 / 徽标底用的，当作小字号文字
+     时对比度不够（浅色下 < 4.5:1），所以每种语气另有一个可读的文字色。 */
+  --status-good-text: oklch(0.46 0.12 156);
+  --status-warning-text: oklch(0.5 0.11 62);
   --status-critical-text: oklch(0.52 0.19 27);
   --status-critical-soft: oklch(0.58 0.2 27 / 0.07);
   --status-critical-border: oklch(0.58 0.2 27 / 0.22);
@@ -193,6 +197,8 @@
   --status-good: oklch(0.74 0.15 155);
   --status-warning: oklch(0.8 0.14 75);
   --status-critical: oklch(0.7 0.17 25);
+  --status-good-text: oklch(0.82 0.12 155);
+  --status-warning-text: oklch(0.85 0.11 78);
   --status-critical-text: oklch(0.8 0.12 25);
   --status-critical-soft: oklch(0.7 0.17 25 / 0.1);
   --status-critical-border: oklch(0.7 0.17 25 / 0.28);

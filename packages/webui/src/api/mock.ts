@@ -116,6 +116,9 @@ const BASE_ACCOUNTS: readonly LoginAccount[] = [
     source: 'vault',
     nickname: '冬眠的猫',
     lastLoginAt: Date.now() - 3 * 60 * 60 * 1000,
+    // 演示「QQ 本体在线」徽标：vault 那条可以登录（QQ 没在用），
+    // login.db 那条会被标成「登录会先结束 QQ 进程」。
+    qqOnline: false,
   },
   {
     uin: '10002',
@@ -123,6 +126,7 @@ const BASE_ACCOUNTS: readonly LoginAccount[] = [
     source: 'login-db',
     nickname: '冬眠的猫',
     lastLoginAt: Date.now() - 3 * 60 * 60 * 1000,
+    qqOnline: true,
   },
   {
     uin: '10001',
@@ -130,6 +134,7 @@ const BASE_ACCOUNTS: readonly LoginAccount[] = [
     source: 'login-db',
     nickname: '小号测试',
     lastLoginAt: Date.now() - 9 * 24 * 60 * 60 * 1000,
+    qqOnline: false,
   },
 ];
 let ACCOUNTS: LoginAccount[] = [...BASE_ACCOUNTS];
@@ -435,6 +440,14 @@ const CONFIG: OneBotConfig = {
 };
 
 export const mockApi = {
+  health: {
+    async check() {
+      await sleep(latency(40));
+      if (state.offline) throw new ApiError(0, 'UNREACHABLE');
+      return { ok: true, at: Date.now(), pid: 4242, uptimeSec: 2820 };
+    },
+  },
+
   auth: {
     createSession,
     async getSession() {
@@ -464,7 +477,11 @@ export const mockApi = {
         ACCOUNTS = ACCOUNTS.filter((item) => !(item.uin === uin && item.source === 'vault'));
         throw new ApiError(409, 'A1_EXPIRED', '该账号的 a1 已失效，请扫码登录');
       }
+      // 与真后端一致：登录前会结束正用着这个账号的 QQ 本体，之后在线状态变 false。
+      const endedQq = ACCOUNTS.some((item) => item.uin === uin && item.qqOnline) ? 1 : 0;
+      ACCOUNTS = ACCOUNTS.map((item) => (item.uin === uin ? { ...item, qqOnline: false } : item));
       state.phase = 'online';
+      return { phase: state.phase, endedQq };
     },
     async startQr() {
       await sleep(latency(140));

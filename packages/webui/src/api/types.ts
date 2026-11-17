@@ -64,6 +64,20 @@ export interface LoginAccount {
   nickname?: string;
   avatarUrl?: string;
   lastLoginAt?: number;
+  /**
+   * 这个账号在 **QQ 本体**里是否在线（QQ 进程持有它的 `nt_msg.db`）。
+   *
+   * `undefined` 表示服务端探测不到（推不出 dbPath / native 缺能力），页面不能
+   * 把「不知道」显示成「不在线」。登录页会轮询账号列表，徽标随之更新。
+   */
+  qqOnline?: boolean;
+}
+
+/** `POST /api/login/start` 的结果。 */
+export interface LoginStartResult {
+  phase: ConsolePhase;
+  /** 登录前结束的本机 QQ 进程数（QQ 本体正用着这个账号时不为 0）。 */
+  endedQq: number;
 }
 
 export type QrState =
@@ -93,7 +107,7 @@ export interface LoginApi {
    * `source` 指定用哪份凭据：列表里同一 uin 可能有两条（vault / `login.db`），
    * 点哪条就用哪条。省略时服务端按 vault 优先。
    */
-  start(uin: string, options?: { source?: AccountSource }): Promise<void>;
+  start(uin: string, options?: { source?: AccountSource }): Promise<LoginStartResult>;
   /** 起一次扫码（45s 硬超时，重复调用复用同一次）。 */
   startQr(): Promise<QrSnapshot>;
   cancelQr(): Promise<void>;
@@ -360,6 +374,22 @@ export interface AccountApi {
   logout(options?: { forgetCredential?: boolean }): Promise<void>;
 }
 
+// ─────────────────────────── 健康检查 ───────────────────────────
+
+/** `GET /api/health`：页面据此判断控制台进程是否还活着。 */
+export interface HealthSnapshot {
+  ok: boolean;
+  /** 服务端应答时刻（ms）。断开后页面用最后一次成功值冻结「在线时长」。 */
+  at: number;
+  pid: number;
+  uptimeSec: number;
+}
+
+export interface HealthApi {
+  /** 免鉴权：后端重启后 cookie 失效，健康状态仍然要能被看见。 */
+  check(): Promise<HealthSnapshot>;
+}
+
 // ─────────────────────────── 事件流 ───────────────────────────
 
 /**
@@ -403,6 +433,8 @@ export interface EventsApi {
 
 export interface Api {
   auth: AuthApi;
+  /** 后端进程健康性（前端轮询，断开时停止展示在线时长）。 */
+  health: HealthApi;
   login: LoginApi;
   overview: OverviewApi;
   network: NetworkApi;

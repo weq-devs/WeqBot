@@ -37,9 +37,18 @@ import {
 import type { PageProps } from '../../components/shell';
 import './overview.css';
 
-export function OverviewPage({ overview, phase, reloadOverview }: PageProps) {
+export function OverviewPage({
+  overview,
+  phase,
+  reloadOverview,
+  reachable,
+  lastSeenAt,
+}: PageProps) {
   // 每秒刷新「在线时长」这类相对时间，避免只跟着 3 秒轮询跳。
   const now = useNow();
+  // 后端断开后 `now` 不再代表「账号还在线」：冻结在最后一次确认可达的时刻，
+  // 否则一个已经退出的进程会让在线时长继续往上跳。
+  const clock = reachable ? now : (lastSeenAt ?? now);
 
   const loadStats = useCallback(() => api.logs.stats(), []);
   const { data: stats } = usePolling(loadStats, 5000);
@@ -50,7 +59,7 @@ export function OverviewPage({ overview, phase, reloadOverview }: PageProps) {
 
   const account = overview.account;
   // 掉线重连期间 `onlineSince` 可能缺失；缺失时显示「—」，不要显示成 0 秒。
-  const online = account.onlineSince ? now - account.onlineSince : undefined;
+  const online = account.onlineSince ? clock - account.onlineSince : undefined;
   const actions = stats?.actions;
 
   return (
@@ -170,7 +179,7 @@ export function OverviewPage({ overview, phase, reloadOverview }: PageProps) {
             </div>
             <div>
               <dt>上线时刻</dt>
-              <dd>{account.onlineSince ? formatRelative(account.onlineSince, now) : '—'}</dd>
+              <dd>{account.onlineSince ? formatRelative(account.onlineSince, clock) : '—'}</dd>
             </div>
             <div>
               <dt>重连次数</dt>
@@ -180,7 +189,7 @@ export function OverviewPage({ overview, phase, reloadOverview }: PageProps) {
               <dt>SecToken 轮换</dt>
               <dd>
                 {account.secTokenRotatesAt
-                  ? formatRelative(account.secTokenRotatesAt, now).replace('前', '后')
+                  ? formatRelative(account.secTokenRotatesAt, clock).replace('前', '后')
                   : '未排期'}
               </dd>
             </div>

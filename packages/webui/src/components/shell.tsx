@@ -23,10 +23,11 @@ import {
   MoreVertical,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { api } from '../api';
 import type { ConsolePhase, Overview } from '../api/types';
 import { useNow, usePolling } from '../lib/hooks';
+import { useToast } from './toast';
 import { EASE_OUT, enterRise, enterStagger, screenExit } from '../lib/motion';
 import { formatDuration, PHASE_LABEL } from '../lib/format';
 import { Logo } from './logo';
@@ -44,6 +45,15 @@ export interface PageProps {
   overview: Overview | undefined;
   phase: ConsolePhase;
   reloadOverview(): void;
+  /**
+   * 后端进程是否可达（壳里每 5 秒轮询 `/api/health`）。
+   *
+   * 为 false 时页面上的实时量（在线时长等）都是**旧快照**，不能再当现时数据
+   * 继续累加。
+   */
+  reachable: boolean;
+  /** 最后一次确认后端可达的时刻（ms）；断开期间用它冻结相对时间。 */
+  lastSeenAt?: number;
 }
 
 interface NavItem {
@@ -77,6 +87,35 @@ export function Shell({
   const loadOverview = useCallback(() => api.overview.get(), []);
   // 总览数据 3 秒一轮：心跳 / 网络客户端数这类值是实时的，但没必要上 SSE。
   const { data: overview, reload } = usePolling(loadOverview, 3000);
+  /**
+   * 后端健康性轮询：**不能只看 `overview` 是否拿到值** —— 它一旦失败，
+   * `usePolling` 只是保留上一份数据，页面会看似正常、继续把「在线 47 分钟」
+   * 往上加，直到用户发现浏览器连的是一个早就退出的进程。
+   */
+  const loadHealth = useCallback(() => api.health.check(), []);
+  const { data: health, error: healthError } = usePolling(loadHealth, 5000);
+  const disconnected = healthError !== undefined;
+
+  const toast = useToast();
+  const wasDisconnected = useRef(false);
+  useEffect(() => {
+    if (disconnected) {
+      wasDisconnected.current = true;
+      toast.push({
+        key: 'backend-health',
+        tone: 'error',
+        title: '与后端失去连接',
+        detail: '控制台进程可能已经退出。在线时长已停止更新，恢复后会自动刷新。',
+        ttl: 0,
+      });
+    } else if (wasDisconnected.current) {
+      wasDisconnected.current = false;
+      toast.push({ key: 'backend-health', tone: 'success', title: '后端已恢复连接', ttl: 3000 });
+    }
+  }, [disconnected, toast]);
+  // 壳被卸掉（退出控制台 / 回登录页）时收走这条常驻提示：它说的是控制台里的
+  // 在线时长，离开控制台后就没有意义了。
+  useEffect(() => () => toast.dismissKey('backend-health'), [toast]);
 
   // 侧栏折叠状态记在本地：这是纯外观偏好，不属于控制台配置。
   useEffect(() => {
@@ -93,8 +132,9 @@ export function Shell({
   const account = overview?.account;
   // 顶栏时长要跟着秒走，不能只在 overview 轮询时重算（否则会停在「在线 0 秒」）。
   const now = useNow();
-  const onlineLabel =
-    phase === 'online' && account?.onlineSince
+  const onlineLabel = disconnected
+    ? '连接已断开'
+    : phase === 'online' && account?.onlineSince
       ? `在线 ${formatDuration(now - account.onlineSince)}`
       : (PHASE_LABEL[phase] ?? phase);
 
@@ -208,7 +248,15 @@ export function Shell({
             )}
           </div>
           <div className="shell-top-actions">
-            <span className="shell-status" data-phase={phase}>
+            <span
+              className="shell-status"
+              data-phase={disconnected ? 'offline' : phase}
+              title={
+                disconnected
+                  ? '后端进程没有响应；这不是账号掉线。恢复后面板会自动刷新。'
+                  : undefined
+              }
+            >
               <span className="shell-status-dot" aria-hidden="true" />
               {onlineLabel}
             </span>
@@ -293,7 +341,13 @@ export function Shell({
         </header>
 
         <motion.main className="shell-content" variants={enterRise}>
-          <PageComponent overview={overview} phase={phase} reloadOverview={reload} />
+          <PageComponent
+            overview={overview}
+            phase={phase}
+            reloadOverview={reload}
+            reachable={!disconnected}
+            {...(health?.at !== undefined ? { lastSeenAt: health.at } : {})}
+          />
         </motion.main>
       </div>
     </motion.div>
