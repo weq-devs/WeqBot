@@ -1,0 +1,142 @@
+/* ───────────────────────────── 通知（toast） ───────────────────────────── */
+
+/*
+ * 右下角堆叠。所有颜色都取语义令牌，深浅模式自动跟着 `[data-theme]` 走；
+ * 语气色只出现在图标圈与进度条这类小面积上（配色纪律第 3 条）。
+ */
+
+.toast-host {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 60;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 10px;
+  width: min(360px, calc(100vw - 32px));
+  pointer-events: none;
+}
+
+.toast {
+  --toast-color: var(--accent-text);
+  --toast-soft: var(--accent-soft);
+
+  position: relative;
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  width: 100%;
+  overflow: hidden;
+  padding: 11px 12px 13px;
+  border: 1px solid var(--border);
+  border-left: 2px solid var(--toast-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-elevated);
+  box-shadow: var(--shadow-lg), var(--highlight);
+  pointer-events: auto;
+}
+
+.toast[data-tone="success"] {
+  --toast-color: var(--status-good-text);
+  --toast-soft: color-mix(in oklch, var(--status-good) 16%, transparent);
+}
+
+.toast[data-tone="warning"] {
+  --toast-color: var(--status-warning-text);
+  --toast-soft: color-mix(in oklch, var(--status-warning) 18%, transparent);
+}
+
+.toast[data-tone="error"] {
+  --toast-color: var(--status-critical-text);
+  --toast-soft: var(--status-critical-soft);
+}
+
+.toast-icon {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 24px;
+  height: 24px;
+  margin-top: 1px;
+  border-radius: var(--radius-full);
+  background: var(--toast-soft);
+  color: var(--toast-color);
+}
+
+.toast-text {
+  display: grid;
+  flex: 1;
+  gap: 2px;
+  min-width: 0;
+}
+
+.toast-title {
+  color: var(--text);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.toast-detail {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--text-xs);
+  line-height: 1.55;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+}
+
+.toast-close {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  margin-top: -2px;
+  margin-right: -4px;
+  border: 0;
+  border-radius: var(--radius-xs);
+  background: transparent;
+  color: var(--text-faint);
+  cursor: pointer;
+  transition:
+    background-color var(--duration-fast) var(--ease-out),
+    color var(--duration-fast) var(--ease-out);
+}
+
+.toast-close:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+}
+
+/* 倒计时条：铺在卡片底边，宽度随剩余时间收缩。 */
+.toast-progress-track {
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: 2px;
+  background: color-mix(in oklch, var(--toast-color) 14%, transparent);
+}
+
+.toast-progress {
+  display: block;
+  height: 100%;
+  background: var(--toast-color);
+  transition: width 100ms linear;
+}
+
+.toast-progress[data-paused] {
+  opacity: 0.4;
+}
+
+/* 通知区会盖住右下角（壳里那块是空的，但小窗口下要收一收）。 */
+@media (max-width: 560px) {
+  .toast-host {
+    right: 12px;
+    bottom: 12px;
+    width: calc(100vw - 24px);
+  }
+}

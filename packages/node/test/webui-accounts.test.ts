@@ -27,7 +27,14 @@ interface LoginRow {
  *
  * `decryptLoginDb` 的签名是同步的，`testDatabaseKey` 是 async —— 与真实绑定一致。
  */
-function makeRuntime(options: { vault: AccountSummary[]; rows: LoginRow[] }) {
+function makeRuntime(options: {
+  vault: AccountSummary[];
+  rows: LoginRow[];
+  /** 显式 `qq.dbPath`：推不出账号目录时，在线状态探测走这一份。 */
+  qqDbPath?: string;
+  /** 模拟 `probeDbLock` 的持有者；不给就不带这个能力。 */
+  holders?: Array<{ pid: number; name: string }>;
+}) {
   const binding = {
     testDatabaseKey: async () => ({
       success: true,
@@ -35,6 +42,16 @@ function makeRuntime(options: { vault: AccountSummary[]; rows: LoginRow[] }) {
       kdfHmacAlgorithm: 'sha1',
     }),
     decryptLoginDb: () => options.rows,
+    ...(options.holders
+      ? {
+          probeDbLock: () => ({
+            success: true,
+            msg: '',
+            locked: options.holders!.length > 0,
+            holders: options.holders,
+          }),
+        }
+      : {}),
   } as unknown as RawNativeBinding;
 
   const vault = {
@@ -65,6 +82,7 @@ function makeRuntime(options: { vault: AccountSummary[]; rows: LoginRow[] }) {
     logger: createLogger('test', { level: 'error' }),
     observability: new Observability(),
     discoverPaths: async () => paths,
+    ...(options.qqDbPath ? { qqDbPath: options.qqDbPath } : {}),
   });
 }
 
@@ -140,6 +158,44 @@ test('login.db 行没有 a1 且 vault 也没有时不出现', async () => {
   const accounts = await runtime.accounts();
 
   assert.deepEqual(accounts, []);
+});
+
+test('账号列表带 QQ 本体在线状态，且只认进程名像 QQ 的持有者', async () => {
+  const runtime = makeRuntime({
+    vault: [{ uin: '10001', uid: 'u_a' }],
+    rows: [],
+    qqDbPath: '/data/QQ/nt_db/nt_msg.db',
+    // WeQ / WeqBot 自己也会持有这个库；按名字过滤才不会把登录页的徽标点错。
+    holders: [
+      { pid: 12, name: 'weqbot' },
+      { pid: 34, name: 'QQ.exe' },
+    ],
+  });
+
+  const accounts = await runtime.accounts();
+
+  assert.equal(accounts[0]?.qqOnline, true, 'QQ 正在用这个账号，页面要能警告');
+});
+
+test('只有非 QQ 进程持有 nt_msg.db 时不算「QQ 本体在线」', async () => {
+  const runtime = makeRuntime({
+    vault: [{ uin: '10001', uid: 'u_a' }],
+    rows: [],
+    qqDbPath: '/data/QQ/nt_db/nt_msg.db',
+    holders: [{ pid: 12, name: 'WeQ' }],
+  });
+
+  const accounts = await runtime.accounts();
+
+  assert.equal(accounts[0]?.qqOnline, false);
+});
+
+test('探测不到在线状态时不发 qqOnline（不用 false 冒充结论）', async () => {
+  const runtime = makeRuntime({ vault: [{ uin: '10001', uid: 'u_a' }], rows: [] });
+
+  const accounts = await runtime.accounts();
+
+  assert.equal('qqOnline' in (accounts[0] as object), false);
 });
 
 test('列表不暴露 a1 或它的存在性字段', async () => {

@@ -15,7 +15,6 @@
 import {
   AlertTriangle,
   Check,
-  CircleAlert,
   CircleUserRound,
   KeyRound,
   LoaderCircle,
@@ -26,7 +25,7 @@ import {
   Smartphone,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useCallback, useEffect, useEffectEvent, useState } from 'react';
+import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { api, ApiError } from '../../api';
 import type {
   AccountSource,
@@ -37,6 +36,8 @@ import type {
 } from '../../api/types';
 import { Button } from '../../components/button';
 import { Logo } from '../../components/logo';
+import { useToast } from '../../components/toast';
+import { usePolling } from '../../lib/hooks';
 import { enterPop, enterRise, enterStagger, screenExit } from '../../lib/motion';
 import { formatRelative } from '../../lib/format';
 import type { LoginHint } from '../../app';
@@ -62,9 +63,20 @@ export function LoginPage({
   onLocked(): void;
 }) {
   const [tab, setTab] = useState<Tab>('saved');
-  const [accounts, setAccounts] = useState<LoginAccount[]>();
+  const toast = useToast();
+  /**
+   * 账号列表每 4 秒重拉一次：`qqOnline` 是实时状态（用户可能在扫码期间打开 /
+   * 退出了 QQ），轮询才能让它自己变 —— 不需要用户手动「重新检测」。
+   *
+   * 服务端只做一次 `existsSync` + 一次文件锁探针，4 秒的代价可以忽略。
+   */
+  const loadAccounts = useCallback(() => api.login.accounts(), []);
+  const {
+    data: accounts,
+    error: accountsError,
+    reload: reloadAccounts,
+  } = usePolling(loadAccounts, 4000);
   const [qr, setQr] = useState<QrSnapshot>();
-  const [failure, setFailure] = useState<string>();
   const [starting, setStarting] = useState<string>();
   /**
    * 上线进度（当前正在上线的账号的实时说明）。
@@ -74,17 +86,28 @@ export function LoginPage({
    */
   const [progress, setProgress] = useState<LoginProgressEvent>();
 
-  const loadAccounts = useCallback(async () => {
-    try {
-      setAccounts(await api.login.accounts());
-    } catch (cause) {
-      setFailure(describe(cause));
-    }
-  }, []);
-
+  /**
+   * 拉账号失败 = 控制台进程可能已经退了。常驻一条 toast，恢复后原地替换成
+   * 成功提示（同一个 key，不会堆一屏）。
+   */
+  const unreachable = useRef(false);
   useEffect(() => {
-    void loadAccounts();
-  }, [loadAccounts]);
+    if (accountsError) {
+      unreachable.current = true;
+      toast.push({
+        key: 'login-health',
+        tone: 'error',
+        title: '连不上控制台',
+        detail: describe(accountsError),
+        ttl: 0,
+      });
+    } else if (unreachable.current) {
+      unreachable.current = false;
+      toast.push({ key: 'login-health', tone: 'success', title: '控制台已恢复连接', ttl: 3000 });
+    }
+  }, [accountsError, toast]);
+  // 登录成功后登录页会被卸掉：这条常驻提示不能留在控制台上。
+  useEffect(() => () => toast.dismissKey('login-health'), [toast]);
 
   /**
    * 进度事件：**无论停在哪个 tab 都要听**。
@@ -107,13 +130,17 @@ export function LoginPage({
   }, [tab]);
 
   const startQr = useEffectEvent(async () => {
-    setFailure(undefined);
     setQr(undefined);
     try {
       const snapshot = await api.login.startQr();
       setQr(snapshot);
     } catch (cause) {
-      setFailure(describe(cause));
+      toast.push({
+        key: 'login-qr',
+        tone: 'error',
+        title: '获取二维码失败',
+        detail: describe(cause),
+      });
     }
   });
 
@@ -130,24 +157,32 @@ export function LoginPage({
   useEffect(() => {
     if (!hint) return;
     setTab('qr');
-    setFailure(hint.notice);
-    void loadAccounts();
+    toast.push({ key: 'login', tone: 'error', title: '需要重新扫码登录', detail: hint.notice });
+    reloadAccounts();
     onHintConsumed?.();
-  }, [hint, loadAccounts, onHintConsumed]);
+  }, [hint, reloadAccounts, onHintConsumed, toast]);
 
   const login = useEffectEvent(async (uin: string, source: AccountSource) => {
-    setFailure(undefined);
     setProgress(undefined);
     setStarting(`${source}:${uin}`);
     try {
-      await api.login.start(uin, { source });
+      const result = await api.login.start(uin, { source });
+      // QQ 本体正用着这个账号时，后端会先结束它再上线（页面上的徽标已经警告过）。
+      if (result.endedQq > 0) {
+        toast.push({
+          tone: 'info',
+          title: '已结束本机 QQ 进程',
+          detail: `为了接管这个账号，登录前结束了 ${result.endedQq} 个 QQ 进程。`,
+          ttl: 5000,
+        });
+      }
     } catch (cause) {
       // a1 失效：服务端已删掉 vault 里那份，只剩扫码还能继续。
       if (cause instanceof ApiError && cause.code === 'A1_EXPIRED') {
         setTab('qr');
-        await loadAccounts();
+        reloadAccounts();
       }
-      setFailure(describe(cause));
+      toast.push({ key: 'login', tone: 'error', title: '登录失败', detail: describe(cause) });
       setStarting(undefined);
       setProgress(undefined);
     }
@@ -171,7 +206,8 @@ export function LoginPage({
         </motion.div>
         <motion.h1 variants={enterRise}>登录 QQ 账号</motion.h1>
         <motion.p variants={enterRise}>
-          用已经保存的凭据或本机 QQ 的登录记录上线，也可以用手机扫码。同一时刻只有一个账号在线。
+          用已经保存的凭据或本机 QQ 的登录记录上线，也可以用手机扫码。同一时刻只有一个账号在线；
+          本机 QQ 的在线状态每 4 秒自动检查一次。
         </motion.p>
       </header>
 
@@ -255,7 +291,7 @@ export function LoginPage({
                       starting={starting}
                       progress={progress}
                       onLogin={login}
-                      onRescan={() => void loadAccounts()}
+                      onRescan={reloadAccounts}
                     />
                   )}
                 </motion.div>
@@ -282,21 +318,6 @@ export function LoginPage({
                     <LoaderCircle size={15} className="spin" aria-hidden="true" />
                   )}
                   {progress.message}
-                </motion.p>
-              )}
-            </AnimatePresence>
-
-            <AnimatePresence>
-              {failure && (
-                <motion.p
-                  className="login-failure"
-                  role="alert"
-                  initial={{ opacity: 0, height: 0 }}
-                  animate={{ opacity: 1, height: 'auto' }}
-                  exit={{ opacity: 0, height: 0 }}
-                >
-                  <CircleAlert size={15} aria-hidden="true" />
-                  {failure}
                 </motion.p>
               )}
             </AnimatePresence>
@@ -400,6 +421,9 @@ function QrPanel({
  *
  * 两个来源分成两个 tab 之后，`key` 仍然按 `source:uin` 拼 —— 同一 uin 在两个 tab
  * 里各有一条，不能只按 uin 做 key（切 tab 时 React 会复用错节点）。
+ *
+ * `qqOnline` 是**本机 QQ 本体**的在线状态（不是 bot）：为真时行内给出警告
+ * 徽标 —— 点下去会接管账号，登录前先结束那个 QQ 进程。
  */
 function AccountList({
   accounts,
@@ -459,6 +483,15 @@ function AccountList({
                           : ''
                       }`}
                 </span>
+                {account.qqOnline && (
+                  <span
+                    className="login-qq-online"
+                    title="QQ 本体正在使用这个账号；登录 WeqBot 会先结束那个 QQ 进程，避免同一账号双端在线"
+                  >
+                    <AlertTriangle size={11} aria-hidden="true" />
+                    QQ 本体在线 · 登录会先结束它
+                  </span>
+                )}
               </span>
               <span className="login-account-action">
                 {starting === key ? (

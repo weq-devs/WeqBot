@@ -339,26 +339,31 @@
   }
 }
 
-/* ───────────────────────────── 失败提示 ───────────────────────────── */
+/* ─────────────────────── QQ 本体在线徽标（警告） ─────────────────────── */
 
-.login-failure {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin: 8px 6px 2px;
-  padding: 9px 11px;
-  overflow: hidden;
-  border: 1px solid var(--status-critical-border);
-  border-radius: var(--radius-sm);
-  background: var(--status-critical-soft);
-  color: var(--status-critical-text);
-  font-size: var(--text-sm);
+/*
+ * 「QQ 本体在线」是**警告**而不是错误：点下去仍能登录，只是会先结束本机 QQ。
+ * 颜色取 `--status-warning-text`（浅 / 深两种模式分别取值，见 `tokens.css`），
+ * 并且始终带图标 + 文字，不只靠颜色表达。
+ */
+.login-account-text .login-qq-online {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  justify-self: start;
+  margin-top: 2px;
+  padding: 1px 7px 1px 5px;
+  border: 1px solid color-mix(in oklch, var(--status-warning) 36%, transparent);
+  border-radius: var(--radius-full);
+  background: color-mix(in oklch, var(--status-warning) 13%, transparent);
+  color: var(--status-warning-text);
+  font-size: var(--text-xs);
   line-height: 1.5;
+  white-space: nowrap;
 }
 
-.login-failure > svg {
+.login-account-text .login-qq-online > svg {
   flex: none;
-  margin-top: 1px;
 }
 
 /* ───────────────────────────── 上线中 ───────────────────────────── */

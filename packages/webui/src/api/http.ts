@@ -15,8 +15,10 @@ import {
   type ActionsSnapshot,
   type Api,
   type ConsoleStateEvent,
+  type HealthSnapshot,
   type LoginAccount,
   type LoginEnvironment,
+  type LoginStartResult,
   type LogEntry,
   type LogStats,
   type OneBotConfig,
@@ -128,6 +130,10 @@ export const httpApi: Api = {
     deleteSession: () => request<void>('/api/auth/session', { method: 'DELETE' }),
   },
 
+  health: {
+    check: () => request<HealthSnapshot>('/api/health'),
+  },
+
   login: {
     environment: () => request<LoginEnvironment>('/api/login/environment'),
     async accounts() {
@@ -135,7 +141,7 @@ export const httpApi: Api = {
       return body.accounts;
     },
     start: (uin, options) =>
-      request<void>('/api/login/start', {
+      request<LoginStartResult>('/api/login/start', {
         method: 'POST',
         body: options?.source ? { uin, source: options.source } : { uin },
       }),

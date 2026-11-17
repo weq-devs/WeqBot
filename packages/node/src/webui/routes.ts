@@ -113,6 +113,22 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
         throw new HttpError(405, 'METHOD_NOT_ALLOWED');
       }
 
+      // ── 健康检查：免鉴权（页面只关心进程还在不在）──
+      //
+      // 页面每几秒轮询一次。进程退出后这个请求会直接失败，页面据此把「在线
+      // 47 分钟」换成「连接已断开」—— 不能看着一个早就死掉的进程继续累计时长。
+      // 不依赖会话：后端重启后 cookie 失效，健康状态仍然应该能被看见。
+      if (path === '/api/health') {
+        requireMethod(request, 'GET');
+        response.setHeader('cache-control', 'no-store');
+        return ok(response, {
+          ok: true,
+          at: Date.now(),
+          pid: process.pid,
+          uptimeSec: Math.round(process.uptime()),
+        });
+      }
+
       // ── 以下全部要会话 ──
       requireSession(request);
 
@@ -140,8 +156,9 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
         if (source !== undefined && source !== 'vault' && source !== 'login-db') {
           throw new HttpError(400, 'BAD_SOURCE', 'source 只接受 "vault" / "login-db"');
         }
-        await runtime.startAccount(uin, source ? { source } : {});
-        return ok(response, { phase: runtime.currentPhase });
+        const result = await runtime.startAccount(uin, source ? { source } : {});
+        // `endedQq`：登录前结束的本机 QQ 进程数（QQ 本体正用着这个账号时不为 0）。
+        return ok(response, { phase: runtime.currentPhase, endedQq: result.endedQq });
       }
 
       if (path === '/api/login/qr') {

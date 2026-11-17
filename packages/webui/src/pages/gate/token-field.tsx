@@ -24,7 +24,6 @@ interface TokenFieldProps {
   readOnly: boolean;
   /** 锁定中：整个输入不可用。 */
   disabled: boolean;
-  describedBy?: string | undefined;
 }
 
 /**
@@ -41,7 +40,6 @@ export function TokenField({
   invalid,
   readOnly,
   disabled,
-  describedBy,
 }: TokenFieldProps) {
   const [revealed, setRevealed] = useState(false);
   const [hint, setHint] = useState<Hint>('default');
@@ -136,7 +134,6 @@ export function TokenField({
           readOnly={readOnly}
           disabled={disabled}
           aria-invalid={invalid}
-          aria-describedby={describedBy}
           data-1p-ignore
           data-lpignore="true"
         />

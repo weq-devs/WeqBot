@@ -104,6 +104,18 @@ export interface RawNativeBinding {
   /** 同步判断 QQ 本体是否在线（按 `nt_msg.db` 的文件锁持有进程）。 */
   isQqLoggedIn?(dbPath: string): boolean;
   /**
+   * 探测哪些进程正持有这个 `nt_msg.db`。
+   *
+   * 与 `isQqLoggedIn` 是同一份数据，但带 pid / 进程名：登录页要展示「QQ 本体在线」，
+   * 登录前要结束这个进程（`process.kill`）。同步函数，失败时 `success: false`。
+   */
+  probeDbLock?(dbPath: string): {
+    success: boolean;
+    msg: string;
+    locked: boolean;
+    holders: Array<{ pid: number; name: string }>;
+  };
+  /**
    * 从 QQ 进程内存读一次会话物料（进程层诊断能力）。
    *
    * 不进 `NativePort`：mode 2 自己登录，不需要借别人的会话；只有 `--print-capabilities`
