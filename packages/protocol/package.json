@@ -10,7 +10,10 @@
     "./push": "./src/push/index.ts",
     "./protobuf": "./src/protobuf.ts",
     "./contacts": "./src/oidb/contacts/index.ts",
-    "./web": "./src/web/index.ts"
+    "./web": "./src/web/index.ts",
+    "./profile-display": "./src/profile-display.ts",
+    "./profile-regions": "./src/profile-regions.ts",
+    "./profile-values": "./src/profile-values.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

@@ -39,8 +39,13 @@ export const GET_COLLECTION_LIST_REQ = message([
   { name: 'field9', tag: 9, type: 'uint32' },
 ]);
 
+export const GET_COLLECTION_CONTENT_REQ = message([
+  { name: 'cidList', tag: 1, type: 'string', repeated: true },
+]);
+
 export const COLLECTION_REQ_OPERATION = message([
   { name: 'getCollectionList', tag: 20000, type: GET_COLLECTION_LIST_REQ },
+  { name: 'getCollectionContent', tag: 20001, type: GET_COLLECTION_CONTENT_REQ },
 ]);
 
 export const COLLECTION_REQ_BODY = message([
@@ -56,31 +61,33 @@ export const COLLECTION_AUTHOR = message([
   { name: 'uid', tag: 6, type: 'string' },
 ]);
 
+// 图片 / 文件描述符的名字要按线上字段命名：`mapPicture` / `mapFileInfo` 以及
+// 下载申请都按名字取值，留成 fieldN 会静默变成空描述符（下载申请直接失效）。
 export const COLLECTION_PICTURE = message([
   { name: 'url', tag: 1, type: 'string' },
-  { name: 'field2', tag: 2, type: 'bytes' },
-  { name: 'field3', tag: 3, type: 'bytes' },
-  { name: 'field4', tag: 4, type: 'string' },
-  { name: 'field5', tag: 5, type: 'string' },
-  { name: 'field6', tag: 6, type: 'uint32' },
-  { name: 'field7', tag: 7, type: 'uint32' },
-  { name: 'field8', tag: 8, type: 'uint32' },
-  { name: 'field9', tag: 9, type: 'uint32' },
-  { name: 'author', tag: 10, type: COLLECTION_AUTHOR },
-  { name: 'field11', tag: 11, type: 'string' },
+  { name: 'md5', tag: 2, type: 'bytes' },
+  { name: 'sha1', tag: 3, type: 'bytes' },
+  { name: 'name', tag: 4, type: 'string' },
+  { name: 'note', tag: 5, type: 'string' },
+  { name: 'width', tag: 6, type: 'uint32' },
+  { name: 'height', tag: 7, type: 'uint32' },
+  { name: 'size', tag: 8, type: 'uint32' },
+  { name: 'type', tag: 9, type: 'uint32' },
+  { name: 'owner', tag: 10, type: COLLECTION_AUTHOR },
+  { name: 'picId', tag: 11, type: 'string' },
 ]);
 
 export const COLLECTION_FILE = message([
-  { name: 'field1', tag: 1, type: 'uint32' },
-  { name: 'field2', tag: 2, type: 'uint64' },
-  { name: 'field3', tag: 3, type: 'uint32' },
-  { name: 'field4', tag: 4, type: 'string' },
-  { name: 'field5', tag: 5, type: 'string' },
-  { name: 'field6', tag: 6, type: 'uint64' },
-  { name: 'field7', tag: 7, type: 'bytes' },
-  { name: 'field8', tag: 8, type: 'bytes' },
-  { name: 'field9', tag: 9, type: 'uint32' },
-  { name: 'field10', tag: 10, type: 'string' },
+  { name: 'src', tag: 1, type: 'uint32' },
+  { name: 'uid', tag: 2, type: 'uint64' },
+  { name: 'bid', tag: 3, type: 'uint32' },
+  { name: 'fid', tag: 4, type: 'string' },
+  { name: 'name', tag: 5, type: 'string' },
+  { name: 'size', tag: 6, type: 'uint64' },
+  { name: 'md5', tag: 7, type: 'bytes' },
+  { name: 'sha1', tag: 8, type: 'bytes' },
+  { name: 'category', tag: 9, type: 'uint32' },
+  { name: 'ntUid', tag: 10, type: 'string' },
 ]);
 
 export const COLLECTION_TEXT_SUMMARY = message([
@@ -187,10 +194,113 @@ export const GET_COLLECTION_LIST_RESP = message([
   { name: 'reachedBottom', tag: 3, type: 'uint32' },
 ]);
 
+// ─────────────── 全文（operation 20001）：标签 = collection type ───────────────
+//
+// `linkContent` / `galleryContent` / `videoContent` / `fileContent` /
+// `locationContent` 在线上就是**原始字节**（native 与 WeQ 都原样存进 db），不要
+// 在这里替它们解一层 protobuf —— 解错了会把内容变成空。
+
+export const COLLECTION_TEXT_CONTENT = message([
+  { name: 'data', tag: 1, type: 'string' },
+  { name: 'hasEmoji', tag: 2, type: 'bool' },
+]);
+
+export const COLLECTION_AUDIO_CONTENT = message([{ name: 'data', tag: 1, type: 'bytes' }]);
+
+export const COLLECTION_RICH_MEDIA_CONTENT = message([
+  { name: 'richMedia', tag: 1, type: 'bytes' },
+  { name: 'rawData', tag: 2, type: 'bytes' },
+  { name: 'bizDataList', tag: 3, type: 'bytes', repeated: true },
+  { name: 'picList', tag: 4, type: COLLECTION_PICTURE, repeated: true },
+  { name: 'fileList', tag: 5, type: COLLECTION_FILE, repeated: true },
+]);
+
+export const COLLECTION_CONTENT = message([
+  { name: 'textContent', tag: 1, type: COLLECTION_TEXT_CONTENT },
+  { name: 'linkContent', tag: 2, type: 'bytes' },
+  { name: 'galleryContent', tag: 3, type: 'bytes' },
+  { name: 'audioContent', tag: 4, type: COLLECTION_AUDIO_CONTENT },
+  { name: 'videoContent', tag: 5, type: 'bytes' },
+  { name: 'fileContent', tag: 6, type: 'bytes' },
+  { name: 'locationContent', tag: 7, type: 'bytes' },
+  { name: 'richMediaContent', tag: 8, type: COLLECTION_RICH_MEDIA_CONTENT },
+]);
+
+export const GET_COLLECTION_CONTENT_RESP = message([
+  { name: 'contents', tag: 1, type: COLLECTION_CONTENT, repeated: true },
+]);
+
 export const COLLECTION_RESP_OPERATION = message([
   { name: 'getCollectionList', tag: 20000, type: GET_COLLECTION_LIST_RESP },
+  { name: 'getCollectionContent', tag: 20001, type: GET_COLLECTION_CONTENT_RESP },
 ]);
 
 export const COLLECTION_RESP_BODY = message([
   { name: 'operation', tag: 2, type: COLLECTION_RESP_OPERATION },
+]);
+
+// ─────────────── 附件原文件下载（operation 20014） ───────────────
+//
+// 头字段与列表**不同**：`version` 是 collector 自己的头版本（0x5f5e1642）、
+// `client` 是 0x610，而列表用的是 QQ 的 clientVersion。照抄列表的头会被网关
+// 判成「版本不支持」。
+
+export const COLLECTION_DOWNLOAD_REQ_HEAD = message([
+  { name: 'uin', tag: 1, type: 'uint64' },
+  { name: 'sequence', tag: 2, type: 'uint32' },
+  { name: 'command', tag: 3, type: 'uint32' },
+  { name: 'operation', tag: 4, type: 'uint32' },
+  { name: 'version', tag: 5, type: 'uint32' },
+  { name: 'client', tag: 6, type: 'uint32' },
+  { name: 'platform', tag: 7, type: 'uint32' },
+  { name: 'ticketType', tag: 10, type: 'uint32' },
+  { name: 'ticket', tag: 11, type: 'string' },
+  { name: 'field14', tag: 14, type: 'uint32' },
+  { name: 'field15', tag: 15, type: 'uint32' },
+]);
+
+export const COLLECTION_DOWNLOAD_RESP_HEAD = message([
+  { name: 'uin', tag: 1, type: 'uint64' },
+  { name: 'sequence', tag: 2, type: 'uint32' },
+  { name: 'command', tag: 3, type: 'uint32' },
+  { name: 'operation', tag: 4, type: 'uint32' },
+  { name: 'retCode', tag: 101, type: 'int32' },
+  { name: 'retMsg', tag: 102, type: 'string' },
+  { name: 'promptMsg', tag: 103, type: 'string' },
+]);
+
+export const COLLECTION_DOWNLOAD_APPLY_REQ = message([
+  { name: 'cid', tag: 1, type: 'string' },
+  { name: 'file', tag: 2, type: COLLECTION_FILE },
+  { name: 'thumbnail', tag: 3, type: 'bool' },
+]);
+
+export const COLLECTION_DOWNLOAD_REQ_OPERATION = message([
+  { name: 'apply', tag: 20014, type: COLLECTION_DOWNLOAD_APPLY_REQ },
+]);
+
+export const COLLECTION_DOWNLOAD_REQ_BODY = message([
+  { name: 'operation', tag: 1, type: COLLECTION_DOWNLOAD_REQ_OPERATION },
+]);
+
+export const COLLECTION_DOWNLOAD_ROUTE = message([{ name: 'type', tag: 1, type: 'uint32' }]);
+
+export const COLLECTION_DOWNLOAD_APPLY_RESP = message([
+  // native 把 key 原样 hex 拼进 /ftn_handler/：它不是文本。
+  { name: 'key', tag: 1, type: 'bytes' },
+  { name: 'host', tag: 2, type: 'string' },
+  { name: 'port', tag: 3, type: 'uint32' },
+  { name: 'cookieName', tag: 4, type: 'string' },
+  { name: 'cookieValue', tag: 5, type: 'string' },
+  { name: 'route', tag: 6, type: COLLECTION_DOWNLOAD_ROUTE },
+  { name: 'httpsHost', tag: 7, type: 'string' },
+  { name: 'httpsPort', tag: 8, type: 'uint32' },
+]);
+
+export const COLLECTION_DOWNLOAD_RESP_OPERATION = message([
+  { name: 'apply', tag: 20014, type: COLLECTION_DOWNLOAD_APPLY_RESP },
+]);
+
+export const COLLECTION_DOWNLOAD_RESP_BODY = message([
+  { name: 'operation', tag: 2, type: COLLECTION_DOWNLOAD_RESP_OPERATION },
 ]);

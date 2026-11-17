@@ -35,6 +35,7 @@ export * from './qzone_stats';
 export * from './qzone-write';
 
 export * from './collection';
+export * from './collection-download';
 export * from './group-album';
 export * from './group-album-feed';
 export * from './group-album-management';

@@ -215,7 +215,10 @@ export {
   packQqBirthday,
   parseLegacyProfileBody,
   encodeEditableProfile,
+  decodeQqRegion,
+  formatQqRegion,
   type EditableProfilePatch,
+  type QqRegion,
 } from './oidb/profile/editable-profile';
 export {
   CreateFriendCategory,
@@ -264,8 +267,14 @@ export type {
 
 export * from './call';
 export * from './oidb/profile/extras';
-export { getProfileDetails, PROFILE_DETAIL_FIELDS } from './oidb/profile/details';
-export type { ProfileDetailInfo, ProfileDetailField } from './oidb/profile/details';
+export { getProfileDetails, getProfileRegion, PROFILE_DETAIL_FIELDS } from './oidb/profile/details';
+export type {
+  ProfileDetailInfo,
+  ProfileDetailField,
+  ProfileRegion,
+} from './oidb/profile/details';
+export { getProfileSimilarity } from './oidb/profile/similarity';
+export type { ProfileSimilarity } from './oidb/profile/similarity';
 export { getEducationHistory } from './oidb/profile/education';
 export * from './oidb/profile/display-settings';
 export { LegacyOidbRejectedError } from './oidb/legacy';
@@ -284,6 +293,12 @@ export type { ProfileEducationRecord, ProfileEducationHistory } from './oidb/pro
  * 用法：`import { groupCall } from '@weq/protocol'` → `groupCall.GroupRelayCmd`。
  */
 export * as groupCall from './group-call';
+export {
+  GetGroupOperationInfo,
+  type GroupOperationInfo,
+} from './oidb/group-admin/get-group-operation-info';
+export { SetQzoneFeedStatus } from './qzone/feed-status';
+export type { QzoneArchiveAction } from './qzone/feed-status';
 
 // ── 本仓库新增（上游没有）：绑定好 (native, target) 的便捷门面 ──────────────
 // vendored 树里只有这一行 + `client.ts` + `transport.ts` 与上游不同，
