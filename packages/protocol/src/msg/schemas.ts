@@ -599,9 +599,10 @@ export const FONT_INFO: ProtoMessage = message([
   f('flag41', 41, 'uint32', { force: true }),
   f('flag51', 51, 'uint32'),
   f('flag52', 52, 'uint32'),
-  f('flag55', 55, 'uint32', { force: true }),
   f('flag54', 54, 'uint32', { force: true }),
-  f('fontId1', 56, 'uint32'),
+  f('flag55', 55, 'uint32', { force: true }),
+  // 真机在「有字体但走回退槽」时也会把这个 0 写出来（抓包 `.56 = 0`），属于骨架。
+  f('fontId1', 56, 'uint32', { force: true }),
   f('flag58', 58, 'uint32'),
   f('flag61', 61, 'uint32'),
   f('nested65', 65, message([f('flag2', 2, 'uint32')])),
@@ -651,8 +652,8 @@ export const GENERAL_FLAGS: ProtoMessage = message([
   f('flag10', 10, 'int32'),
   f('flag12', 12, 'int32'),
   f('flag13', 13, 'int32'),
-  f('widgetId', 17, 'uint32', { force: true }),
   f('flag16', 16, 'int32', { force: true }),
+  f('widgetId', 17, 'uint32', { force: true }),
   f('font', 19, FONT_INFO),
 ]);
 
