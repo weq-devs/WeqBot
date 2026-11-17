@@ -39,7 +39,14 @@ export type OfflineReason =
   /** 重登失败次数耗尽。 */
   | 'relogin-failed'
   /** 注册阶段就被拒（凭据失效 / 风控）。 */
-  | 'register-failed';
+  | 'register-failed'
+  /**
+   * a1 已失效（`quickLogin` 返回 `140022015`）。
+   *
+   * 与 `network` 严格区分：失效 a1 重试只会引发风控，所以**不走退避重登**。
+   * 宿主收到后应清除该账号的凭据并要求用户重新登录 / 扫码。
+   */
+  | 'credential-expired';
 
 export type MessageScene = 'private' | 'group' | 'temp' | 'guild';
 

@@ -41,9 +41,22 @@ export type ConsolePhase = 'no-account' | 'starting' | 'online' | 'offline';
 export interface ConsoleAccount {
   uin: string;
   uid: string;
+  /**
+   * 凭据来源。同一条 uin 可能同时出现在两个来源里，语义不同，页面必须分开列：
+   * vault 是我们自己存的，`login-db` 是 QQ 本体最后写入的。
+   */
+  source: AccountSource;
   nickname?: string;
   avatarUrl?: string;
   lastLoginAt?: number;
+}
+
+/** 账号来源：我们自己的凭据库，或本机 `login.db`。 */
+export type AccountSource = 'vault' | 'login-db';
+
+/** `startAccount` 的选项：页面可以指定用哪个来源的凭据。 */
+export interface StartAccountOptions {
+  source?: AccountSource;
 }
 
 export interface ConsoleOverview {
@@ -120,6 +133,19 @@ export interface ConsoleStateEvent {
   at: number;
   /** 附加信息：状态迁移名 / 错误码。 */
   detail?: string;
+  /** 需要页面主动反应的事件（目前只有「a1 失效，请改扫码」）。 */
+  notice?: ConsoleNotice;
+}
+
+/**
+ * 页面需要跳转 / 弹提示的一次性信号。
+ *
+ * 单靠 `phase` 表达不了「为什么回登录页」：`no-account` 既可能是用户主动退出，
+ * 也可能是凭据没了。带上 `kind` 页面才能决定要不要把人引到扫码 tab。
+ */
+export interface ConsoleNotice {
+  kind: 'a1-expired';
+  uin: string;
 }
 
 export interface ConsoleOptions {
@@ -299,22 +325,27 @@ export class ConsoleRuntime {
   }
 
   /**
-   * 本机账号列表：`login.db` 解出来的行 + vault 里已有的凭据合并。
+   * 本机账号列表：`login.db` 解出来的行 + vault 里已有的凭据。
    *
-   * **只返回能直接上线的账号** —— 没有 a1 的行不出现。列表是「点一下就能登录」的
-   * 入口，而 `startAccount` 拿不到 a1 时必然报 `NO_CREDENTIAL`；把这些行一起列出来
-   * 只会让用户点进去再被打回来。没有 a1 的账号去扫码登录。
+   * **两个来源不合并**，每条带 `source` 由页面分开展示 —— 它们的语义完全不同：
+   * vault 是「我们自己存的、用来上线的 a1」，`login.db` 是「QQ 本体最后写进去的」。
+   * a1 失效时只清 vault 那一条，`login.db` 那条必须留着（QQ 侧可能已经刷新过 a1，
+   * 我们不知道）。
+   *
+   * **两个来源都只列出能直接上线的账号** —— 没有 a1 的行不出现。列表是「点一下就能
+   * 登录」的入口，而 `startAccount` 拿不到 a1 时必然报 `NO_CREDENTIAL`；把这些行一起
+   * 列出来只会让用户点进去再被打回来。
    *
    * **不返回 a1**（`login.db` 的 `a1Payload` 只在 `startAccount` 的局部变量里活一次）。
    */
   async accounts(): Promise<ConsoleAccount[]> {
-    const vaultAccounts = await this.options.vault.list();
-    const merged = new Map<string, ConsoleAccount>();
+    const out: ConsoleAccount[] = [];
     // vault 里的凭据一定有 a1（`get()` 读不出 a1 会直接抛 CREDENTIAL_CORRUPT）。
-    for (const account of vaultAccounts) {
-      merged.set(account.uin, {
+    for (const account of await this.options.vault.list()) {
+      out.push({
         uin: account.uin,
         uid: account.uid,
+        source: 'vault',
         avatarUrl: avatarUrlOf(account.uin),
         ...(account.lastOnlineAt ? { lastLoginAt: account.lastOnlineAt } : {}),
       });
@@ -322,12 +353,11 @@ export class ConsoleRuntime {
 
     await this.refreshLoginAccounts();
     for (const row of this.readLoginDbAccounts()) {
-      const existing = merged.get(row.uin);
-      // 两处都没有 a1 就不该出现在列表里，见方法注释。
-      if (!existing && !row.a1Payload) continue;
-      merged.set(row.uin, {
+      if (!row.a1Payload) continue;
+      out.push({
         uin: row.uin,
         uid: row.uid,
+        source: 'login-db',
         ...(row.userName ? { nickname: row.userName } : {}),
         // 头像统一走同源代理：页面的 CSP 不放行外网图片域名，而 login.db 里的
         // `avatarUrl`（thirdqq.qlogo.cn 带 k/kti 签名）需要服务端原样转发才有。
@@ -338,16 +368,16 @@ export class ConsoleRuntime {
       if (row.avatarUrl) this.avatarSources.set(row.uin, row.avatarUrl);
     }
 
-    return [...merged.values()].sort((a, b) => (b.lastLoginAt ?? 0) - (a.lastLoginAt ?? 0));
+    return out.sort((a, b) => (b.lastLoginAt ?? 0) - (a.lastLoginAt ?? 0));
   }
 
   /**
-   * 用本机 `login.db` 的账号登录。
+   * 用本机凭据登录。
    *
-   * 顺序：解出 a1 → 写 vault（`a1Origin: 'login-db'`）→ `createBot().start()`。
+   * 顺序：取 a1（来源见 {@link resolveCredential}）→ `createBot().start()`。
    * `device` 取自 `major.node`，`guid` 取自数据根；两者缺一都明确失败，不猜。
    */
-  async startAccount(uin: string): Promise<void> {
+  async startAccount(uin: string, options: StartAccountOptions = {}): Promise<void> {
     if (this.phase === 'online' || this.phase === 'starting') {
       throw new HttpError(409, 'ALREADY_ONLINE', '已有账号在线，先退出登录再切换');
     }
@@ -356,13 +386,9 @@ export class ConsoleRuntime {
     const paths = await this.paths();
     const environment = await this.environment();
 
-    // 1. 凭据：vault 优先，其次 login.db。
-    let stored = await this.options.vault.get(uin);
-    if (!stored || stored.a1.length === 0) {
-      stored = await this.accountFromLoginDb(uin, paths, environment);
-    } else {
-      stored = await this.refreshDevice(stored, environment);
-    }
+    // 1. 凭据。页面会明确告诉我们要用哪一份（列表里同一 uin 可能有两条）；
+    //    没指定时保留旧行为：vault 优先，其次 login.db。
+    const stored = await this.resolveCredential(uin, options.source, paths, environment);
 
     this.phase = 'starting';
     this.emitPhase('starting', '读取凭据');
@@ -427,6 +453,16 @@ export class ConsoleRuntime {
       this.phase = 'offline';
       this.emitPhase('offline', messageOf(cause));
       this.log.error('账号上线失败', { uin, cause: messageOf(cause) });
+      // a1 失效同样是**预期内**的结果，而且处置是「丢掉这份凭据、改扫码」。
+      // 不在这里删的话，下一次点同一行还会拿同一串失效 a1 再试一次。
+      if (isWeqBotError(cause) && cause.code === 'A1_EXPIRED') {
+        await this.forgetExpiredCredential(uin);
+        throw new HttpError(
+          409,
+          'A1_EXPIRED',
+          '该账号的 a1 已失效，已清除本机保存的凭据，请扫码登录',
+        );
+      }
       // 策略拒绝是**预期内**的结果，不是服务端故障：必须作为 4xx + 稳定 code
       // 给到前端，否则 `guard()` 会统一吞成 500 INTERNAL，页面只能显示一句
       // 「内部错误」—— 用户会以为是凭据坏了，去反复重新扫码。
@@ -435,6 +471,56 @@ export class ConsoleRuntime {
       }
       throw cause;
     }
+  }
+
+  /**
+   * 取这次上线要用的凭据。
+   *
+   * `source` 由登录页指定：列表里同一 uin 可能同时有「我们存的」和「QQ 存的」两条，
+   * 点哪条就用哪条。不指定时保留旧行为（vault 优先，其次 `login.db`），扫码回调
+   * 与旧的调用方走这一条。
+   */
+  private async resolveCredential(
+    uin: string,
+    source: AccountSource | undefined,
+    paths: QqPaths,
+    environment: LoginEnvironment,
+  ): Promise<StoredAccount> {
+    if (source === 'login-db') {
+      // 明确要用 QQ 那份：不能因为 vault 里也有就直接返回旧值。
+      return this.accountFromLoginDb(uin, paths, environment);
+    }
+    if (source === 'vault') {
+      const stored = await this.options.vault.get(uin);
+      if (!stored || stored.a1.length === 0) {
+        throw new HttpError(400, 'NO_CREDENTIAL', '本机凭据库里没有这个账号，请改用 QQ 登录记录');
+      }
+      return this.refreshDevice(stored, environment);
+    }
+    const stored = await this.options.vault.get(uin);
+    return !stored || stored.a1.length === 0
+      ? this.accountFromLoginDb(uin, paths, environment)
+      : this.refreshDevice(stored, environment);
+  }
+
+  /**
+   * a1 失效后的清理：只删 vault，**不动 `login.db`**。
+   *
+   * `login.db` 是 QQ 本体写的，那边的 a1 可能已经在我们不知道的时候刷新过 ——
+   * 删掉它等于替用户丢了一份可能还有效的凭据。删完要立刻失效 `login.db` 行缓存，
+   * 否则列表下次还显示旧快照。
+   */
+  private async forgetExpiredCredential(uin: string): Promise<void> {
+    try {
+      await this.options.vault.delete(uin);
+      this.log.info('a1 已失效，已清除 vault 里的凭据', { uin });
+    } catch (cause) {
+      this.log.warn('清除失效凭据失败（已忽略）', { uin, cause: messageOf(cause) });
+    }
+    this.loginRowsCache = undefined;
+    void this.refreshLoginAccounts().catch((cause) => {
+      this.log.warn('清理后刷新 login.db 失败（已忽略）', { cause: messageOf(cause) });
+    });
   }
 
   /**
@@ -801,6 +887,15 @@ export class ConsoleRuntime {
           this.phase = 'offline';
         }
       }),
+      // 长跑掉线重登时 a1 可能已经过期：bot 会以 `credential-expired` 直接停下，
+      // 此时不能只把 phase 标成 offline —— 要按「手动登录失败」那套清理走一遍，
+      // 并把页面推回登录页的扫码 tab。
+      bot.events.on('offline', (event) => {
+        if (event.reason !== 'credential-expired') return;
+        const uin = this.startedAccount;
+        this.observability.recordEvent(event);
+        void this.handleCredentialExpired(uin);
+      }),
       bot.events.on('heartbeat', (event) => {
         if (typeof event.rttMs === 'number' && Number.isFinite(event.rttMs)) {
           this.heartbeats.push(event.rttMs);
@@ -821,17 +916,44 @@ export class ConsoleRuntime {
     );
   }
 
-  private emitPhase(phase: ConsolePhase, detail?: string): void {
+  private emitPhase(phase: ConsolePhase, detail?: string, notice?: ConsoleNotice): void {
     const event: ConsoleStateEvent = {
       phase,
       at: Date.now(),
       ...(detail ? { detail } : {}),
+      ...(notice ? { notice } : {}),
     };
     this.events.emit('console', event as never);
   }
 
   private emitQr(snapshot: QrSnapshot): void {
     this.events.emit('console', { qr: snapshot } as never);
+  }
+
+  /**
+   * a1 失效后的统一收尾（消息里的两种入口共用）：清 vault → 让出账号 → 推登录页。
+   *
+   * 只清 vault，`login.db` 原样保留（见 {@link forgetExpiredCredential}）。
+   */
+  private async handleCredentialExpired(uin: string | undefined): Promise<void> {
+    const bot = this.bot;
+    this.bot = undefined;
+    this.startedAccount = undefined;
+    for (const off of this.unsubscribers) off();
+    this.unsubscribers = [];
+    this.received = 0;
+    this.sent = 0;
+    this.heartbeats.length = 0;
+    this.cachedNickname = undefined;
+    // bot 自己已经停过了（offline 是 stop() 里发的），这里只兜底等它收尾。
+    if (bot) await bot.stop('credential-expired').catch(() => undefined);
+    if (uin) await this.forgetExpiredCredential(uin);
+    this.phase = 'no-account';
+    this.emitPhase(
+      'no-account',
+      'a1 已失效，已清除本机保存的凭据',
+      uin ? { kind: 'a1-expired', uin } : undefined,
+    );
   }
 
   /**

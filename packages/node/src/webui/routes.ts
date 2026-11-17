@@ -130,10 +130,17 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
 
       if (path === '/api/login/start') {
         requireMethod(request, 'POST');
-        const body = await readJson<{ uin?: unknown }>(request);
+        const body = await readJson<{ uin?: unknown; source?: unknown }>(request);
         const uin = typeof body.uin === 'string' ? body.uin.trim() : '';
         if (!uin) throw new HttpError(400, 'BAD_UIN', '缺少 uin');
-        await runtime.startAccount(uin);
+        // `source` 决定用哪份凭据：页面列表里同一 uin 可能有「我们存的」和
+        // 「QQ 存的」两条，点哪条就必须用哪条 —— 否则 vault 里的旧 a1 会顶掉
+        // 用户刚在 QQ 上刷新的那份。省略时保持旧行为（vault 优先）。
+        const source = body.source;
+        if (source !== undefined && source !== 'vault' && source !== 'login-db') {
+          throw new HttpError(400, 'BAD_SOURCE', 'source 只接受 "vault" / "login-db"');
+        }
+        await runtime.startAccount(uin, source ? { source } : {});
         return ok(response, { phase: runtime.currentPhase });
       }
 

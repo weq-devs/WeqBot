@@ -48,14 +48,19 @@ export interface LoginEnvironment {
   qqRunning?: boolean;
 }
 
+/** 凭据来源：我们自己的 vault，或 QQ 本体写的 `login.db`。 */
+export type AccountSource = 'vault' | 'login-db';
+
 /**
  * 可以直接上线的本机账号。
  *
  * 服务端只返回有 a1 的账号 —— 没有 a1 的行点进去必然失败，不做成可点条目。
+ * `source` 让页面把两个来源分开展示：同一 uin 可能各有一条。
  */
 export interface LoginAccount {
   uin: string;
   uid: string;
+  source: AccountSource;
   nickname?: string;
   avatarUrl?: string;
   lastLoginAt?: number;
@@ -82,8 +87,13 @@ export interface QrSnapshot {
 export interface LoginApi {
   environment(): Promise<LoginEnvironment>;
   accounts(): Promise<LoginAccount[]>;
-  /** 用本机 `login.db` 的账号登录；成功后直接上线。 */
-  start(uin: string): Promise<void>;
+  /**
+   * 用本机账号登录；成功后直接上线。
+   *
+   * `source` 指定用哪份凭据：列表里同一 uin 可能有两条（vault / `login.db`），
+   * 点哪条就用哪条。省略时服务端按 vault 优先。
+   */
+  start(uin: string, options?: { source?: AccountSource }): Promise<void>;
   /** 起一次扫码（45s 硬超时，重复调用复用同一次）。 */
   startQr(): Promise<QrSnapshot>;
   cancelQr(): Promise<void>;
@@ -357,6 +367,14 @@ export interface ConsoleStateEvent {
   at: number;
   detail?: string;
   qr?: QrSnapshot;
+  /** 需要页面主动反应的一次性信号（`phase` 表达不了「为什么回登录页」）。 */
+  notice?: ConsoleNotice;
+}
+
+/** 页面需要跳转 / 弹提示的信号。 */
+export interface ConsoleNotice {
+  kind: 'a1-expired';
+  uin: string;
 }
 
 export interface EventsApi {

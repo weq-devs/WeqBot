@@ -134,7 +134,11 @@ export const httpApi: Api = {
       const body = await request<{ accounts: LoginAccount[] }>('/api/login/accounts');
       return body.accounts;
     },
-    start: (uin) => request<void>('/api/login/start', { method: 'POST', body: { uin } }),
+    start: (uin, options) =>
+      request<void>('/api/login/start', {
+        method: 'POST',
+        body: options?.source ? { uin, source: options.source } : { uin },
+      }),
     startQr: () => request<QrSnapshot>('/api/login/qr', { method: 'POST', body: {} }),
     cancelQr: () => request<void>('/api/login/qr', { method: 'DELETE' }),
   },

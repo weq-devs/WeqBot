@@ -102,7 +102,7 @@ test('vault 里的账号一定在列表里（vault 保证有 a1）', async () =>
   assert.equal(accounts[0]?.lastLoginAt, 1_700_000_000_000);
 });
 
-test('vault 与 login.db 都有时合并成一个条目，昵称来自 login.db', async () => {
+test('vault 与 login.db 都有时列出两条，来源不同且不合并', async () => {
   const runtime = makeRuntime({
     vault: [{ uin: '10001', uid: 'u_both' }],
     rows: [{ uin: '10001', uid: 'u_both', a1Payload: 'abc', userName: '冬眠的猫' }],
@@ -110,11 +110,14 @@ test('vault 与 login.db 都有时合并成一个条目，昵称来自 login.db'
 
   const accounts = await runtime.accounts();
 
-  assert.equal(accounts.length, 1);
-  assert.equal(accounts[0]?.nickname, '冬眠的猫');
+  assert.equal(accounts.length, 2, '两个来源语义不同，页面要分开列');
+  assert.deepEqual(accounts.map((item) => item.source).sort(), ['login-db', 'vault']);
+  // 昵称只来自 login.db 那一行（vault 不存昵称）。
+  assert.equal(accounts.find((item) => item.source === 'login-db')?.nickname, '冬眠的猫');
+  assert.equal(accounts.find((item) => item.source === 'vault')?.nickname, undefined);
 });
 
-test('login.db 行没有 a1 但 vault 有凭据时照常列出', async () => {
+test('login.db 行没有 a1 但 vault 有凭据时只列出 vault 那条', async () => {
   const runtime = makeRuntime({
     vault: [{ uin: '10001', uid: 'u_both' }],
     rows: [{ uin: '10001', uid: 'u_both', a1Payload: null, userName: '冬眠的猫' }],
@@ -123,9 +126,20 @@ test('login.db 行没有 a1 但 vault 有凭据时照常列出', async () => {
   const accounts = await runtime.accounts();
 
   assert.deepEqual(
-    accounts.map((item) => item.uin),
-    ['10001'],
+    accounts.map((item) => `${item.source}:${item.uin}`),
+    ['vault:10001'],
   );
+});
+
+test('login.db 行没有 a1 且 vault 也没有时不出现', async () => {
+  const runtime = makeRuntime({
+    vault: [],
+    rows: [{ uin: '10003', uid: 'u_no_a1', a1Payload: null, userName: '没有凭据' }],
+  });
+
+  const accounts = await runtime.accounts();
+
+  assert.deepEqual(accounts, []);
 });
 
 test('列表不暴露 a1 或它的存在性字段', async () => {

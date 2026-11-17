@@ -259,6 +259,39 @@ test('start: 远端模式 exit 报 ACCESS_DENIED，且不误报成凭据问题',
   assert.equal(harness.calls.openSession, 0);
 });
 
+test('start: quickLogin 返回 140022015 时报 A1_EXPIRED，不进 openSession', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative({
+    quickLogin: async () => {
+      // 真机返回的 napi message 里带这个数字；文案是「你的用户身份已失效…」。
+      throw new Error('140022015 你的用户身份已失效，为保证账号安全，请你重新登录');
+    },
+  });
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+
+  await assert.rejects(bot.start(), (error: unknown) => {
+    assert.equal((error as { code?: string }).code, 'A1_EXPIRED');
+    return true;
+  });
+  assert.equal(harness.calls.openSession, 0);
+});
+
+test('start: 邻近码 140022017 不被误判成 a1 失效', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative({
+    quickLogin: async () => {
+      // 边界正则的作用：只认完整的 140022015，别的码仍归 LOGIN_FAILED。
+      throw new Error('140022017 其它登录错误');
+    },
+  });
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+
+  await assert.rejects(bot.start(), (error: unknown) => {
+    assert.equal((error as { code?: string }).code, 'LOGIN_FAILED');
+    return true;
+  });
+});
+
 test('start: 非 LOGIN_DENIED 的 native 错误仍归为 LOGIN_FAILED', async () => {
   const { vault } = makeVault();
   const harness = makeNative({
@@ -345,6 +378,38 @@ test('native 重连耗尽：直接下线为 relogin-failed，不再叠加 TS 重
   assert.equal(bot.state, 'closed');
   assert.deepEqual(offlines, ['relogin-failed']);
   assert.equal(harness.calls.closeSession, 1);
+});
+
+test('重登时 a1 失效：不再退避重试，直接以 credential-expired 下线', async () => {
+  const { vault } = makeVault();
+  let attempts = 0;
+  const harness = makeNative({
+    quickLogin: async () => {
+      attempts += 1;
+      // 第一次成功上线，之后的重登发现 a1 已经过期。
+      if (attempts > 1) throw new Error('140022015 你的用户身份已失效，请重新登录');
+      return {
+        uin: ACCOUNT.uin,
+        uid: ACCOUNT.uid,
+        a1: new Uint8Array([9, 9, 9]),
+        a2: new Uint8Array([0xa2]),
+        d2: new Uint8Array([0xd2]),
+        d2Key: new Uint8Array(16).fill(7),
+      };
+    },
+  });
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+  const offlines: string[] = [];
+  bot.events.on('offline', (event) => offlines.push(event.reason));
+
+  await bot.start();
+  // 模拟一次网络掉线，触发 `scheduleRelogin` 的 1s 退避。
+  harness.emitStatus({ kind: 'closed', sessionId: 7, ts: Date.now(), reason: 'socket-closed' });
+  await new Promise((resolve) => setTimeout(resolve, 1_400));
+
+  assert.equal(bot.state, 'closed');
+  assert.deepEqual(offlines, ['credential-expired']);
+  assert.equal(attempts, 2, '失效后必须立刻停，不能把次数用满');
 });
 
 test('start: openSession 未完成首屏同步时拒绝上线', async () => {

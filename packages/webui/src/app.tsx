@@ -18,10 +18,24 @@ const initialLinkToken = takeLinkToken();
 
 type Screen = 'boot' | 'gate' | 'login' | 'console';
 
+/** 由 SSE 的 `notice` 翻译来的一次性提示；见 `LoginPage` 的 `hint` prop。 */
+export interface LoginHint {
+  /** 递增标识，让同样内容的提示也能重新触发。 */
+  id: number;
+  /** 希望页面切到的 tab。 */
+  tab: 'qr';
+  notice: string;
+}
+
 export function App() {
   const [screen, setScreen] = useState<Screen>('boot');
   const [linkToken, setLinkToken] = useState(initialLinkToken);
   const [phase, setPhase] = useState<ConsolePhase>('no-account');
+  /**
+   * 给登录页的一次性提示。`id` 递增：同一个 `kind` 连续触发两次（比如两个账号
+   * 先后失效）也要能让 `useEffect` 重新跑一遍。
+   */
+  const [loginHint, setLoginHint] = useState<LoginHint | null>(null);
 
   /** 根路由：已通过令牌 → 账号在线看控制台，否则看登录页。 */
   const route = useCallback(async () => {
@@ -48,6 +62,15 @@ export function App() {
     if (screen === 'boot' || screen === 'gate') return;
     const off = api.events.subscribe({
       onConsole(event) {
+        // notice 要先处理：它可能和 phase 一起到达，而下面 `!event.phase` 的提前
+        // return 会把只有 notice 的事件吞掉。
+        if (event.notice?.kind === 'a1-expired') {
+          setLoginHint({
+            id: Date.now(),
+            tab: 'qr',
+            notice: '本机保存的 a1 已失效，已清除凭据 —— 请用扫码重新登录。',
+          });
+        }
         if (!event.phase) return;
         setPhase(event.phase);
         if (event.phase === 'online') setScreen('console');
@@ -56,6 +79,8 @@ export function App() {
     });
     return off;
   }, [screen]);
+
+  const consumeLoginHint = useCallback(() => setLoginHint(null), []);
 
   const handledGate = useCallback(() => {
     setScreen('login');
@@ -76,7 +101,15 @@ export function App() {
             onAuthenticated={handledGate}
           />
         )}
-        {screen === 'login' && <LoginPage key="login" phase={phase} onLocked={backToGate} />}
+        {screen === 'login' && (
+          <LoginPage
+            key="login"
+            phase={phase}
+            hint={loginHint}
+            onHintConsumed={consumeLoginHint}
+            onLocked={backToGate}
+          />
+        )}
         {screen === 'console' && (
           <Shell key="console" phase={phase} onLocked={backToGate} onLoggedOut={backToLogin} />
         )}

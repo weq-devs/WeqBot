@@ -15,7 +15,14 @@
  */
 
 import { hostname, release } from 'node:os';
-import { bytesEqual, createLogger, TypedEventBus, WeqBotError, type Logger } from '@weqbot/common';
+import {
+  bytesEqual,
+  createLogger,
+  isWeqBotError,
+  TypedEventBus,
+  WeqBotError,
+  type Logger,
+} from '@weqbot/common';
 import {
   inspectNative,
   type DeviceProfile,
@@ -686,6 +693,13 @@ export function createBot(options: CreateBotOptions): Bot {
           await teardownSession('relogin');
           await bringOnline(storedAccount);
         } catch (cause) {
+          // a1 失效不能当网络问题退避重试：反复拿失效 a1 换票只会引发风控。
+          // 直接停下，让宿主清凭据并要求用户重新登录（见 OfflineReason）。
+          if (isWeqBotError(cause) && cause.code === 'A1_EXPIRED') {
+            log.warn('重登时 a1 已失效，停止重试', { uin, attempt: reloginAttempts });
+            void stop('credential-expired');
+            return;
+          }
           log.warn('重登失败', { uin, attempt: reloginAttempts, cause });
           scheduleRelogin('network');
         }
@@ -775,6 +789,15 @@ export function createBot(options: CreateBotOptions): Bot {
  */
 const DENIED_PREFIX = 'LOGIN_DENIED:';
 
+/**
+ * a1 失效的稳定错误码（真机实测，见 `docs/architecture/credentials.md`）。
+ *
+ * 用带边界的正则而不是 `includes()`：native 的相邻码 `140022017` 也出现过，
+ * 裸 `includes('140022015')` 不会误伤（长度不同），但 `1400220150` 这种拼接串会。
+ */
+const A1_EXPIRED_CODE = '140022015';
+const A1_EXPIRED_PATTERN = /(^|\D)140022015(\D|$)/;
+
 function normalizeLoginError(cause: unknown, uin: string): WeqBotError {
   const message = cause instanceof Error ? cause.message : String(cause);
   if (message.startsWith(DENIED_PREFIX)) {
@@ -783,6 +806,14 @@ function normalizeLoginError(cause: unknown, uin: string): WeqBotError {
       '当前构建的项目策略不允许登录该账号（与 QQ 凭据无关）',
       { cause, fields: { uin, native: message } },
     );
+  }
+  // a1 失效必须单独成码：它的处置是「停止重试并重新登录」，而 LOGIN_FAILED
+  // 的其它成因（网络 / 风控）处置完全不同。挂到 LOGIN_FAILED 上会让上层无从分辨。
+  if (A1_EXPIRED_PATTERN.test(message)) {
+    return new WeqBotError('A1_EXPIRED', 'a1 已失效，需要重新登录或扫码', {
+      cause,
+      fields: { uin, native: message, code: A1_EXPIRED_CODE },
+    });
   }
   return new WeqBotError('LOGIN_FAILED', message, { cause, fields: { uin } });
 }

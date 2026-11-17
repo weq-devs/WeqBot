@@ -9,8 +9,17 @@ export type WeqBotErrorCode =
   | 'NATIVE_NOT_INJECTED'
   /** native 产物存在，但没有 weqbot 需要的能力（旧版本 / 阉割过度）。 */
   | 'NATIVE_MISSING_CAPABILITY'
-  /** 登录失败：a1 失效、风控、协议拒绝。 */
+  /** 登录失败：网络、风控、协议拒绝。 */
   | 'LOGIN_FAILED'
+  /**
+   * a1 已失效（服务端 `quickLogin` 返回 `140022015`）。
+   *
+   * 与 {@link LOGIN_FAILED} 的其它成因（网络 / 风控 / 协议拒绝）处理方式完全不同：
+   * 这一种**必须停止重试** —— 反复拿失效 a1 换票只会引发风控。宿主收到它应当
+   * 丢掉该账号的凭据并要求用户重新登录。也**不是** {@link ACCESS_DENIED}
+   * （那是项目策略拒绝，与凭据无关）。
+   */
+  | 'A1_EXPIRED'
   /**
    * 项目策略拒绝登录 —— **与凭据无关**。
    *
