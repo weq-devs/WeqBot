@@ -97,8 +97,14 @@ export function createWebUiServer(options: WebUiServerOptions): {
           path: parsed.pathname,
           cause: cause instanceof Error ? cause.message : String(cause),
         });
-        if (!response.headersSent) respondJson(response, 500, { code: 'INTERNAL' });
-        else response.end();
+        // message 用固定文案：页面直接渲染它，裸 `INTERNAL` 只会让用户以为
+        // 程序坏了却什么都做不了。细节在服务端日志里。
+        if (!response.headersSent) {
+          respondJson(response, 500, {
+            code: 'INTERNAL',
+            message: '控制台内部错误，详见控制台日志',
+          });
+        } else response.end();
         return;
       }
       respondJson(response, 404, { code: 'NOT_FOUND' });

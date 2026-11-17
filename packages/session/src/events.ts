@@ -13,6 +13,7 @@
 
 import type { WeqBotError } from '@weqbot/common';
 import type { DecodedDress } from '@weqbot/protocol';
+import type { LoginProgressEvent } from '@weqbot/wire';
 import type { SessionState } from './state';
 
 /** 会话级事件（不针对具体消息）。 */
@@ -25,6 +26,14 @@ export type SessionEvent =
   | { type: 'offline'; reason: OfflineReason; at: number; detail?: string }
   /** 一次心跳往返（native 上报，仅观测用）。 */
   | { type: 'heartbeat'; at: number; rttMs?: number }
+  /**
+   * 登录进度（`quickLogin` 期间）。
+   *
+   * 存在的意义是**异常设备确认**：服务端把当前设备判成异常设备时，native 会
+   * 等用户在手机上点「确认登录」，最长 45 秒。这段时间没有任何其它信号，宿主
+   * UI 不显示这条就只能转圈 —— 用户会以为卡死。
+   */
+  | { type: 'login-progress'; event: LoginProgressEvent; at: number }
   | { type: 'error'; error: WeqBotError; at: number };
 
 export type OfflineReason =
@@ -169,6 +178,8 @@ export type BotEventMap = {
   online: Extract<SessionEvent, { type: 'online' }>;
   offline: Extract<SessionEvent, { type: 'offline' }>;
   heartbeat: Extract<SessionEvent, { type: 'heartbeat' }>;
+  /** 登录进度（异常设备确认走这条）。 */
+  'login-progress': Extract<SessionEvent, { type: 'login-progress' }>;
   message: InboundMessage;
   notice: NoticeEvent;
   request: RequestEvent;

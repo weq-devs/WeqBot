@@ -362,6 +362,19 @@ export interface AccountApi {
 
 // ─────────────────────────── 事件流 ───────────────────────────
 
+/**
+ * 登录进度：上线期间的实时说明。
+ *
+ * `unusual-device` 是重点 —— 服务端把设备判成异常设备时，native 会等用户在手机
+ * 上点「确认登录」，最长 45 秒；没有这条事件页面就只剩一个转圈。
+ */
+export interface LoginProgressEvent {
+  kind: 'state' | 'unusual-device' | 'qr-state' | 'info';
+  state?: string;
+  /** 面向用户的一句话，`unusual-device` 一定有值。 */
+  message: string;
+}
+
 export interface ConsoleStateEvent {
   phase?: ConsolePhase;
   at: number;
@@ -369,6 +382,8 @@ export interface ConsoleStateEvent {
   qr?: QrSnapshot;
   /** 需要页面主动反应的一次性信号（`phase` 表达不了「为什么回登录页」）。 */
   notice?: ConsoleNotice;
+  /** 上线进度（登录页在 `starting` 期间显示）。 */
+  progress?: LoginProgressEvent;
 }
 
 /** 页面需要跳转 / 弹提示的信号。 */

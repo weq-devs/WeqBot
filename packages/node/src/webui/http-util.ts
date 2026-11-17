@@ -73,11 +73,20 @@ export function noContent(response: ServerResponse): true {
 }
 
 /**
+ * 未预期异常的**固定**文案。
+ *
+ * 不能说 `cause.message`（内部错误里可能有路径 / uin / 上游错误串），但也
+ * **不能只给一个 `INTERNAL`** —— 页面会把它原样渲染成「INTERNAL」，用户
+ * 既不知道发生了什么，也不知道该去哪看。
+ */
+const INTERNAL_MESSAGE = '控制台内部错误，详见控制台日志';
+
+/**
  * 把 handler 的异常收敛成 JSON 错误。
  *
  * 区分两类：`HttpError` 是**预期内**的（参数错、未登录），把 code 原样给前端；
- * 其它异常一律 500 + `INTERNAL`，**不回传 message** —— 内部错误里可能出现
- * 路径、uin、上游错误串，前端不需要。
+ * 其它异常一律 500 + `INTERNAL`，message 用固定文案 —— 原始 message 不回传，
+ * 但前端拿到的必须是**一句人话**，不是 code 本身。
  */
 export async function guard(
   response: ServerResponse,
@@ -93,7 +102,7 @@ export async function guard(
       });
       return true;
     }
-    respondJson(response, 500, { code: 'INTERNAL' });
+    respondJson(response, 500, { code: 'INTERNAL', message: INTERNAL_MESSAGE });
     return true;
   }
 }

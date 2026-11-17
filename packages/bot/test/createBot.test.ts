@@ -276,6 +276,44 @@ test('start: quickLogin 返回 140022015 时报 A1_EXPIRED，不进 openSession'
   assert.equal(harness.calls.openSession, 0);
 });
 
+test('start: quickLogin 返回 140022016（ILLEGAL_TICKET）同样报 A1_EXPIRED', async () => {
+  // 真机日志：`err_code=140022016 title=登录失败 content=你的用户身份已失效…`。
+  // 与 140022015 处置完全相同，只认 015 会让 WebUI 既不删凭据也不跳扫码。
+  const { vault } = makeVault();
+  const harness = makeNative({
+    quickLogin: async () => {
+      throw new Error(
+        'EasyLogin 被拒绝：err_code=140022016 title=登录失败 content=你的用户身份已失效，为保证账号安全，请你重新登录。',
+      );
+    },
+  });
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+
+  await assert.rejects(bot.start(), (error: unknown) => {
+    assert.equal((error as { code?: string }).code, 'A1_EXPIRED');
+    // 诊断字段要留住命中的是哪个码。
+    const fields = (error as { detail?: { fields?: Record<string, unknown> } }).detail?.fields;
+    assert.equal(fields?.code, '140022016');
+    return true;
+  });
+  assert.equal(harness.calls.openSession, 0);
+});
+
+test('start: 140022014（EXPIRE_TICKET）也归 A1_EXPIRED', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative({
+    quickLogin: async () => {
+      throw new Error('EasyLogin 被拒绝：err_code=140022014 title=登录失败');
+    },
+  });
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+
+  await assert.rejects(bot.start(), (error: unknown) => {
+    assert.equal((error as { code?: string }).code, 'A1_EXPIRED');
+    return true;
+  });
+});
+
 test('start: 邻近码 140022017 不被误判成 a1 失效', async () => {
   const { vault } = makeVault();
   const harness = makeNative({
@@ -290,6 +328,42 @@ test('start: 邻近码 140022017 不被误判成 a1 失效', async () => {
     assert.equal((error as { code?: string }).code, 'LOGIN_FAILED');
     return true;
   });
+});
+
+test('start: quickLogin 的进度事件转成 login-progress（异常设备确认）', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative({
+    quickLogin: async (_options, onEvent) => {
+      // native 的真实推送顺序：先阶段，再异常设备，最后才拿到票据。
+      onEvent?.(null, { kind: 'state', state: 'key-exchange', message: '协商中' });
+      onEvent?.(null, {
+        kind: 'unusual-device',
+        state: 'unusual-device',
+        message: '当前设备被判定为异常设备，请确认',
+        unusualDeviceCheckSig: Buffer.alloc(32),
+      });
+      return {
+        uin: ACCOUNT.uin,
+        uid: ACCOUNT.uid,
+        a2: new Uint8Array([0xa2]),
+        d2: new Uint8Array([0xd2]),
+        d2Key: new Uint8Array(16),
+      };
+    },
+  });
+  const bot = createBot({ config: CONFIG, native: harness.native, vault, logger: SILENT });
+  const seen: Array<{ kind: string; message: string }> = [];
+  bot.events.on('login-progress', (event) =>
+    seen.push({ kind: event.event.kind, message: event.event.message }),
+  );
+
+  await bot.start();
+
+  assert.deepEqual(
+    seen.map((item) => item.kind),
+    ['state', 'unusual-device'],
+  );
+  assert.match(seen[1]!.message, /异常设备/);
 });
 
 test('start: 非 LOGIN_DENIED 的 native 错误仍归为 LOGIN_FAILED', async () => {

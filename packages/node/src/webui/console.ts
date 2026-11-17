@@ -28,7 +28,13 @@ import {
   type BotSnapshot,
 } from '@weqbot/bot';
 import type { BotEventMap, CredentialVault, StoredAccount } from '@weqbot/session';
-import type { DeviceProfile, NativePort, QuickLoginResult, RawNativeBinding } from '@weqbot/wire';
+import type {
+  DeviceProfile,
+  LoginProgressEvent,
+  NativePort,
+  QuickLoginResult,
+  RawNativeBinding,
+} from '@weqbot/wire';
 import { HttpError } from './http-util';
 import type { Observability } from './observability';
 import { findNtMsgDb } from './qq-account';
@@ -135,6 +141,13 @@ export interface ConsoleStateEvent {
   detail?: string;
   /** 需要页面主动反应的事件（目前只有「a1 失效，请改扫码」）。 */
   notice?: ConsoleNotice;
+  /**
+   * 登录进度：上线期间（`phase === 'starting'`）的实时说明。
+   *
+   * 主要是异常设备确认 —— 那时 native 会安静地等手机确认最长 45 秒，页面
+   * 没有这条事件就只剩一个转圈。
+   */
+  progress?: LoginProgressEvent;
 }
 
 /**
@@ -469,7 +482,20 @@ export class ConsoleRuntime {
       if (isWeqBotError(cause) && cause.code === 'ACCESS_DENIED') {
         throw new HttpError(403, 'ACCESS_DENIED', cause.message);
       }
-      throw cause;
+      // 其余**预期内**的登录失败同样必须带 code + message 出去。统一走 502 而不是
+      // 500：语义是「上游（登录服务器 / native）拒绝了这次登录」，是不会被读成
+      // 「控制台自身出了 bug」的那个 5xx。
+      //
+      // 不兜这一步的后果是页面上只剩 `INTERNAL`：`guard()` 对非 HttpError 一律
+      // 500 + 无 message，用户看不到「找不到 wrapper」「QQ 本体在线」等真正原因，
+      // 只能反复重试。
+      if (isWeqBotError(cause)) {
+        throw new HttpError(502, cause.code, cause.message);
+      }
+      // 不是 WeqBotError 的异常确实是我们没想到的：保留「不回传 message」的
+      // 口径（内部错误里可能有路径 / uin / 上游错误串），但至少要给出一句
+      // 面向用户的说明，而不是让页面显示裸 code。
+      throw new HttpError(502, 'LOGIN_FAILED', '登录失败：内部错误，详见控制台日志');
     }
   }
 
@@ -896,6 +922,13 @@ export class ConsoleRuntime {
         this.observability.recordEvent(event);
         void this.handleCredentialExpired(uin);
       }),
+      // 登录进度：上线期间页面要能显示「请在手机上确认」这类提示。
+      // 只在 starting 阶段转发 —— 长跑重登时页面在看控制台，这条事件没有用处，
+      // 反而会把「已上线」的界面弄成不确定状态。
+      bot.events.on('login-progress', (event) => {
+        if (this.phase !== 'starting') return;
+        this.emitProgress(event.event);
+      }),
       bot.events.on('heartbeat', (event) => {
         if (typeof event.rttMs === 'number' && Number.isFinite(event.rttMs)) {
           this.heartbeats.push(event.rttMs);
@@ -928,6 +961,16 @@ export class ConsoleRuntime {
 
   private emitQr(snapshot: QrSnapshot): void {
     this.events.emit('console', { qr: snapshot } as never);
+  }
+
+  /**
+   * 推一条登录进度。
+   *
+   * 不带 `phase`：页面靠 `progress` 字段识别，`app.tsx` 收到没有 `phase` 的
+   * 事件不会误改页面阶段。`at` 必须带 —— `ConsoleStateEvent` 的 SSE 形状里它是必填。
+   */
+  private emitProgress(progress: LoginProgressEvent): void {
+    this.events.emit('console', { at: Date.now(), progress } as never);
   }
 
   /**

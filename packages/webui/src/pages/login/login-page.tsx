@@ -23,11 +23,18 @@ import {
   QrCode,
   RefreshCw,
   ScanLine,
+  Smartphone,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useEffectEvent, useState } from 'react';
 import { api, ApiError } from '../../api';
-import type { AccountSource, ConsolePhase, LoginAccount, QrSnapshot } from '../../api/types';
+import type {
+  AccountSource,
+  ConsolePhase,
+  LoginAccount,
+  LoginProgressEvent,
+  QrSnapshot,
+} from '../../api/types';
 import { Button } from '../../components/button';
 import { Logo } from '../../components/logo';
 import { enterPop, enterRise, enterStagger, screenExit } from '../../lib/motion';
@@ -59,6 +66,13 @@ export function LoginPage({
   const [qr, setQr] = useState<QrSnapshot>();
   const [failure, setFailure] = useState<string>();
   const [starting, setStarting] = useState<string>();
+  /**
+   * 上线进度（当前正在上线的账号的实时说明）。
+   *
+   * 重点是异常设备确认：native 会等手机确认最长 45 秒，这段没有任何其它信号，
+   * 页面必须把「请在手机上确认」显示出来，否则用户只能看着转圈。
+   */
+  const [progress, setProgress] = useState<LoginProgressEvent>();
 
   const loadAccounts = useCallback(async () => {
     try {
@@ -72,16 +86,24 @@ export function LoginPage({
     void loadAccounts();
   }, [loadAccounts]);
 
-  // 扫码进度由服务端推过来；二维码图片也在这条流里，不轮询。
+  /**
+   * 进度事件：**无论停在哪个 tab 都要听**。
+   *
+   * 异常设备确认会在「已保存」/「QQ 记录」tab 里发生 —— 只订阅 `qr` tab 的话，
+   * 从账号列表点上线时页面收不到任何进度，用户看到的就是转圈。
+   */
   useEffect(() => {
-    if (tab !== 'qr') return;
-    const off = api.events.subscribe({
+    return api.events.subscribe({
       onConsole(event) {
-        if (event.qr) setQr(event.qr);
-        if (event.phase === 'online') setStarting(undefined);
+        if (event.progress) setProgress(event.progress);
+        if (event.qr && tab === 'qr') setQr(event.qr);
+        // 上线结束（成功或失败）都要收起进度：失败时后端会另发 failure。
+        if (event.phase === 'online' || event.phase === 'offline') {
+          setStarting(undefined);
+          setProgress(undefined);
+        }
       },
     });
-    return off;
   }, [tab]);
 
   const startQr = useEffectEvent(async () => {
@@ -115,6 +137,7 @@ export function LoginPage({
 
   const login = useEffectEvent(async (uin: string, source: AccountSource) => {
     setFailure(undefined);
+    setProgress(undefined);
     setStarting(`${source}:${uin}`);
     try {
       await api.login.start(uin, { source });
@@ -126,6 +149,7 @@ export function LoginPage({
       }
       setFailure(describe(cause));
       setStarting(undefined);
+      setProgress(undefined);
     }
   });
 
@@ -229,11 +253,36 @@ export function LoginPage({
                       accounts={accounts.filter((item) => item.source === ACCOUNT_SOURCE_OF[tab])}
                       tab={tab}
                       starting={starting}
+                      progress={progress}
                       onLogin={login}
                       onRescan={() => void loadAccounts()}
                     />
                   )}
                 </motion.div>
+              )}
+            </AnimatePresence>
+
+            <AnimatePresence>
+              {progress && starting && (
+                <motion.p
+                  className="login-progress"
+                  data-await={
+                    progress.kind === 'unusual-device' || progress.state === 'unusual-device-wait'
+                      ? ''
+                      : undefined
+                  }
+                  role="status"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: 'auto' }}
+                  exit={{ opacity: 0, height: 0 }}
+                >
+                  {progress.kind === 'unusual-device' ? (
+                    <Smartphone size={15} aria-hidden="true" />
+                  ) : (
+                    <LoaderCircle size={15} className="spin" aria-hidden="true" />
+                  )}
+                  {progress.message}
+                </motion.p>
               )}
             </AnimatePresence>
 
@@ -356,6 +405,7 @@ function AccountList({
   accounts,
   tab,
   starting,
+  progress,
   onLogin,
   onRescan,
 }: {
@@ -363,6 +413,8 @@ function AccountList({
   tab: 'saved' | 'local';
   /** `${source}:${uin}`，与 `login()` 里设置的保持一致。 */
   starting?: string;
+  /** 正在上线那条的进度说明（异常设备确认时是「请在手机上确认」）。 */
+  progress?: LoginProgressEvent;
   onLogin(uin: string, source: AccountSource): void;
   onRescan(): void;
 }) {
@@ -399,13 +451,22 @@ function AccountList({
               <span className="login-account-text">
                 <strong>{account.nickname || account.uin}</strong>
                 <span>
-                  uin {account.uin}
-                  {account.lastLoginAt ? ` · 上次登录 ${formatRelative(account.lastLoginAt)}` : ''}
+                  {starting === key && progress
+                    ? progress.message
+                    : `uin ${account.uin}${
+                        account.lastLoginAt
+                          ? ` · 上次登录 ${formatRelative(account.lastLoginAt)}`
+                          : ''
+                      }`}
                 </span>
               </span>
               <span className="login-account-action">
                 {starting === key ? (
-                  <LoaderCircle size={16} className="spin" aria-label="正在登录" />
+                  progress?.kind === 'unusual-device' ? (
+                    <Smartphone size={16} aria-label="等待手机确认" />
+                  ) : (
+                    <LoaderCircle size={16} className="spin" aria-label="正在登录" />
+                  )
                 ) : (
                   <LogIn size={16} aria-hidden="true" />
                 )}
@@ -461,7 +522,11 @@ function describe(cause: unknown): string {
     if (cause.code === 'A1_EXPIRED') {
       return '保存的 a1 已失效，凭据已清除 —— 请用「QQ 记录」或扫码重新登录。';
     }
-    return cause.message;
+    // 消息可能缺失（老后端 / 非 JSON 响应），此时 `ApiError` 的 message 退化成了
+    // code。裸 code（`INTERNAL` / `BAD_JSON`）对用户没有任何意义，换成人话。
+    const message = cause.message?.trim();
+    if (message && message !== cause.code) return message;
+    return '登录失败：控制台没有给出原因，详见控制台日志。';
   }
   return cause instanceof Error ? cause.message : String(cause);
 }

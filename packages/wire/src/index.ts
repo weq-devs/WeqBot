@@ -4,10 +4,12 @@ export {
   type NativeCapability,
 } from './capabilities';
 export { adaptNativeBinding, type RawNativeBinding } from './adapt';
+export { isAwaitingPhoneConfirmation, parseLoginProgress } from './login-progress';
 // 签名表与发包包装**不在这里** —— 它们是协议知识，住在 `@weqbot/protocol`。
 // wire 只保留「怎么发字节」的契约（`NativePort`）与会话身份（`SessionId`）。
 export type {
   DeviceProfile,
+  LoginProgressEvent,
   NativeBuildInfo,
   NativePort,
   OpenSessionOptions,

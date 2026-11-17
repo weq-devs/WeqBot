@@ -163,6 +163,29 @@ export interface QuickLoginOptions {
   keyMeta?: unknown;
 }
 
+/**
+ * 快登（`quickLogin`）过程中的进度事件。
+ *
+ * native 的 `QuickLoginEvent` 会把 `unusualDeviceCheckSig` / `qrImage` 这类
+ * **认证物料**一并交出来；这里只保留「现在进行到哪一步、要对用户说什么」，
+ * 物料不进这一层 —— 上层没有它们的用处，多传一次就多一个泄漏面。
+ *
+ * `kind` 的语义：
+ *
+ * - `state`：阶段变化（`key-exchange` / `easy-login` / `unusual-device-wait` …）；
+ * - `unusual-device`：服务端把当前设备判成异常设备，**需要用户在手机上点
+ *   「确认登录」**；native 会自己轮询确认结果，调用方只需要把这句话显示出来；
+ * - `qr-state`：等待确认期间的状态回显（`waiting-confirm` / `confirmed` …）；
+ * - `info`：其它提示。
+ */
+export interface LoginProgressEvent {
+  kind: 'state' | 'unusual-device' | 'qr-state' | 'info';
+  /** 阶段名，如 `easy-login`、`unusual-device-wait`。 */
+  state?: string;
+  /** 面向用户的一句话；`unusual-device` 一定有值。 */
+  message: string;
+}
+
 export interface QuickLoginResult {
   uin: string;
   /**
@@ -312,6 +335,11 @@ export interface NativePort {
   ): Promise<Uint8Array>;
 
   // ── 凭据换票（进程无关） ──────────────────────────────────────────────────
+  /**
+   * 快速登录。`onEvent` 交出来的是 native 原始事件（含认证物料与二维码字节）；
+   * 需要「现在进行到哪一步」时用 {@link parseLoginProgress} 归一，不要在这一层
+   * 自己解析 `kind` —— 形状随 native 版本漂移。
+   */
   quickLogin?(
     options: QuickLoginOptions,
     onEvent?: (error: Error | null, event: unknown) => unknown,

@@ -17,9 +17,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import type { BotConfig } from '@weqbot/bot';
-import { createLogger, WeqBotError } from '@weqbot/common';
-import type { CredentialVault, StoredAccount } from '@weqbot/session';
-import type { RawNativeBinding } from '@weqbot/wire';
+import { createLogger, TypedEventBus, WeqBotError } from '@weqbot/common';
+import type { BotEventMap, CredentialVault, StoredAccount } from '@weqbot/session';
+import type { LoginProgressEvent, RawNativeBinding } from '@weqbot/wire';
 import { ConsoleRuntime } from '../src/webui/console';
 import { HttpError } from '../src/webui/http-util';
 import { Observability } from '../src/webui/observability';
@@ -73,6 +73,8 @@ function makeRuntime(options: {
   }>;
   /** 记下 vault.delete 的调用。 */
   deleted?: string[];
+  /** 假 Bot 在 `start()` 期间推的登录进度（模拟 native 的异常设备确认）。 */
+  loginProgress?: LoginProgressEvent[];
 }) {
   const captured: Array<Parameters<typeof import('@weqbot/bot').createBot>[0]> = [];
   const decryptCalls = { count: 0 };
@@ -99,12 +101,17 @@ function makeRuntime(options: {
     botFactory: ((botOptions: unknown) => {
       captured.push(botOptions as never);
       // `wireBot` 会给这些事件挂监听；给一份最小可用的假 Bot。
+      // 事件总线是真的 `TypedEventBus`：进度事件的转发链路要能被测到。
+      const events = new TypedEventBus<BotEventMap>();
       return {
         start: async () => {
+          for (const event of options.loginProgress ?? []) {
+            events.emit('login-progress', { type: 'login-progress', event, at: Date.now() });
+          }
           if (options.startError !== undefined) throw options.startError;
         },
         stop: async () => {},
-        events: { on: () => () => {} },
+        events,
       } as never;
     }) as never,
   });
@@ -226,6 +233,62 @@ test('startAccount 遇到 A1_EXPIRED：删 vault、抛 409 A1_EXPIRED', async ()
     return true;
   });
   assert.deepEqual(deleted, ['10002'], '失效的凭据必须从 vault 删掉，否则下次还拿它重试');
+});
+
+test('startAccount 期间把登录进度转成 SSE 的 progress 字段', async () => {
+  const { runtime } = makeRuntime({
+    paths: pathsWith(),
+    loginProgress: [
+      { kind: 'state', state: 'key-exchange', message: '协商中' },
+      { kind: 'unusual-device', message: '当前设备被判定为异常设备，请在手机上确认登录' },
+    ],
+  });
+  const received: Array<{ phase?: string; progress?: LoginProgressEvent }> = [];
+  runtime.consoleEvents.on('console', (event) =>
+    received.push(event as { phase?: string; progress?: LoginProgressEvent }),
+  );
+
+  await runtime.startAccount('10002');
+
+  const progresses = received.map((item) => item.progress).filter(Boolean);
+  assert.equal(progresses.length, 2);
+  assert.equal(progresses[1]!.kind, 'unusual-device');
+  assert.match(progresses[1]!.message, /手机上确认/);
+  // 进度事件不带 phase：页面靠 progress 字段识别，不能顺手改页面阶段。
+  const progressEvents = received.filter((item) => item.progress);
+  assert.ok(progressEvents.every((item) => item.phase === undefined));
+});
+
+test('startAccount 遇到其它 WeqBotError：4xx/5xx 带 code + message，不落成 INTERNAL', async () => {
+  // `guard()` 对非 HttpError 一律 500 + INTERNAL，页面只会显示「内部错误」。
+  // 登录阶段的所有预期失败都必须先转成 HttpError 再抛出去。
+  const { runtime } = makeRuntime({
+    paths: pathsWith(),
+    startError: new WeqBotError('SIGNER_REQUIRED', '找不到 wrapper.node，mode 2 无法签名'),
+  });
+
+  await assert.rejects(runtime.startAccount('10002'), (error: unknown) => {
+    assert.ok(error instanceof HttpError);
+    assert.equal(error.code, 'SIGNER_REQUIRED');
+    assert.equal(error.message, '找不到 wrapper.node，mode 2 无法签名');
+    assert.ok(error.status >= 400 && error.status < 600);
+    return true;
+  });
+});
+
+test('startAccount 遇到非 WeqBotError：仍给一句人话，不暴露原始异常', async () => {
+  const { runtime } = makeRuntime({
+    paths: pathsWith(),
+    startError: new Error('EACCES: C:\\Users\\me\\credentials.json'),
+  });
+
+  await assert.rejects(runtime.startAccount('10002'), (error: unknown) => {
+    assert.ok(error instanceof HttpError);
+    assert.equal(error.code, 'LOGIN_FAILED');
+    assert.doesNotMatch(error.message, /EACCES|credentials\.json/);
+    assert.match(error.message, /登录失败/);
+    return true;
+  });
 });
 
 test('startAccount(source="vault") 只读 vault，不碰 login.db', async () => {

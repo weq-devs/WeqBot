@@ -295,6 +295,50 @@
   font-size: var(--text-xs);
 }
 
+/* ───────────────────────────── 上线进度 ───────────────────────────── */
+
+/**
+ * 上线进度条。普通阶段是中性色；`data-await`（等手机确认）切到强调色 ——
+ * 那一条要求用户**去动手机**，中性色会被当成「还在加载」而错过。
+ */
+.login-progress {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin: 8px 6px 2px;
+  padding: 9px 11px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--bg-elevated);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  line-height: 1.5;
+}
+
+.login-progress > svg {
+  flex: none;
+  margin-top: 1px;
+}
+
+.login-progress[data-await] {
+  border-color: var(--accent-border);
+  background: var(--accent-soft);
+  color: var(--accent-text);
+  /* 只让外圈呼吸，不淡文字：这条提示要求用户去动手机，必须一直读得清。 */
+  animation: login-progress-pulse 1.8s ease-in-out infinite;
+}
+
+@keyframes login-progress-pulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 transparent;
+  }
+  50% {
+    box-shadow: 0 0 0 3px var(--accent-soft);
+  }
+}
+
 /* ───────────────────────────── 失败提示 ───────────────────────────── */
 
 .login-failure {

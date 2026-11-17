@@ -25,6 +25,7 @@ import {
 } from '@weqbot/common';
 import {
   inspectNative,
+  parseLoginProgress,
   type DeviceProfile,
   type NativePort,
   type OpenedSession,
@@ -338,22 +339,32 @@ export function createBot(options: CreateBotOptions): Bot {
     const loginOs = NATIVE_OS[stored.device.os];
 
     machine.transition('logging-in', 'quickLogin(a1)');
-    const login = await native.quickLogin!({
-      uin,
-      a1: stored.a1,
-      guid: stored.guid,
-      uid: stored.uid || null,
-      appId: stored.device.appId,
-      subAppId: stored.device.subAppId,
-      wrapperPath,
-      os: loginOs.os,
-      platform: loginOs.platform,
-      qua: stored.device.qua,
-      clientVersion: stored.device.clientVersion,
-      // native 侧这两项可以是 None，但真机指纹需要稳定值：vault 没存就用本机。
-      deviceName: stored.device.deviceName ?? hostname(),
-      kernelVersion: stored.device.kernelVersion ?? release(),
-    }).catch((cause: unknown) => {
+    const login = await native.quickLogin!(
+      {
+        uin,
+        a1: stored.a1,
+        guid: stored.guid,
+        uid: stored.uid || null,
+        appId: stored.device.appId,
+        subAppId: stored.device.subAppId,
+        wrapperPath,
+        os: loginOs.os,
+        platform: loginOs.platform,
+        qua: stored.device.qua,
+        clientVersion: stored.device.clientVersion,
+        // native 侧这两项可以是 None，但真机指纹需要稳定值：vault 没存就用本机。
+        deviceName: stored.device.deviceName ?? hostname(),
+        kernelVersion: stored.device.kernelVersion ?? release(),
+      },
+      // 进度回调：**异常设备确认是唯一会「安静地等 45 秒」的阶段**，宿主不
+      // 显示这条事件就只剩转圈。事件里的认证物料在这一层被丢掉。
+      (_error, event) => {
+        const progress = parseLoginProgress(event);
+        if (!progress) return;
+        log.info('登录进度', { uin, stage: progress.kind, detail: progress.message });
+        events.emit('login-progress', { type: 'login-progress', event: progress, at: Date.now() });
+      },
+    ).catch((cause: unknown) => {
       throw normalizeLoginError(cause, uin);
     });
 
@@ -792,11 +803,27 @@ const DENIED_PREFIX = 'LOGIN_DENIED:';
 /**
  * a1 失效的稳定错误码（真机实测，见 `docs/architecture/credentials.md`）。
  *
- * 用带边界的正则而不是 `includes()`：native 的相邻码 `140022017` 也出现过，
- * 裸 `includes('140022015')` 不会误伤（长度不同），但 `1400220150` 这种拼接串会。
+ * 服务端枚举里有三个码，处置完全相同 —— 都是「这串 a1 不能再用」：
+ *
+ * - `140022014` EXPIRE_TICKET：过期；
+ * - `140022015` KICKED_TICKET：被顶 / 失效（最常见）；
+ * - `140022016` ILLEGAL_TICKET：非法（**真机见过**，文案与 015 一字不差）。
+ *
+ * 只认 015 的后果是真机上报 `140022016` 时归到 `LOGIN_FAILED`，WebUI 既不删
+ * 失效凭据、也不跳扫码页，用户会拿同一串 a1 反复重试。
+ *
+ * 用带边界的正则而不是 `includes()`：相邻码 `140022017`（SEC_BEAT，缺签名）
+ * 必须**不**被误判 —— 那是签名问题，重新登录也修不好。
  */
-const A1_EXPIRED_CODE = '140022015';
-const A1_EXPIRED_PATTERN = /(^|\D)140022015(\D|$)/;
+const A1_EXPIRED_CODES = ['140022014', '140022015', '140022016'] as const;
+const A1_EXPIRED_PATTERNS: ReadonlyArray<{ code: string; pattern: RegExp }> = A1_EXPIRED_CODES.map(
+  (code) => ({ code, pattern: new RegExp(`(^|\\D)${code}(\\D|$)`) }),
+);
+
+/** 命中的 a1 失效码（诊断用）；没命中返回 undefined。 */
+function matchA1ExpiredCode(message: string): string | undefined {
+  return A1_EXPIRED_PATTERNS.find((entry) => entry.pattern.test(message))?.code;
+}
 
 function normalizeLoginError(cause: unknown, uin: string): WeqBotError {
   const message = cause instanceof Error ? cause.message : String(cause);
@@ -809,10 +836,11 @@ function normalizeLoginError(cause: unknown, uin: string): WeqBotError {
   }
   // a1 失效必须单独成码：它的处置是「停止重试并重新登录」，而 LOGIN_FAILED
   // 的其它成因（网络 / 风控）处置完全不同。挂到 LOGIN_FAILED 上会让上层无从分辨。
-  if (A1_EXPIRED_PATTERN.test(message)) {
+  const expiredCode = matchA1ExpiredCode(message);
+  if (expiredCode) {
     return new WeqBotError('A1_EXPIRED', 'a1 已失效，需要重新登录或扫码', {
       cause,
-      fields: { uin, native: message, code: A1_EXPIRED_CODE },
+      fields: { uin, native: message, code: expiredCode },
     });
   }
   return new WeqBotError('LOGIN_FAILED', message, { cause, fields: { uin } });
