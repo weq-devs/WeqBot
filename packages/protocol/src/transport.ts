@@ -77,7 +77,8 @@ export async function sendOidb(
     sessionId,
     req.command,
     req.subCommand,
-    req.body,
+    // 包成 Buffer：native 侧与宿主侧（WeQ 的调用记录 / 断言）都按 Buffer 语义使用。
+    Buffer.from(req.body),
     req.isUid ?? false,
     needSign,
     signMode,
@@ -99,7 +100,7 @@ export async function sendPacket(
 ): Promise<Uint8Array> {
   assertSessionId(sessionId, 'sendPacket');
   const { needSign, mode: signMode } = signArgs(cmd, override);
-  const reply = await nt.sendPacket(sessionId, cmd, body, needSign, signMode);
+  const reply = await nt.sendPacket(sessionId, cmd, Buffer.from(body), needSign, signMode);
   return new Uint8Array(reply);
 }
 
