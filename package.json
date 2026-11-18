@@ -22,7 +22,7 @@
     "check": "biome check .",
     "check:pure-ts": "node scripts/check-pure-ts.mjs",
     "test": "node --import tsx --test \"packages/*/test/*.test.ts\"",
-    "verify": "pnpm run check:pure-ts && pnpm run typecheck && pnpm run docs:actions:check && pnpm run test",
+    "verify": "pnpm run check:pure-ts && pnpm run typecheck && pnpm run docs:actions:check && pnpm run anonymize:uin:check && pnpm run test",
     "package:release": "node scripts/build-release.mjs",
     "version:set": "node scripts/set-version.mjs",
     "native:fetch": "node scripts/fetch-native.mjs",
