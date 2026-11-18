@@ -97,6 +97,8 @@ export function connectControlSocket(options: ConnectControlOptions): Promise<Co
     >();
     let nextId = 1;
     let closed = false;
+    /** 外层 promise 是否已经有结论（连接成功 / 失败都算）。 */
+    let settled = false;
 
     const failAll = (error: Error): void => {
       for (const entry of pending.values()) {
@@ -138,19 +140,32 @@ export function connectControlSocket(options: ConnectControlOptions): Promise<Co
       }
     });
 
-    const onGone = (): void => {
+    /**
+     * 连接对象消失（close / error，包括**从未连上过**的情形）。
+     *
+     * 必须把外层的 `reject` 也接上：socket 不存在 / 拒绝连接时只会触发
+     * `error` + `close`，`connect` 永不触发，而 `connectTimeoutMs` 的定时器
+     * 只清在 `connect` / `error` 上 —— 没有这一句，调用方会永远等下去。
+     */
+    const onGone = (cause?: Error): void => {
+      if (!settled) {
+        settled = true;
+        clearTimeout(timer);
+        reject(cause ?? new Error(`控制通道连接失败：${options.path}`));
+      }
       if (closed) return;
       closed = true;
       failAll(new Error('控制通道已断开'));
     };
-    socket.on('close', onGone);
+    socket.on('close', () => onGone());
     socket.on('error', (cause) => {
-      failAll(cause);
-      onGone();
+      onGone(cause);
     });
 
     socket.once('connect', () => {
       socket.setNoDelay(true);
+      clearTimeout(timer);
+      settled = true;
       resolve({
         request(method, params, requestOptions) {
           if (closed) return Promise.reject(new Error('控制通道已断开'));
@@ -188,10 +203,11 @@ export function connectControlSocket(options: ConnectControlOptions): Promise<Co
 
     const timer = setTimeout(() => {
       socket.destroy();
-      reject(new Error(`连接控制通道超时：${options.path}`));
+      if (!settled) {
+        settled = true;
+        reject(new Error(`连接控制通道超时：${options.path}`));
+      }
     }, options.connectTimeoutMs ?? DEFAULT_CONNECT_TIMEOUT_MS);
-    socket.once('connect', () => clearTimeout(timer));
-    socket.once('error', () => clearTimeout(timer));
   });
 }
 

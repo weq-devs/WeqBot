@@ -158,6 +158,24 @@ test('socket：崩溃残留的路径文件会被接管，活着的监听者不�
   }
 });
 
+test('socket：连不上的路径必须**报错**，不能永远挂着', { skip: unixOnly }, async () => {
+  // 回归保护：曾经 `connectControlSocket` 只把 `connect` 当成功路径，
+  // socket 不存在时只触发 error/close、`connect` 永不触发，外层 promise 就
+  // 永远不 settle —— 宿主那边表现成「启动 daemon 卡死」，比报错难查得多。
+  const { dir, cleanup } = await tempDir();
+  const path = join(dir, 'missing.sock');
+  try {
+    const startedAt = Date.now();
+    await assert.rejects(
+      connectControlSocket({ path, connectTimeoutMs: 2_000 }),
+      /ENOENT|no such file|连接失败|连接控制通道超时/i,
+    );
+    assert.ok(Date.now() - startedAt < 2_000, '应当立即失败，而不是等满超时');
+  } finally {
+    await cleanup();
+  }
+});
+
 test('defaultControlSocketPath：按 uin 取名，非数字不拼进路径', () => {
   const path = defaultControlSocketPath('10001');
   assert.match(path, /weqbot-10001/);
