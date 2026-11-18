@@ -26,6 +26,12 @@ import {
   type Logger,
   type LogLevel,
 } from '@weqbot/common';
+import {
+  EMPTY_ONEBOT_CONFIG,
+  maskOneBotConfig,
+  OneBotConfigError,
+  validateOneBotConfig,
+} from '../onebot-config';
 import type { WebUiAuth } from './auth';
 import { looksLikeToken, SESSION_COOKIE, sessionCookie } from './auth';
 import type { ConsoleRuntime } from './console';
@@ -267,14 +273,24 @@ export function createWebUiRouter(options: WebUiRouteOptions): {
         if (request.method === 'GET') {
           // 没配置过 OneBot 时也给一份空骨架：网络页要能直接「添加」并保存，
           // 而不是拿到 undefined 后连草稿都建不出来。
-          return ok(response, { config: maskConfig(options.readConfig() ?? EMPTY_ONEBOT_CONFIG) });
+          return ok(response, {
+            config: maskOneBotConfig(options.readConfig() ?? EMPTY_ONEBOT_CONFIG),
+          });
         }
         if (request.method === 'PUT') {
           const body = await readJson<{ config?: unknown }>(request);
-          const config = validateOneBotConfig(body.config, options.readConfig());
+          let config: BotOneBotConfig;
+          try {
+            config = validateOneBotConfig(body.config, options.readConfig());
+          } catch (cause) {
+            if (cause instanceof OneBotConfigError) {
+              throw new HttpError(400, cause.code, cause.message);
+            }
+            throw cause;
+          }
           await runtime.currentBot?.reloadOneBot(config);
           await options.saveConfig?.(config);
-          return ok(response, { config: maskConfig(config) });
+          return ok(response, { config: maskOneBotConfig(config) });
         }
         throw new HttpError(405, 'METHOD_NOT_ALLOWED');
       }
@@ -701,106 +717,4 @@ function listLogFiles(dir: string | null): Array<{ name: string; size: number }>
   } catch {
     return [];
   }
-}
-
-/** 未配置 OneBot 时网络页使用的空骨架（`networks` 四类都要在）。 */
-const EMPTY_ONEBOT_CONFIG: BotOneBotConfig = {
-  networks: { httpServers: [], httpClients: [], wsServers: [], wsClients: [] },
-};
-
-/** `GET /api/onebot/config` 把 accessToken 打码；`PUT` 时原样保留（见 `validateOneBotConfig`）。 */
-function maskConfig(config: BotOneBotConfig | undefined): BotOneBotConfig | undefined {
-  if (!config) return undefined;
-  const mask = <T extends { accessToken?: string }>(item: T): T =>
-    item.accessToken ? { ...item, accessToken: '***' } : item;
-  return {
-    ...config,
-    networks: {
-      httpServers: config.networks.httpServers.map(mask),
-      httpClients: config.networks.httpClients.map(mask),
-      wsServers: config.networks.wsServers.map(mask),
-      wsClients: config.networks.wsClients.map(mask),
-    },
-  };
-}
-
-/**
- * 校验 `PUT /api/onebot/config` 的请求体。
- *
- * 不信任前端的任何字段：逐类检查数组与必填项。`accessToken: '***'` 会被当成
- * 「没改」—— 页面拿到的就是打码值，直接写回会把它变成字面量 `***`。
- */
-function validateOneBotConfig(value: unknown, previous?: BotOneBotConfig): BotOneBotConfig {
-  if (!value || typeof value !== 'object' || Array.isArray(value)) {
-    throw new HttpError(400, 'BAD_CONFIG', 'config 必须是对象');
-  }
-  const record = value as Record<string, unknown>;
-  const networks = record.networks as Record<string, unknown> | undefined;
-  if (!networks || typeof networks !== 'object' || Array.isArray(networks)) {
-    throw new HttpError(400, 'BAD_CONFIG', '缺少 networks');
-  }
-  const normalized = {
-    httpServers: normalizeNetworks(
-      networks.httpServers,
-      'httpServers',
-      previous?.networks.httpServers,
-    ),
-    httpClients: normalizeNetworks(
-      networks.httpClients,
-      'httpClients',
-      previous?.networks.httpClients,
-    ),
-    wsServers: normalizeNetworks(networks.wsServers, 'wsServers', previous?.networks.wsServers),
-    wsClients: normalizeNetworks(networks.wsClients, 'wsClients', previous?.networks.wsClients),
-  } as BotOneBotConfig['networks'];
-
-  // 端口唯一性：同一台机器上两个监听抢同一个端口是最常见的配置错误。
-  const ports = new Set<number>();
-  for (const server of [...normalized.httpServers, ...normalized.wsServers]) {
-    if (server.enabled === false) continue;
-    if (ports.has(server.port)) {
-      throw new HttpError(400, 'PORT_CONFLICT', `端口 ${server.port} 被重复占用`);
-    }
-    ports.add(server.port);
-  }
-
-  return {
-    networks: normalized,
-    ...(record.qzone === false ? { qzone: false } : {}),
-    ...(typeof record.qzoneDomain === 'string' ? { qzoneDomain: record.qzoneDomain } : {}),
-  };
-}
-
-function normalizeNetworks<T extends { name?: string; accessToken?: string }>(
-  value: unknown,
-  label: string,
-  previous?: T[],
-): T[] {
-  if (value === undefined) return [];
-  if (!Array.isArray(value)) throw new HttpError(400, 'BAD_CONFIG', `${label} 必须是数组`);
-  return value.map((item, index) => {
-    if (!item || typeof item !== 'object' || Array.isArray(item)) {
-      throw new HttpError(400, 'BAD_CONFIG', `${label}[${index}] 必须是对象`);
-    }
-    const record = { ...(item as Record<string, unknown>) };
-    if (record.accessToken === '***') {
-      // 打码值代表「没改」：按同名（退回同下标）条目把原令牌接回去。删掉会让
-      // 自动保存 在用户只改端口 / 开关 / 名称时把已有令牌清空。
-      const existing =
-        previous?.find((candidate) => candidate.name === record.name) ?? previous?.[index];
-      if (existing?.accessToken) record.accessToken = existing.accessToken;
-      else delete record.accessToken;
-    }
-    if (typeof record.name !== 'string' || !record.name.trim()) {
-      throw new HttpError(400, 'BAD_CONFIG', `${label}[${index}] 缺少 name`);
-    }
-    if (record.port !== undefined && (typeof record.port !== 'number' || record.port < 0)) {
-      throw new HttpError(400, 'BAD_CONFIG', `${label}[${index}].port 必须是非负整数`);
-    }
-    if (record.messageFormat !== 'array' && record.messageFormat !== 'string') {
-      record.messageFormat = 'array';
-    }
-    if (typeof record.reportSelfMessage !== 'boolean') record.reportSelfMessage = true;
-    return record as T;
-  });
 }

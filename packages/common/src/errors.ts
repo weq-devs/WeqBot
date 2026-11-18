@@ -49,6 +49,14 @@ export type WeqBotErrorCode =
   | 'SESSION_CLOSED'
   /** desktop ↔ sidecar 控制通道：版本不符 / 非 JSON / 信封结构不合法。 */
   | 'CONTROL_PROTOCOL_ERROR'
+  /**
+   * OneBot 某个网络适配器起不来（典型：端口已被占用）。
+   *
+   * **不做端口顺延**：客户端配置里写死的端口如果被悄悄换掉，用户看到「运行中」
+   * 而机器人连不上，比直接失败更难排查。`detail.fields` 会带
+   * `{ network, kind, host, port }`，宿主据此定位到具体是哪一条并提示改端口。
+   */
+  | 'ONEBOT_LISTEN_FAILED'
   /** 明确的 NotImplemented：骨架期用，落地后必须清零。 */
   | 'NOT_IMPLEMENTED'
   /** 其它未归类。 */

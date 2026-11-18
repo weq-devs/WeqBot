@@ -10,6 +10,7 @@
 export {
   createBot,
   describeBot,
+  type AttachMaterial,
   type Bot,
   type BotSnapshot,
   type CreateBotOptions,

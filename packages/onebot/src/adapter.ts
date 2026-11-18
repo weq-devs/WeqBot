@@ -11,7 +11,7 @@
  * 用法（一个 HTTP + 一个正向 WS + 多个反向 WS 同时存在），也是用户明确要求的。
  */
 
-import { createLogger, type Logger } from '@weqbot/common';
+import { createLogger, WeqBotError, type Logger } from '@weqbot/common';
 import type { BotEvent, BotEventMap } from '@weqbot/session';
 
 type BotEventMapEvent<K extends keyof BotEventMap> = BotEventMap[K];
@@ -355,9 +355,39 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
     }
   }
 
+  /**
+   * 启动所有已启用的网络适配器。
+   *
+   * **失败必须干净回滚**：以前这里是裸循环，第 N 个监听撞端口时，前 N-1 个已经
+   * 在监听却没人关 —— 进程还活着、端口被自己占着，用户重试一次还是失败，只能杀
+   * 进程。现在任一步失败都会把已启动的逐个 `stop()`，并抛出带
+   * `{ network, kind, host, port }` 的 {@link WeqBotError}，让宿主能定位到具体
+   * 是哪一条配置的问题。
+   *
+   * **不做端口顺延**：客户端把 `ws://127.0.0.1:6700` 写死在配置里，悄悄换到
+   * 6701 只会让用户看到「运行中」却连不上。
+   */
   async function startNetworks(): Promise<number | undefined> {
     let firstPort: number | undefined;
     const { networks: config } = options.config;
+
+    /** 已启动的适配器（失败回滚用；成功后并入 `networks`）。 */
+    const startedAdapters: NetworkAdapter[] = [];
+
+    const fail = (
+      where: { network: string; kind: string; host: string; port: number },
+      cause: unknown,
+    ) => {
+      const reason = cause instanceof Error ? cause.message : String(cause);
+      const busy = isAddressInUse(cause);
+      return new WeqBotError(
+        'ONEBOT_LISTEN_FAILED',
+        busy
+          ? `端口 ${where.port} 已被占用（${where.kind}「${where.network}」）`
+          : `${where.kind}「${where.network}」的 ${where.host}:${where.port} 启动失败：${reason}`,
+        { cause, fields: { ...where, addressInUse: busy } },
+      );
+    };
 
     /**
      * 给每个网络适配器包一层，把 `transport` / `client` 与观测钩子带上。
@@ -373,84 +403,132 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
           ...(options.onActionCall ? { onActionCall: options.onActionCall } : {}),
         });
 
-    for (const server of config.httpServers) {
-      if (server.enabled === false) continue;
-      const adapter = new HttpServerAdapter(
-        {
-          ...(server.name ? { name: server.name } : {}),
-          host: server.host ?? '127.0.0.1',
-          port: server.port,
-          ...(server.path ? { path: server.path } : {}),
-          ...(server.accessToken ? { accessToken: server.accessToken } : {}),
-          messageFormat: server.messageFormat,
-          reportSelfMessage: server.reportSelfMessage,
-          ...(server.enableWebSocket ? { enableWebSocket: true } : {}),
-        },
-        dispatchFor('http', server.name),
-      );
-      const port = await adapter.start();
-      firstPort ??= port;
-      networks.push(adapter);
-      log.info('HTTP 服务端已启动', { name: server.name, port });
-    }
+    try {
+      for (const server of config.httpServers) {
+        if (server.enabled === false) continue;
+        const adapter = new HttpServerAdapter(
+          {
+            ...(server.name ? { name: server.name } : {}),
+            host: server.host ?? '127.0.0.1',
+            port: server.port,
+            ...(server.path ? { path: server.path } : {}),
+            ...(server.accessToken ? { accessToken: server.accessToken } : {}),
+            messageFormat: server.messageFormat,
+            reportSelfMessage: server.reportSelfMessage,
+            ...(server.enableWebSocket ? { enableWebSocket: true } : {}),
+          },
+          dispatchFor('http', server.name),
+        );
+        try {
+          const port = await adapter.start();
+          firstPort ??= port;
+        } catch (cause) {
+          throw fail(
+            {
+              network: server.name,
+              kind: 'http-server',
+              host: server.host ?? '127.0.0.1',
+              port: server.port,
+            },
+            cause,
+          );
+        }
+        startedAdapters.push(adapter);
+        log.info('HTTP 服务端已启动', { name: server.name, port: server.port });
+      }
 
-    for (const server of config.wsServers) {
-      if (server.enabled === false) continue;
-      const adapter = new WsServerAdapter(
-        {
-          ...(server.name ? { name: server.name } : {}),
-          host: server.host ?? '127.0.0.1',
-          port: server.port,
-          ...(server.path ? { path: server.path } : {}),
-          ...(server.role ? { role: server.role } : {}),
-          ...(server.accessToken ? { accessToken: server.accessToken } : {}),
-          messageFormat: server.messageFormat,
-          reportSelfMessage: server.reportSelfMessage,
-        },
-        dispatchFor('ws', server.name),
-      );
-      const port = await adapter.start();
-      firstPort ??= port;
-      networks.push(adapter);
-      log.info('正向 WS 已启动', { name: server.name, port });
-    }
+      for (const server of config.wsServers) {
+        if (server.enabled === false) continue;
+        const adapter = new WsServerAdapter(
+          {
+            ...(server.name ? { name: server.name } : {}),
+            host: server.host ?? '127.0.0.1',
+            port: server.port,
+            ...(server.path ? { path: server.path } : {}),
+            ...(server.role ? { role: server.role } : {}),
+            ...(server.accessToken ? { accessToken: server.accessToken } : {}),
+            messageFormat: server.messageFormat,
+            reportSelfMessage: server.reportSelfMessage,
+          },
+          dispatchFor('ws', server.name),
+        );
+        try {
+          const port = await adapter.start();
+          firstPort ??= port;
+        } catch (cause) {
+          throw fail(
+            {
+              network: server.name,
+              kind: 'ws-server',
+              host: server.host ?? '127.0.0.1',
+              port: server.port,
+            },
+            cause,
+          );
+        }
+        startedAdapters.push(adapter);
+        log.info('正向 WS 已启动', { name: server.name, port: server.port });
+      }
 
-    for (const client of config.wsClients) {
-      if (client.enabled === false) continue;
-      const adapter = new WsClientAdapter(
-        {
+      // 反向 WS 与 HTTP 上报都是**主动去连**别人的客户端：`start()` 不抛错
+      // （连不上就按 `reconnectIntervalMs` 退避重连），所以它们不参与回滚。
+      for (const client of config.wsClients) {
+        if (client.enabled === false) continue;
+        const adapter = new WsClientAdapter(
+          {
+            ...(client.name ? { name: client.name } : {}),
+            url: client.url,
+            ...(client.role ? { role: client.role } : {}),
+            ...(client.accessToken ? { accessToken: client.accessToken } : {}),
+            messageFormat: client.messageFormat,
+            reportSelfMessage: client.reportSelfMessage,
+            ...(client.reconnectIntervalMs
+              ? { reconnectIntervalMs: client.reconnectIntervalMs }
+              : {}),
+            selfId: options.selfId,
+          },
+          dispatchFor('ws', client.name),
+        );
+        adapter.start();
+        startedAdapters.push(adapter);
+        log.info('反向 WS 已连接', { name: client.name, url: client.url });
+      }
+
+      for (const client of config.httpClients) {
+        if (client.enabled === false) continue;
+        const adapter = new HttpClientAdapter({
           ...(client.name ? { name: client.name } : {}),
           url: client.url,
-          ...(client.role ? { role: client.role } : {}),
           ...(client.accessToken ? { accessToken: client.accessToken } : {}),
           messageFormat: client.messageFormat,
           reportSelfMessage: client.reportSelfMessage,
-          ...(client.reconnectIntervalMs
-            ? { reconnectIntervalMs: client.reconnectIntervalMs }
-            : {}),
-          selfId: options.selfId,
-        },
-        dispatchFor('ws', client.name),
-      );
-      adapter.start();
-      networks.push(adapter);
-      log.info('反向 WS 已连接', { name: client.name, url: client.url });
+        });
+        startedAdapters.push(adapter);
+        log.info('HTTP 上报已配置', { name: client.name, url: client.url });
+      }
+    } catch (cause) {
+      // 回滚：逆序关掉已经起来的（后起的先关），再清空。
+      for (const adapter of startedAdapters.reverse()) {
+        try {
+          await adapter.stop();
+        } catch (stopCause) {
+          log.warn('回滚时关闭网络失败', {
+            cause: stopCause instanceof Error ? stopCause.message : String(stopCause),
+          });
+        }
+      }
+      throw cause;
     }
 
-    for (const client of config.httpClients) {
-      if (client.enabled === false) continue;
-      const adapter = new HttpClientAdapter({
-        ...(client.name ? { name: client.name } : {}),
-        url: client.url,
-        ...(client.accessToken ? { accessToken: client.accessToken } : {}),
-        messageFormat: client.messageFormat,
-        reportSelfMessage: client.reportSelfMessage,
-      });
-      networks.push(adapter);
-      log.info('HTTP 上报已配置', { name: client.name, url: client.url });
-    }
-
+    networks.push(...startedAdapters);
     return firstPort;
+  }
+
+  /** `EADDRINUSE` 在三个平台上的 `code` 都是它，但拿不到时退回文案匹配。 */
+  function isAddressInUse(cause: unknown): boolean {
+    if (!(cause instanceof Error)) return false;
+    const code = (cause as NodeJS.ErrnoException).code;
+    return code === 'EADDRINUSE' || /EADDRINUSE|address already in use/i.test(cause.message);
   }
 
   const adapter: OneBotAdapter = {
@@ -480,19 +558,24 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
     call: (action, params) => dispatch(action, params, { transport: 'webui', client: 'webui' }),
 
     async start() {
-      if (started) throw new Error('OneBot 适配器已经启动');
       if (starting) return starting;
+      if (started) throw new Error('OneBot 适配器已经启动');
       started = true;
       startedAt = Date.now();
-      starting = (async () => {
-        const result = registerActions(registry, options.backend);
-        registered = result.registered;
-        skipped = result.skipped;
-        log.info('action 已注册', {
-          registered: registered.length,
-          skipped,
-          backend: describeBackend(options.backend),
-        });
+      const run = (async () => {
+        // 只在第一次注册：`start()` 失败后允许重试（改好端口再保存），而
+        // `ActionRegistry.register` 对重名是**硬报错**，重复注册会让第二次
+        // 启动永远失败。注册本身与网络无关，失败那轮也已完成。
+        if (registered.length === 0 && skipped.length === 0) {
+          const result = registerActions(registry, options.backend);
+          registered = result.registered;
+          skipped = result.skipped;
+          log.info('action 已注册', {
+            registered: registered.length,
+            skipped,
+            backend: describeBackend(options.backend),
+          });
+        }
 
         const port = await startNetworks();
         (adapter as { port: number | undefined }).port = port;
@@ -528,7 +611,19 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
           stopHeartbeat = () => clearInterval(timer);
         }
       })();
-      return starting;
+      starting = run;
+      try {
+        await run;
+      } catch (cause) {
+        // 失败后必须复位，否则下一次 start() 会直接拿回这个 rejected promise：
+        // 用户改好端口再保存也永远失败，只能重启进程。`startNetworks` 已经把自己
+        // 起来的适配器关干净，这里只清本层的簿记。
+        started = false;
+        starting = undefined;
+        (adapter as { port: number | undefined }).port = undefined;
+        throw cause;
+      }
+      return run;
     },
 
     async stop() {

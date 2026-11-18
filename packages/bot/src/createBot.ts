@@ -134,6 +134,13 @@ export interface Bot {
   /** OneBot 适配器；未配置 `config.onebot` 时为 undefined。 */
   readonly onebot: OneBotAdapter | undefined;
   /**
+   * **当前生效**的 OneBot 配置；没配过就是 undefined。
+   *
+   * 宿主（控制通道 / WebUI）要读它才能做到「读-改-写」：`reloadOneBot` 失败时
+   * 会把配置回滚成上一份，宿主自己记账必然与这里分叉。
+   */
+  readonly onebotConfig: BotOneBotConfig | undefined;
+  /**
    * 观测快照：会话 / 重连 / SecToken / 设备档案。
    *
    * WebUI 总览用。**不包含任何凭据**（a1 / a2 / d2 / d2Key / secToken 都不在里面）。
@@ -927,6 +934,9 @@ export function createBot(options: CreateBotOptions): Bot {
     },
     get onebot() {
       return onebot;
+    },
+    get onebotConfig() {
+      return onebotConfig;
     },
     get snapshot(): BotSnapshot {
       return {

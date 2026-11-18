@@ -125,6 +125,13 @@ const outDir = resolve(root, opt('--out') ?? join('dist', 'release'));
 const workDir = resolve(root, '.release');
 const cacheDir = join(workDir, 'cache');
 const bundleFile = join(workDir, 'bundle', 'packages', 'node', 'src', 'cli.mjs');
+/**
+ * 宿主（WeQ）用的 daemon 入口：只有 kernel + 控制通道，不带 WebUI。
+ *
+ * 放在同一个 `packages/node/src/` 下，是因为宿主的 `extraResources` 只需要拷
+ * 这一个文件；它自己按相对路径找 native（`WEQBOT_NATIVE_DIR` 优先）。
+ */
+const daemonBundleFile = join(workDir, 'bundle', 'packages', 'node', 'src', 'daemon.mjs');
 
 /** 版本：`--version` > `WEQBOT_VERSION` > 根 package.json；去掉开头的 `v`。 */
 async function resolveVersion() {
@@ -219,6 +226,7 @@ function readmeText(version, platform, variant) {
     '',
     '这个目录里有什么：',
     '  packages/node/src/cli.mjs   CLI（单文件，已打包）',
+    '  packages/node/src/daemon.mjs 宿主用的 daemon 入口（无 WebUI）',
     '  webui/dist/                 控制台静态资源',
     `  native/${platform.replace('-', '/')}/nt_helper.node   原生组件`,
     '  config.example.json         配置样例（字段说明见文档）',
@@ -231,12 +239,9 @@ function readmeText(version, platform, variant) {
 
 // ─────────────────────────── 打包 ───────────────────────────
 
-/** 把 CLI 打成单文件 ESM。 */
-async function bundleCli(version) {
-  await mkdir(dirname(bundleFile), { recursive: true });
-  await build({
-    entryPoints: [join(root, 'packages', 'node', 'src', 'cli.ts')],
-    outfile: bundleFile,
+/** esbuild 公共选项：两个入口只差 entryPoints / outfile。 */
+function bundleOptions(version) {
+  return {
     bundle: true,
     platform: 'node',
     format: 'esm',
@@ -251,9 +256,33 @@ async function bundleCli(version) {
     banner: {
       js: "import { createRequire as __weqbotCreateRequire } from 'node:module'; const require = __weqbotCreateRequire(import.meta.url);",
     },
+  };
+}
+
+/** 把 CLI 打成单文件 ESM。 */
+async function bundleCli(version) {
+  await mkdir(dirname(bundleFile), { recursive: true });
+  await build({
+    ...bundleOptions(version),
+    entryPoints: [join(root, 'packages', 'node', 'src', 'cli.ts')],
+    outfile: bundleFile,
   });
   const { size } = await stat(bundleFile);
   log(`CLI 已打包：${(size / 1024 / 1024).toFixed(1)} MB → ${bundleFile.slice(root.length + 1)}`);
+}
+
+/** 把宿主的 daemon 入口打成单文件 ESM（不带 WebUI）。 */
+async function bundleDaemon(version) {
+  await mkdir(dirname(daemonBundleFile), { recursive: true });
+  await build({
+    ...bundleOptions(version),
+    entryPoints: [join(root, 'packages', 'node', 'src', 'daemon-entry.ts')],
+    outfile: daemonBundleFile,
+  });
+  const { size } = await stat(daemonBundleFile);
+  log(
+    `daemon 已打包：${(size / 1024 / 1024).toFixed(1)} MB → ${daemonBundleFile.slice(root.length + 1)}`,
+  );
 }
 
 /** 组装 `weqbot/` 目录（暂存区）。 */
@@ -266,6 +295,8 @@ async function assemble(version, platform, variant) {
   // 布局见文件头注释：cli.mjs 必须在 packages/node/src 下，静态资源在 webui/dist 下。
   await mkdir(join(app, 'packages', 'node', 'src'), { recursive: true });
   await copyFile(bundleFile, join(app, 'packages', 'node', 'src', 'cli.mjs'));
+  // 宿主（WeQ）只拿这一个文件：kernel + 控制通道，不带 WebUI 与静态资源。
+  await copyFile(daemonBundleFile, join(app, 'packages', 'node', 'src', 'daemon.mjs'));
   await cp(join(root, 'packages', 'webui', 'dist'), join(app, 'webui', 'dist'), {
     recursive: true,
   });
@@ -339,6 +370,7 @@ async function main() {
   log(`版本 ${version}；平台 ${platforms.join(' / ')}；变体 ${variants.join(' / ')}`);
   log(`Node ${nodeVersion}（with-node 变体自带）`);
   await bundleCli(version);
+  await bundleDaemon(version);
 
   const produced = [];
   for (const platform of platforms) {

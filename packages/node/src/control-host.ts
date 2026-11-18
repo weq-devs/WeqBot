@@ -14,7 +14,13 @@
  */
 
 import { createLogger, WeqBotError, type Logger } from '@weqbot/common';
-import { createBot, type Bot, type BotConfig } from '@weqbot/bot';
+import {
+  createBot,
+  type AttachMaterial,
+  type Bot,
+  type BotConfig,
+  type BotOneBotConfig,
+} from '@weqbot/bot';
 import {
   CONTROL_EVENTS,
   controlEvent,
@@ -22,10 +28,14 @@ import {
   controlSuccess,
   type ControlEnvelope,
   type ControlFailure,
+  type ControlOneBotConfig,
+  type ControlOneBotListener,
+  type ControlOneBotState,
   type ControlStatus,
 } from '@weqbot/control';
 import type { CredentialVault, StoredAccount } from '@weqbot/session';
 import type { DeviceProfile, NativePort } from '@weqbot/wire';
+import { maskOneBotConfig, OneBotConfigError, validateOneBotConfig } from './onebot-config';
 
 export interface ControlHostOptions {
   /** 账号由启动时决定，控制通道拿不到第二个账号。 */
@@ -68,6 +78,14 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
   let lastEventAt: number | null = null;
   let starting: Promise<ControlStatus> | undefined;
   let offs: (() => void)[] = [];
+  /**
+   * 这个进程已经用哪条路绑定过账号。
+   *
+   * `login`（mode2 自建）与 `attach`（mode1 借会话）在「谁拥有账号的在线状态」
+   * 上互斥 —— 两个都成功会让服务端看到两条注册路径，直接违反硬约束 2。
+   * 这里用一个入口记账，比在两条链路里各写一遍守卫可靠。
+   */
+  let opened: 'none' | 'login' | 'attach' = 'none';
 
   const broadcast = (envelope: ControlEnvelope): void => {
     for (const sink of sinks) sink(envelope);
@@ -120,6 +138,12 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
     device?: DeviceProfile;
     qqDbPath?: string;
   }): Promise<ControlStatus> {
+    if (opened === 'attach') {
+      throw new WeqBotError(
+        'ALREADY_ONLINE',
+        '这个进程已经用有头模式接管了 QQ 的会话；自建上线（mode 2）与它互斥',
+      );
+    }
     if (isOnline()) return status();
     if (starting) return starting;
     if (!params.device) {
@@ -152,10 +176,12 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
     await options.vault.put(account);
 
     const qqDbPath = params.qqDbPath ?? process.env.WEQBOT_QQ_DB ?? options.config?.qq?.dbPath;
+    const onebot = onebotConfigForBot();
     const config: BotConfig = {
       // 启动参数打底（onebot / session / secToken / native.wrapperPath），
       // 再被本次 login 的 qqDbPath 覆盖 —— 凭据永远不在这里。
       ...options.config,
+      ...(onebot ? { onebot } : {}),
       account: { uin: options.uin },
       native: { ...options.config?.native },
       ...(qqDbPath ? { qq: { ...options.config?.qq, dbPath: qqDbPath } } : {}),
@@ -170,6 +196,7 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
         logger: log,
       });
       bot = next;
+      opened = 'login';
       attachBot(next);
       await next.start();
       return status();
@@ -180,6 +207,172 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
     } finally {
       starting = undefined;
     }
+  }
+
+  /**
+   * 有头模式（mode 1）：宿主已经持有 QQ 本体的会话，直接搭它的 SSO 通道。
+   *
+   * 与 {@link login} 的三处差别：
+   *
+   * 1. **不碰 vault**：a2/d2/d2Key 是运行期易失物，存下来没有任何意义，还会
+   *    增加泄漏面（硬约束 4 只允许持久化 a1 + guid + 设备档案）；
+   * 2. **不发 `UnRegister`**：账号的在线状态归 QQ 所有，我们只是借道；
+   * 3. **QQ 必须在线**：所以这里不跑 `isQqLoggedIn` 预检（那是 mode2 的门禁）。
+   */
+  async function attachLogin(params: {
+    pid: number;
+    uin: string;
+    uid: string;
+    guid: string;
+    a2: string;
+    d2: string;
+    d2Key: string;
+    secToken?: string;
+    subAppId: number;
+    clientVersion?: string;
+    qua?: string | null;
+    wrapperPath?: string;
+    device?: DeviceProfile;
+  }): Promise<ControlStatus> {
+    if (opened === 'login') {
+      throw new WeqBotError('ALREADY_ONLINE', '这个进程已经自建上线（mode 2）；有头模式与它互斥');
+    }
+    if (isOnline()) return status();
+    if (starting) return starting;
+
+    // 错号接入是最危险的失误：宿主给的 uin 与进程绑定值不一致时直接拒绝，
+    // 不要在别人的账号上动作。
+    if (params.uin !== options.uin) {
+      throw new WeqBotError(
+        'LOGIN_FAILED',
+        `控制通道提供的 uin 是 ${params.uin}，但这个进程绑定的是 ${options.uin}`,
+        { fields: { expected: options.uin, actual: params.uin } },
+      );
+    }
+    if (!Number.isInteger(params.pid) || params.pid <= 0) {
+      throw new WeqBotError('LOGIN_FAILED', `pid 不合法：${params.pid}`);
+    }
+    if (!Number.isSafeInteger(params.subAppId) || params.subAppId <= 0) {
+      throw new WeqBotError('LOGIN_FAILED', 'subAppId 必须是正整数（取自 major.node）');
+    }
+
+    const material: AttachMaterial = {
+      pid: params.pid,
+      uin: params.uin,
+      uid: params.uid,
+      guid: params.guid,
+      a2: params.a2,
+      d2: params.d2,
+      d2Key: params.d2Key,
+      ...(params.secToken ? { secToken: params.secToken } : {}),
+      subAppId: params.subAppId,
+      ...(params.clientVersion ? { clientVersion: params.clientVersion } : {}),
+      ...(params.qua !== undefined ? { qua: params.qua } : {}),
+      ...(params.wrapperPath ? { wrapperPath: params.wrapperPath } : {}),
+    };
+
+    // 设备档案只给控制通道的 `status` 看（有头模式不靠它注册）。宿主没提供时
+    // 用 subAppId 拼一份最小档案，不要伪造 os / platform —— 那会让排障日志说谎。
+    if (params.device) device = params.device;
+
+    const onebot = onebotConfigForBot();
+    const config: BotConfig = {
+      ...options.config,
+      ...(onebot ? { onebot } : {}),
+      account: { uin: options.uin },
+      native: { ...options.config?.native },
+      log: options.config?.log ?? { level: 'info' },
+    };
+
+    // 宿主最容易误判的一点：attach 成功后 `CONTROL_EVENTS.onebot` 永远安静。
+    // 在日志里说清楚，比等对方提 issue 强。
+    log.info('mode 1 只发不收：不会有 OneBot 事件推送（需要事件请宿主持久化来源）', {
+      uin: options.uin,
+      pid: params.pid,
+    });
+
+    starting = (async () => {
+      const next = botFactory({
+        config,
+        native: options.native,
+        vault: options.vault,
+        logger: log,
+        attach: material,
+      });
+      bot = next;
+      opened = 'attach';
+      attachBot(next);
+      await next.start();
+      return status();
+    })();
+
+    try {
+      return await starting;
+    } finally {
+      starting = undefined;
+    }
+  }
+
+  /** 上线前通过 `onebot.set` 下发的配置；下次 `createBot` 时生效。 */
+  let pendingOneBot: BotOneBotConfig | undefined;
+
+  /** 构造 bot 时用的 OneBot 配置。 */
+  function onebotConfigForBot(): BotOneBotConfig | undefined {
+    return pendingOneBot ?? options.config?.onebot;
+  }
+
+  /** 当前生效的 OneBot 配置；没配过时为 undefined。 */
+  function currentOneBotConfig(): BotOneBotConfig | undefined {
+    return bot?.onebotConfig ?? onebotConfigForBot();
+  }
+
+  function onebotState(): ControlOneBotState {
+    const config = currentOneBotConfig();
+    const listeners: ControlOneBotListener[] = (bot?.onebot?.networks() ?? []).map((snapshot) => ({
+      kind: snapshot.kind,
+      name: snapshot.name,
+      endpoint: snapshot.endpoint,
+      state: snapshot.state,
+      ...(snapshot.port !== undefined ? { port: snapshot.port } : {}),
+      clients: snapshot.clients,
+      ...(snapshot.error ? { error: snapshot.error } : {}),
+    }));
+    return {
+      configured: config !== undefined,
+      config: (maskOneBotConfig(config) as ControlOneBotConfig | undefined) ?? null,
+      listeners,
+    };
+  }
+
+  async function setOnebot(config: ControlOneBotConfig | null): Promise<ControlOneBotState> {
+    let next: BotOneBotConfig | undefined;
+    if (config !== null) {
+      try {
+        next = validateOneBotConfig(config, currentOneBotConfig());
+      } catch (cause) {
+        if (cause instanceof OneBotConfigError) {
+          throw new WeqBotError(
+            cause.code === 'PORT_CONFLICT' ? 'ONEBOT_LISTEN_FAILED' : 'LOGIN_FAILED',
+            cause.message,
+            { fields: { code: cause.code } },
+          );
+        }
+        throw cause;
+      }
+    }
+
+    if (!bot) {
+      // 还没上线：只记在内存里，上线时随 `createBot` 一起生效。daemon 不负责
+      // 落盘 —— 宿主才是配置的权威来源，重启后它会重新下发（见 embedding.md）。
+      pendingOneBot = next;
+      return onebotState();
+    }
+
+    // `reloadOneBot` 保证「先停旧、失败回滚旧配置再抛」，所以这里不需要自己
+    // 兜底；失败时 `bot.onebotConfig` 仍是上一份，`onebotState()` 读到的也对。
+    await bot.reloadOneBot(next);
+    pendingOneBot = next;
+    return onebotState();
   }
 
   function isOnline(): boolean {
@@ -219,6 +412,22 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
             ),
           );
           return;
+        case 'attach':
+          reply(
+            controlSuccess(
+              envelope.id,
+              await attachLogin(envelope.params as Parameters<typeof attachLogin>[0]),
+            ),
+          );
+          return;
+        case 'onebot.get':
+          reply(controlSuccess(envelope.id, onebotState()));
+          return;
+        case 'onebot.set': {
+          const params = envelope.params as { config?: ControlOneBotConfig | null } | undefined;
+          reply(controlSuccess(envelope.id, await setOnebot(params?.config ?? null)));
+          return;
+        }
         case 'shutdown': {
           const params = envelope.params as { reason?: string } | undefined;
           reply(controlSuccess(envelope.id, null));

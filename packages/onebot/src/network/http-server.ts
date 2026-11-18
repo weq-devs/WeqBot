@@ -92,8 +92,20 @@ export class HttpServerAdapter {
         },
         this.dispatch,
       );
-      // WS 复用同一个 server，传 `port` 只为满足类型；不会被监听。
-      await this.ws.start();
+      try {
+        // WS 复用同一个 server，传 `port` 只为满足类型；不会被监听。
+        await this.ws.start();
+      } catch (cause) {
+        // HTTP 已经 listen 成功了，WS 挂不上去时不能把这个监听也留下 —— 否则调用
+        // 方看到「启动失败」，端口却被自己占着，重试还是失败。
+        this.ws = undefined;
+        this.server = undefined;
+        await new Promise<void>((resolve) => {
+          server.closeAllConnections();
+          server.close(() => resolve());
+        });
+        throw cause;
+      }
     }
 
     return this.listeningPort ?? this.options.port;

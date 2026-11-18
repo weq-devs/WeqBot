@@ -104,6 +104,9 @@ export class WsServerAdapter {
       });
       server.once('error', (cause) => {
         this.lastError = cause.message;
+        // 监听没成功就不能留着这个实例：`snapshot()` 用 `server !== undefined`
+        // 判断 listening，留着会让状态页显示「运行中」。
+        this.server = undefined;
         reject(cause);
       });
     });

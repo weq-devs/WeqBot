@@ -39,6 +39,7 @@ function fakeBot(): Bot {
     events: new TypedEventBus<BotEventMap>(),
     protocol: undefined,
     onebot: undefined,
+    onebotConfig: undefined,
     snapshot: {
       uin: '10002',
       state: 'online',
