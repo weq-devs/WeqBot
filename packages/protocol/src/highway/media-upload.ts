@@ -134,6 +134,7 @@ export interface MediaUploadTarget {
 
 export interface MediaUploadOptions {
   log?: (message: string) => void;
+  onProgress?: (confirmed: number, total: number) => void;
   /**
    * 泡泡消息（`commonElem.businessType=14`）：上传管线与普通视频完全一致，
    * 只在最终拼 `msgInfo` 时换 businessType 并补 `extBizInfo.bubble`。
@@ -533,6 +534,7 @@ async function uploadImageAttempt(
     uploads,
     label: '图片',
     log: options.log,
+    onProgress: options.onProgress,
   });
 
   const msgInfo = finalizeMediaMsgInfo(upload, {
@@ -905,6 +907,7 @@ export async function uploadVideoMsgInfo(
     ],
     label: '视频',
     log: options.log,
+    onProgress: options.onProgress,
   });
 
   // 泡泡消息与普通视频共用整条上传管线，只在最终拼 msgInfo 时补

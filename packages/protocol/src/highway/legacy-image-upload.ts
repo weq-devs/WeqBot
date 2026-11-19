@@ -58,6 +58,7 @@ export interface LegacyImageUploadParams {
   source: LegacyImageSource;
   /** 日志钩子（上传链路排查用）。 */
   log?: (message: string) => void;
+  onProgress?: (confirmed: number, total: number) => void;
 }
 
 /** 老式图片上传的产物 —— 恰好是 `SendFlashPhotoPic` 需要的那些字段。 */
@@ -271,6 +272,7 @@ export async function uploadLegacyImage(
       extend: new Uint8Array(0),
       appId: LEGACY_IMAGE_HIGHWAY_APP_ID,
       seq: 1,
+      onProgress: params.onProgress,
       ...(params.log ? { log: params.log } : {}),
     });
 

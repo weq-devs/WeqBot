@@ -17,6 +17,7 @@ export {
   SetDiyOnlineStatus,
   SetInputStatus,
   GetUserOnlineStatus,
+  GetContactOnlineStatus,
   unpackStatusWord,
 } from './status';
 export type {
@@ -25,6 +26,7 @@ export type {
   SetInputStatusParams,
   UserOnlineStatus,
   GetUserOnlineStatusParams,
+  ContactOnlineStatus,
 } from './status';
 export { SetProfile, SetSelfLongNick, PROFILE_FIELD } from './set-profile';
 export type { SetProfileParams, SetSelfLongNickParams } from './set-profile';
