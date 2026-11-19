@@ -294,10 +294,16 @@ export const SIGN_RULES = {
  * `SIGN_RULES` 的 `sign: 'none'`。
  *
  * 2026-11-15：最后 8 条（P8 新增命令）在 Linux 实测后也全部转入 `SIGN_RULES`
- * 的逐端声明 —— 其中 `0x88d_0` **要签名**，其余 7 条不签。表现在是空的：
- * 只有「新加的 spec 忘了登记」才会落进来，`sign-coverage.test.ts` 兜底。
+ * 的逐端声明 —— 其中 `0x88d_0` **要签名**，其余 7 条不签。
+ *
+ * 空间 V4 详情是 **raw SSO（不套 OIDB 信封）**，所以不会被 `sign-coverage.test.ts`
+ * 的 OIDB 扫描覆盖；这条登记同时是运行期 `resolveSign` 的待确认说明来源
+ * （`sendPacket` 每次查表都会走它）。
  */
-export const UNCONFIRMED_SIGN_COMMANDS: Readonly<Record<string, string>> = {};
+export const UNCONFIRMED_SIGN_COMMANDS: Readonly<Record<string, string>> = {
+  'QzoneV4Service.trpc.qzone.feeds_reader.FeedsReader.GetFeedDetail':
+    '空间 V4 详情：仅 macOS QQ 实测可用，未逐平台确认签名要求',
+};
 
 /** 表里出现过的 wire 命令。 */
 export type SignedCommand = keyof typeof SIGN_RULES;
