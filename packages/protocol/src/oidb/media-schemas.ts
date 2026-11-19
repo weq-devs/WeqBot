@@ -325,6 +325,9 @@ const ALBUM_MEDIA_INFO = message([
   { name: 'uploader', tag: 6, type: 'string' },
   { name: 'batchId', tag: 7, type: 'uint64' },
   { name: 'uploadTime', tag: 8, type: 'uint64' },
+  // 显式实况位：只在服务端真的给出时为 true/false，缺字段时保持 undefined
+  // （不要补 false —— 消费侧拿它区分「不是实况」与「这条回包没带」）。
+  { name: 'isLivePhoto', tag: 18, type: 'bool' },
 ]);
 
 const ALBUM_INFO = message([
@@ -338,12 +341,24 @@ const ALBUM_RSP_DATA = message([
   { name: 'mediaList', tag: 3, type: ALBUM_MEDIA_INFO, repeated: true },
   { name: 'prevAttachInfo', tag: 4, type: 'string' },
   { name: 'nextAttachInfo', tag: 5, type: 'string' },
+  // 逐相册操作能力。`operations` 是**编号列表**，不是位掩码。
+  // Android 9.3.85 libkernel: 0x2dd07d8 -> 0x2dcd744。
+  {
+    name: 'right',
+    tag: 9,
+    type: message([
+      { name: 'operations', tag: 1, type: 'uint32', repeated: true },
+      { name: 'normalUpload', tag: 2, type: 'bool' },
+    ]),
+  },
 ]);
 
 export const GET_MEDIA_LIST_RESPONSE = message([
   { name: 'field1', tag: 1, type: 'int32' },
-  { name: 'field2', tag: 2, type: 'bytes' },
-  { name: 'field3', tag: 3, type: 'bytes' },
+  // tag 2/3 是 retCode / 错误文案（int32 + string），不是二进制占位：
+  // 按 bytes 解会因 wire type 不匹配整块被跳过，调用方永远看不到失败原因。
+  { name: 'result', tag: 2, type: 'int32' },
+  { name: 'errorMessage', tag: 3, type: 'string' },
   { name: 'data', tag: 4, type: ALBUM_RSP_DATA },
 ]);
 
