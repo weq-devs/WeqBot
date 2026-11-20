@@ -16,7 +16,8 @@
  */
 
 import { homedir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createLogger, configureLogging } from '@weqbot/common';
 import { adaptNativeBinding } from '@weqbot/wire';
 import { FileCredentialVault } from '@weqbot/session';
@@ -122,7 +123,7 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 }
 
 // 直接执行时进 main；被测试 import 时不自动跑。
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   void main().then((code) => {
     if (code >= 0) process.exit(code);
   });
