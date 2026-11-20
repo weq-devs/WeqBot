@@ -43,6 +43,46 @@ function makeAdapter(config: OneBotConfig) {
   });
 }
 
+test('HTTP 跨域选项只影响其监听器，实际操作仍验证令牌', async (t) => {
+  const networks = emptyNetworks();
+  const server = {
+    port: 0,
+    accessToken: 'secret',
+    messageFormat: 'array' as const,
+    reportSelfMessage: false,
+  };
+  networks.httpServers = [
+    { ...server, name: 'browser', enableCors: true },
+    { ...server, name: 'local', enableCors: false },
+  ];
+  const adapter = makeAdapter({ networks });
+  t.after(() => adapter.stop());
+  await adapter.start();
+  const url = (name: string) => {
+    const port = adapter.networks().find((network) => network.name === name)?.port;
+    assert.ok(port);
+    return `http://127.0.0.1:${port}/get_login_info`;
+  };
+  const preflight = await fetch(url('browser'), { method: 'OPTIONS' });
+  assert.equal(preflight.status, 204);
+  assert.equal(preflight.headers.get('access-control-allow-origin'), '*');
+  assert.equal(
+    preflight.headers.get('access-control-allow-headers'),
+    'authorization, content-type',
+  );
+
+  const unauthorized = await fetch(url('browser'), { method: 'POST', body: '{}' });
+  assert.equal(unauthorized.status, 401);
+  assert.equal(unauthorized.headers.get('access-control-allow-origin'), '*');
+
+  const headers = { authorization: 'Bearer secret', 'content-type': 'application/json' };
+  const valid = await fetch(url('browser'), { method: 'POST', headers, body: '{}' });
+  assert.equal(valid.status, 200);
+  const local = await fetch(url('local'), { method: 'OPTIONS', headers });
+  assert.equal(local.status, 405);
+  assert.equal(local.headers.get('access-control-allow-origin'), null);
+});
+
 /** 占住一个端口，拿到端口号。 */
 async function occupy(): Promise<{ port: number; release: () => Promise<void> }> {
   const server = createServer();

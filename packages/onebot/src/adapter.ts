@@ -415,6 +415,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
             ...(server.accessToken ? { accessToken: server.accessToken } : {}),
             messageFormat: server.messageFormat,
             reportSelfMessage: server.reportSelfMessage,
+            ...(server.enableCors === true ? { enableCors: true } : {}),
             ...(server.enableWebSocket ? { enableWebSocket: true } : {}),
           },
           dispatchFor('http', server.name),

@@ -85,6 +85,7 @@ export interface ControlHttpServer extends ControlNetworkBase {
   host?: string;
   port: number;
   path?: string;
+  enableCors?: boolean;
   /** 同一个监听上是否同时接受 OneBot WS 客户端。 */
   enableWebSocket?: boolean;
 }

@@ -21,6 +21,7 @@ export interface HttpServerOptions {
   accessToken?: string;
   messageFormat: MessageFormat;
   reportSelfMessage: boolean;
+  enableCors?: boolean;
   enableWebSocket?: boolean;
 }
 
@@ -114,6 +115,16 @@ export class HttpServerAdapter {
   private async handle(request: IncomingMessage, response: ServerResponse): Promise<void> {
     const url = new URL(request.url ?? '/', 'http://localhost');
     const pathname = url.pathname.replace(/\/$/, '');
+
+    if (this.options.enableCors === true) {
+      response.setHeader('access-control-allow-origin', '*');
+      response.setHeader('access-control-allow-headers', 'authorization, content-type');
+      response.setHeader('access-control-allow-methods', 'GET, POST, OPTIONS');
+      if (request.method === 'OPTIONS') {
+        response.writeHead(204).end();
+        return;
+      }
+    }
 
     if (
       !isAuthorized(this.options.accessToken, {
