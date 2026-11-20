@@ -35,6 +35,7 @@ import { invokeTrpc, type TrpcSpec } from '../oidb/invoke';
 export const GROUP_SSO_CMD = {
   createRoom: 'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoCreateRoom',
   inviteRoom: 'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoInviteRoom',
+  deleteUser: 'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoDeleteUser',
   queryRoom: 'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoQueryRoom',
   multiTerminalSync: 'trpc.qqrtc.mav_appsvr.MavAppsvr.SsoMultiTerminalSync',
 } as const;
@@ -44,7 +45,7 @@ export const GROUP_SSO_CMD = {
  *
  * 实测 **群语音与群视频都是 3** —— 三次抓包里「视频通话」按钮发起的那次也是 3。
  * 群聊与私聊的根本差异：私聊靠 `params.f3` / `ipStack` / `f13` 一组字段切档位，
- * 群聊的信令**完全不区分语音/视频**，画面靠运行时开摄像头。
+ * 群聊两种入口共用场景号，初始媒体模式由媒体块携带。
  */
 export const GROUP_CALL_SCENE = {
   audio: 3,
@@ -204,6 +205,46 @@ export const GROUP_INVITE_ROOM_RSP: ProtoMessage = message([
     { repeated: true },
   ),
 ]);
+
+/** AVSDK 的 DeleteUserRequest。f7=0 时按目标名单操作，f8=2 使用 UID。 */
+const GROUP_DELETE_USER_REQ = message([
+  f('groupId', 1, 'uint32', { force: true }),
+  f('scene', 2, 'uint32', { force: true }),
+  f('uids', 6, 'string', { repeated: true }),
+  f('mode', 7, 'uint32', { force: true }),
+  f('identityType', 8, 'uint32', { force: true }),
+  f('room', 9, GROUP_INVITE_MEDIA),
+]);
+
+const GROUP_DELETE_USER_RSP = message([
+  f('result', 1, message([f('code', 1, 'uint32'), f('message', 2, 'string')])),
+]);
+
+/** 从通话房间移出一名成员，请求结构来自 AVSDK 的 DeleteRoomUsers。 */
+export const RemoveGroupCallMember: TrpcSpec<
+  { uid: string; groupId: number; authKey: Uint8Array; streamPrefix: number },
+  void
+> = {
+  cmd: GROUP_SSO_CMD.deleteUser,
+  reqSchema: GROUP_DELETE_USER_REQ,
+  respSchema: GROUP_DELETE_USER_RSP,
+  serialize: ({ uid, groupId, authKey, streamPrefix }) => {
+    if (!/^u_[\w-]+$/.test(uid)) throw new Error('缺少房间成员 UID');
+    return {
+      groupId,
+      scene: GROUP_CALL_SCENE.audio,
+      uids: [uid],
+      mode: 0,
+      identityType: 2,
+      room: { authKey, f2: streamPrefix, f3: 10, f4: 1, f7: groupId },
+    };
+  },
+  deserialize: ({ result }) => {
+    if (!result || typeof result !== 'object') throw new Error('服务器未返回移出成员的结果');
+    const { code, message } = result as { code?: number; message?: string };
+    if (code) throw new Error(message || `移出成员失败（${code}）`);
+  },
+};
 
 /**
  * `SsoQueryRoom` 请求。
