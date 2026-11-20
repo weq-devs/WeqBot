@@ -199,6 +199,12 @@
               "auto_escape": {
                 "type": "boolean",
                 "description": "为 true 时把 message 整段当作纯文本，不解析 CQ 码"
+              },
+              "font_id": {
+                "type": "integer",
+                "description": "本条消息的聊天字体 ID",
+                "minimum": 1,
+                "maximum": 65535
               }
             },
             "required": [
@@ -211,7 +217,8 @@
             "group_id",
             "user_id",
             "message",
-            "auto_escape"
+            "auto_escape",
+            "font_id"
           ],
           "required": [
             "message"

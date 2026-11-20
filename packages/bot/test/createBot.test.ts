@@ -10,7 +10,15 @@ import assert from 'node:assert/strict';
 import { hostname, release } from 'node:os';
 import test from 'node:test';
 import { createLogger } from '@weqbot/common';
-import { encode, MSG_PUSH_CMD, MSG_PUSH_ENVELOPE } from '@weqbot/protocol';
+import {
+  decode,
+  encode,
+  MSG_PUSH_CMD,
+  MSG_PUSH_ENVELOPE,
+  SEND_MESSAGE_REQUEST,
+  SEND_MESSAGE_RESPONSE,
+  SEND_MSG_CMD,
+} from '@weqbot/protocol';
 import type { CredentialVault, StoredAccount } from '@weqbot/session';
 import type {
   DeviceProfile,
@@ -475,6 +483,57 @@ test('配置了 onebot 时会启动适配器，stop 时一起关掉', async () =
 
   await bot.stop('closed');
   assert.equal(bot.onebot, undefined);
+});
+
+test('OneBot send_msg 将 font_id 编码到群聊和私聊的 font2', async () => {
+  const { vault } = makeVault();
+  const sent: Uint8Array[] = [];
+  const harness = makeNative({
+    sendPacket: async (_sessionId, cmd, body) => {
+      if (cmd !== SEND_MSG_CMD) return new Uint8Array();
+      sent.push(body);
+      return encode(SEND_MESSAGE_RESPONSE, { groupSequence: 11, privateSequence: 12 });
+    },
+  });
+  const bot = createBot({
+    config: {
+      ...CONFIG,
+      onebot: { networks: { httpServers: [], httpClients: [], wsClients: [], wsServers: [] } },
+    },
+    native: harness.native,
+    vault,
+    logger: SILENT,
+  });
+
+  await bot.start();
+  try {
+    const adapter = bot.onebot;
+    assert.ok(adapter);
+    const params = { message: '你好', font_id: 22045 };
+    const cases = [
+      { input: { ...params, group_id: 12345 }, retcode: 0 },
+      { input: { ...params, user_id: 20001 }, retcode: 0 },
+      { input: { ...params, group_id: 12345, font_id: 65536 }, retcode: 1400 },
+    ];
+    for (const { input, retcode } of cases) {
+      const result = await adapter.call('send_msg', input);
+      assert.ok(result && typeof result === 'object' && 'retcode' in result);
+      assert.equal(result.retcode, retcode);
+    }
+    assert.equal(sent.length, 2);
+    for (const bytes of sent) {
+      const { messageBody } = decode(SEND_MESSAGE_REQUEST, bytes) as {
+        messageBody: {
+          richText: { elems: { generalFlags?: { font: Record<string, unknown> } }[] };
+        };
+      };
+      const font = messageBody.richText.elems[0]?.generalFlags?.font;
+      assert.equal(font?.fontId1, 0);
+      assert.equal(font?.fontId2, 0x11d56);
+    }
+  } finally {
+    await bot.stop('closed');
+  }
 });
 
 test('start: QQ 本体在线时拒绝 mode 2', async () => {
