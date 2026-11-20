@@ -5,17 +5,8 @@
  * 但 **head 多一层嵌套**：外层恒为 `f1 = 1 | f2 = <inner>`，字段都在 inner 里。
  * 所以私聊的 `buildGcsHead` 不能直接用，这里单独写一份。
  *
- * 本模块只负责三件事，都是 2026-11-05 逐包核对过的：
- *
- * 1. 解析收到的 `0x28`（含 inner 里的常用字段）；
- * 2. **从 body 里取出服务端下发的会话密钥 k2**（`body.f3.f2`，88 字节）；
- * 3. 组那条应答（body 恒 `22 00`，head 用新密钥、`f2 + 1`、`f11 = 1`）。
- *
- * 为什么 k2 这么重要：认证（`0x02 cmd=0x25`）先带开房回包的 authKey（k1），
- * 服务端随后用这条 `0x28` 下发 k2，之后 GCS head 的 `f6` 与中继
- * `0x13 / 0x73 / 0x11` 里的 88 字节块全都换成 k2。两通抓包各只下发一次、不轮换。
- *
- * 详细的时序见仓库根 `todo.md` §2.2.1。
+ * 入房、续探与通知各有自己的 body 类型。首次中继认证使用 k1，
+ * 服务端随后通过 body.f3.f2 下发 k2。
  */
 
 import { parsePb, pbBytes, pbGetBytes, pbGetVarint, pbVarint } from '../call/gcs';
@@ -89,7 +80,8 @@ export function parseGroupGcsPacket(data: Uint8Array): GroupGcsPacket | null {
   if (data.length < 11 || data[0] !== GROUP_GCS_STX) return null;
   const headLen = readU32be(data, 1);
   const bodyLen = readU32be(data, 5);
-  if (9 + headLen + bodyLen + 1 > data.length) return null;
+  if (10 + headLen + bodyLen !== data.length || data[data.length - 1] !== GROUP_GCS_ETX)
+    return null;
   const outer = data.subarray(9, 9 + headLen);
   const inner = pbGetBytes(outer, 2);
   if (!inner) return null;
@@ -257,29 +249,241 @@ export function buildGroupGcsEntry(params: {
   return buildGroupGcsPacket(head, params.body);
 }
 
-/**
- * 组「收到一条 s2c 之后的应答」。
- *
- * `f6` = **当前**密钥（刚下发的 k2 立刻生效，哪怕是用来应答那条 `hl=63` 的精简头
- * 推送），`f11` = 1；`f13` / `f16` / `f19…f23` 与未建模字段都不写。body 恒为
- * `22 00`（field 4 空消息）。
- *
- * ⚠️ **`f1` / `f2` 都按「本端那一路」算，不是照抄收到的那条**。
- * 服务端给每条 s2c 流分配独立的会话 ID 和自己的序号序列，③ 抓包里
- * k2 下发包是 `f1 = 23552, f2 = 278`，紧随其后的应答是
- * `f1 = 612176395, f2 = 284` —— 两个字段分别属于两条流。
- * 会话层要自己维护 `(sessionId, seq)`，所以这里两个值都从 `options` 取。
- */
-export function buildGroupGcsAck(
-  options: { key?: Uint8Array; sessionId: number; seq: number },
+/** 入房应答后，另起一个 GCS 请求发送 f10，随后发中继认证。 */
+export function buildGroupGcsEntryProbe(
+  options: { key: Uint8Array; nonce?: number },
   received: GroupGcsHead,
 ): Uint8Array {
-  const head: GroupGcsHead = {
+  const head = buildGroupGcsReplyHead(
+    received,
+    options.key,
+    received.sessionId + 1,
+    received.seq + 1,
+    0,
+  );
+  return buildGroupGcsPacket(head, pbBytes(10, pbVarint(1, options.nonce ?? 0)));
+}
+
+/** 对服务端通知回同类型 ACK，使用各通知自己的会话号和序号。 */
+export function buildGroupGcsAck(
+  options: { key: Uint8Array; stream: Uint8Array },
+  received: GroupGcsPacket,
+): Uint8Array | null {
+  const field = parsePb(received.body)[0];
+  if (!field?.bytes || received.head.f11 !== 0) return null;
+
+  let body: Uint8Array;
+  switch (field.field) {
+    case 4:
+    case 36:
+      body = pbBytes(field.field, new Uint8Array(0));
+      break;
+    case 26:
+      body = pbBytes(field.field, pbVarint(1, 1));
+      break;
+    default:
+      return null;
+  }
+  const head = buildGroupGcsReplyHead(
+    { ...received.head, ...gcsFieldsFromStream(options.stream) },
+    options.key,
+    received.head.sessionId,
+    received.head.seq + 1,
+    1,
+  );
+  return buildGroupGcsPacket(head, body);
+}
+
+/** 每两秒一次的群通话 GCS f3。媒体计数来自最近的报告窗口。 */
+export interface GroupGcsStatus {
+  sessionId: number;
+  selfUin: number;
+  stream: Uint8Array;
+  key: Uint8Array;
+  previousAt: number;
+  now: number;
+  reportIndex: number;
+  video: boolean;
+  receivedAudioPackets: number;
+  receivedAudioBytes: number;
+  receivedVideoPackets: number;
+  roundTripMs: number;
+  /** 抓包在首次报告带有这两个值，默认为空闲状态的观测值。 */
+  startupMetric?: number;
+  videoMetric?: number;
+}
+
+export function buildGroupGcsStatusReport(status: GroupGcsStatus): Uint8Array {
+  const audio = status.receivedAudioPackets;
+  const rtt = status.roundTripMs;
+  const numberFields = (fields: ReadonlyArray<readonly [number, number]>) =>
+    concat(fields.map(([field, value]) => pbVarint(field, value)));
+  const head = buildGroupGcsHead({
+    sessionId: status.sessionId,
+    seq: 277,
+    selfUin: status.selfUin,
+    ...gcsFieldsFromStream(status.stream),
+    key: status.key,
+    ...GROUP_GCS_DEFAULTS,
+    f11: 0,
+    groupId: 0,
+    f16: 0,
+    f19: 0,
+    f20: 0,
+    f21: 0,
+    f22: 0,
+    f23: 0,
+    unknown: [
+      {
+        field: 31,
+        value: numberFields([
+          [1, rtt],
+          [2, audio],
+          [3, audio],
+        ]),
+      },
+    ],
+  });
+
+  const stats = numberFields([
+    [1, 0],
+    [2, 0],
+    [3, 0],
+    [4, 0],
+    [5, rtt],
+    [6, 0],
+    [7, 0],
+    [8, 0],
+    [9, 0],
+    [10, 0],
+    [12, 0],
+    [13, 0],
+    [14, 24],
+    [15, 0],
+    [16, 0],
+    [17, 0],
+  ]);
+  const videoStats = [0, 1, 2].map((track) =>
+    pbBytes(
+      9,
+      numberFields([
+        [1, track],
+        [2, 0],
+        [3, 0],
+        [4, 0],
+        [5, 0],
+        [6, 0],
+        [7, 0],
+        [8, 0],
+        [9, 0],
+        [20, 0],
+        [21, 0],
+        [22, 0],
+        [23, 0],
+        [24, 0],
+        [25, 0],
+        [26, 0],
+        [27, track === 2 ? 65535 : (status.videoMetric ?? 65535)],
+        [28, 0],
+        [29, 0],
+        [30, 0],
+        [31, 0],
+        [32, 0],
+        [33, 0],
+      ]),
+    ),
+  );
+  const tracks = concat([
+    numberFields([
+      [1, 0],
+      [2, 0],
+      [3, 0],
+      [4, status.startupMetric ?? 0],
+      [5, rtt],
+      [6, 0],
+      [7, 0],
+      [8, 0],
+    ]),
+    ...videoStats,
+    numberFields([
+      [11, 0],
+      [12, 0],
+      [13, 0],
+      [14, 0],
+      [15, 0],
+      [16, 0],
+      [17, 0],
+      [18, 0],
+      [19, 0],
+    ]),
+  ]);
+  const report = concat([
+    numberFields([
+      [1, 0xfffffffe],
+      [2, status.previousAt >>> 0],
+      [3, 0],
+      [4, status.now >>> 0],
+      [5, audio],
+      [6, audio],
+      [7, status.receivedAudioBytes],
+      [8, rtt],
+      [9, status.receivedVideoPackets],
+      [10, 0],
+      [11, 0],
+      [12, 0],
+      [13, status.video ? 1 : 3],
+      [14, 0],
+      [15, 0],
+      [16, 0],
+      [17, status.video ? 2048 : 0],
+      [18, 0],
+      [19, 0],
+      [20, 0],
+      [21, 0],
+      [22, 0],
+      [23, 0],
+      [24, 0],
+      [25, 0],
+    ]),
+    pbBytes(26, stats),
+    pbBytes(27, tracks),
+    numberFields([
+      [28, 0],
+      [29, 0],
+      [30, 0],
+      [39, status.reportIndex],
+    ]),
+  ]);
+  return buildGroupGcsPacket(head, pbBytes(3, report));
+}
+
+/** 仅识别包含服务端分配的流标识的入房应答。 */
+export function isGroupGcsEntryResponse(packet: GroupGcsPacket, sessionId: number): boolean {
+  const { head, body } = packet;
+  return (
+    head.sessionId === sessionId &&
+    head.seq === 266 &&
+    head.f4 !== 0 &&
+    head.f5 !== 0 &&
+    pbGetBytes(body, 1) !== undefined
+  );
+}
+
+function buildGroupGcsReplyHead(
+  received: GroupGcsHead,
+  key: Uint8Array,
+  sessionId: number,
+  seq: number,
+  ack: number,
+): Uint8Array {
+  return buildGroupGcsHead({
     ...received,
-    sessionId: options.sessionId,
-    seq: options.seq,
-    key: options.key ?? received.key,
-    f11: 1,
+    sessionId,
+    seq,
+    key,
+    f7: GROUP_GCS_DEFAULTS.f7,
+    f8: GROUP_GCS_DEFAULTS.f8,
+    f11: ack,
     groupId: 0,
     f16: 0,
     f19: 0,
@@ -288,8 +492,7 @@ export function buildGroupGcsAck(
     f22: 0,
     f23: 0,
     unknown: [],
-  };
-  return buildGroupGcsPacket(buildGroupGcsHead(head), pbBytes(4, new Uint8Array(0)));
+  });
 }
 
 // ─────────────────────────── 会话密钥 k2 ───────────────────────────

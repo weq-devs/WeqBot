@@ -14,3 +14,4 @@ export * from './signaling';
 export * from './gcs';
 export * from './relay';
 export * from './media';
+export * from './multi-video';

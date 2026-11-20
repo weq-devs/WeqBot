@@ -130,8 +130,8 @@ export function parseGroupRelay(data: Uint8Array): GroupRelayPacket | null {
   const route = (data[4]! << 16) | (data[5]! << 8) | data[6]!;
   const cmd = u16be(data, 7);
   const ownerUin = u32be(data, 13);
-  const end = data[data.length - 1] === GROUP_RELAY_ETX ? data.length - 1 : data.length;
-  const body = data.subarray(GROUP_RELAY_PREFIX_LEN, end);
+  if (u16be(data, 1) !== data.length || data[data.length - 1] !== GROUP_RELAY_ETX) return null;
+  const body = data.subarray(GROUP_RELAY_PREFIX_LEN, -1);
   const stream =
     body.length >= GROUP_STREAM_LEN && u32be(body, 0) !== 0
       ? body.subarray(0, GROUP_STREAM_LEN)
@@ -378,12 +378,14 @@ export function buildGroupAuth(params: {
   ownerUin: number;
   stream: Uint8Array;
   key: Uint8Array;
+  /** 03 为初始和视频认证，01 在关闭摄像头时使用。 */
+  mode?: 1 | 3;
 }): Uint8Array {
   assertStream(params.stream);
   assertKey(params.key);
   const body = concat([
     keyBlock(params.stream, params.key),
-    Uint8Array.from([0x03, 0x00, 0x00, 0x00, 0x00]),
+    Uint8Array.from([params.mode ?? 0x03, 0x00, 0x00, 0x00, 0x00]),
   ]);
   return buildGroupRelay({
     route: params.route,
@@ -395,11 +397,11 @@ export function buildGroupAuth(params: {
 
 /** 认证回包（`0x26`）。 */
 export interface GroupAuthResult {
-  /** 没有错误文本即视为认证通过（`Repeat request 3` 也算通过，它是幂等提示）。 */
+  /** 有效状态码或对应的重复认证提示。 */
   ok: boolean;
   /** 服务端附带的提示，如 `Repeat request 3`；成功时为空串。 */
   message: string;
-  /** 尾部状态码（实测成功与 Repeat 都是 3）。 */
+  /** 尾部状态码，视频认证为 3，关闭摄像头后的认证为 2。 */
   code: number;
   raw: Uint8Array;
 }
@@ -415,13 +417,16 @@ export interface GroupAuthResult {
  * 即：`body[5]` 是错误文本长度，文本从 `body[6]` 起，文本之后第 4 个字节是状态码。
  */
 export function parseGroupAuthRsp(body: Uint8Array): GroupAuthResult {
-  const len = body.length > 5 ? body[5]! : 0;
-  const code = body.length > 6 + len + 3 ? body[6 + len + 3]! : 0;
-  if (len < 0x04 || 6 + len > body.length) return { ok: true, message: '', code, raw: body };
+  if (body.length < 14) return { ok: false, message: '', code: 0, raw: body };
+  const len = body[5]!;
+  const code = body[9 + len] ?? 0;
   const text = body.subarray(6, 6 + len);
-  if (!text.every((b) => b >= 0x20 && b < 0x7f)) return { ok: true, message: '', code, raw: body };
-  const msg = String.fromCharCode(...text);
-  return { ok: msg.startsWith('Repeat'), message: msg, code, raw: body };
+  const message = text.every((b) => b >= 0x20 && b < 0x7f) ? String.fromCharCode(...text) : '';
+  const ok =
+    body.length === 14 + len &&
+    (code === 2 || code === 3) &&
+    (len === 0 || message.startsWith('Repeat'));
+  return { ok, message, code, raw: body };
 }
 
 /**

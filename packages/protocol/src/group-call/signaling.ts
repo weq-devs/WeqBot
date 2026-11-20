@@ -53,7 +53,7 @@ export const GROUP_CALL_SCENE = {
 } as const;
 
 /** `SsoCreateRoom.params.f3`（能力档）。与私聊 video 档同值。 */
-export const GROUP_CAPABILITY_PROFILE = 10063;
+export const GROUP_CAPABILITY_PROFILE = 10065;
 
 /**
  * `SsoInviteRoom.params.f5`。三次抓包恒为 15。
@@ -71,10 +71,9 @@ const CREATE_ROOM_F9 = 3;
 const MULTI_TERMINAL_F1 = 15;
 const MULTI_TERMINAL_F2 = 1;
 
-/** `SsoInviteRoom.f13.f2`：实测 0x185706AA，三次抓包恒定。 */
-const GROUP_INVITE_MEDIA_F2 = 0x185706aa;
 /** `SsoCreateRoom.params.f8` 里除群号外的固定组合（`f2=0 f3=10 f4=1 f8=2`）。 */
-const CREATE_ROOM_F8_BASE = { f2: 0, f3: 10, f4: 1, f8: 2 } as const;
+const CREATE_ROOM_F8_BASE = { f2: 0, f3: 10, f4: 1 } as const;
+export type GroupCallMediaMode = 1 | 2;
 
 // ─────────────────────────── wire schemas ───────────────────────────
 
@@ -94,8 +93,7 @@ const f = (
 /**
  * 用户标识块：`{ f1=4, f2=0, f4="u_<uid>" }`。
  *
- * 开房请求与邀请目标**用的是同一个结构**（实测逐字节相同），`f2=0` 必须显式
- * 写出（`10 00`），省掉会与真实客户端字节不一致。
+ * 开房请求显式携带 `f2=0`。
  */
 export const GROUP_USER: ProtoMessage = message([
   f('f1', 1, 'uint32', { force: true }),
@@ -103,7 +101,7 @@ export const GROUP_USER: ProtoMessage = message([
   f('f4', 4, 'string'),
 ]);
 
-/** 邀请目标 —— 与 {@link GROUP_USER} 同构，保留别名便于语义区分。 */
+/** 邀请目标在三份群视频抓包中都省略 f2。 */
 export const GROUP_INVITE_TARGET: ProtoMessage = GROUP_USER;
 
 /** `SsoCreateRoom` 请求。 */
@@ -113,7 +111,7 @@ export const GROUP_CREATE_ROOM_F8: ProtoMessage = message([
   f('f4', 4, 'uint32', { force: true }),
   /** 实测 = 0x28270853 = 10003，与主叫相关（三次抓包恒定）。 */
   f('f7', 7, 'uint32', { force: true }),
-  /** 实测恒为 2。 */
+  /** 不同会话出现过 1 和 2。 */
   f('f8', 8, 'uint32', { force: true }),
 ]);
 
@@ -401,19 +399,22 @@ export function normalizeQueryRoom(rsp: Record<string, unknown>): GroupRoomState
  * 与私聊的关键差异：**没有 `peer` 字段**（私聊把对端 uid 塞在 `params.media.peer`）。
  * 群房间是空的，对端靠后续 `SsoInviteRoom` 拉进来。
  */
-export const CreateGroupRoom: TrpcSpec<{ selfUid: string; groupId: number }, GroupRoom> = {
+export const CreateGroupRoom: TrpcSpec<
+  { selfUid: string; groupId: number; profile?: number; media?: GroupCallMediaMode },
+  GroupRoom
+> = {
   cmd: GROUP_SSO_CMD.createRoom,
   /** 三份抓包离线核验：`reserved` 无 tag 24。 */
   reqSchema: GROUP_CREATE_ROOM_REQ,
   respSchema: GROUP_CREATE_ROOM_RSP,
-  serialize: ({ selfUid, groupId }) => ({
+  serialize: ({ selfUid, groupId, profile = GROUP_CAPABILITY_PROFILE, media = 2 }) => ({
     self: userBlock(selfUid),
     scene: GROUP_CALL_SCENE.audio,
-    profile: GROUP_CAPABILITY_PROFILE,
+    profile,
     f4: CREATE_ROOM_F4,
     f5: CREATE_ROOM_F5,
     // f7 是**本次通话的群号**，必须由调用方传（抓包里的 10003 只是那次通话的群）。
-    f8: { ...CREATE_ROOM_F8_BASE, f7: groupId >>> 0 },
+    f8: { ...CREATE_ROOM_F8_BASE, f7: groupId >>> 0, f8: media },
     f9: CREATE_ROOM_F9,
   }),
   deserialize: (body) => {
@@ -447,7 +448,11 @@ export const InviteToGroupRoom: TrpcSpec<
     authKey: Uint8Array;
     /** 本次通话的群号（`f13.f7`）。 */
     groupId: number;
-    /** 时间戳（`f9`）。传 `Date.now()` 即可，服务端不校验。 */
+    /** 本场 UDP 入房应答的 head.f4。 */
+    streamPrefix: number;
+    profile?: number;
+    media?: GroupCallMediaMode;
+    /** 客户端生成 f11 所用的时间。 */
     now?: number;
   },
   { invited: Array<{ uid: string; accepted: boolean }> }
@@ -455,25 +460,30 @@ export const InviteToGroupRoom: TrpcSpec<
   cmd: GROUP_SSO_CMD.inviteRoom,
   reqSchema: GROUP_INVITE_ROOM_REQ,
   respSchema: GROUP_INVITE_ROOM_RSP,
-  serialize: ({ targetUids, authKey, groupId, now }) => {
+  serialize: ({
+    targetUids,
+    authKey,
+    groupId,
+    streamPrefix,
+    profile = GROUP_CAPABILITY_PROFILE,
+    media = 2,
+    now,
+  }) => {
     const ts = now ?? Date.now();
     // f9 抓包里是个 32 位固定值（66322442），f11 是秒级时间戳。
-    // 两者都不参与服务端校验，但为了字节接近真实客户端，f9 用固定值。
     return {
-      targets: targetUids.map(userBlock),
+      targets: targetUids.map((uid) => ({ f1: 4, f4: uid })),
       f5: GROUP_INVITE_F5,
       f9: 66322442 >>> 0,
       f11: Math.floor(ts / 1000) >>> 0,
-      f12: GROUP_CAPABILITY_PROFILE,
+      f12: profile,
       f13: {
         authKey,
-        // f2 是 32 位常量（实测 408356522 = 0x185206AA），与 f5 一起构成
-        // 「媒体能力指纹」，三次抓包恒定，照抄即可。
-        f2: GROUP_INVITE_MEDIA_F2,
+        f2: streamPrefix,
         f3: 10,
         f4: 1,
         f7: groupId >>> 0,
-        f8: 2,
+        f8: media,
       },
     };
   },
@@ -482,7 +492,7 @@ export const InviteToGroupRoom: TrpcSpec<
     return {
       invited: targets.map((t) => ({
         uid: String(t.f4 ?? ''),
-        // 回包里每个 uid 的 f6 恒为 1（已加入）。缺失按未加入处理。
+        // 回包里每个 uid 的 f6 表示邀请回执，成员是否实际进房由 UDP 通知确认。
         accepted: Number(t.f6 ?? 0) === 1,
       })),
     };
@@ -495,14 +505,17 @@ export const InviteToGroupRoom: TrpcSpec<
  * 抓包里在开房之后、邀请之前调一次；应答是**空 body**（0 字节），所以
  * `respSchema` 是空消息。
  */
-export const MultiTerminalSync: TrpcSpec<{ authKey: Uint8Array; groupId: number }, void> = {
+export const MultiTerminalSync: TrpcSpec<
+  { authKey: Uint8Array; groupId: number; profile?: number },
+  void
+> = {
   cmd: GROUP_SSO_CMD.multiTerminalSync,
   reqSchema: GROUP_MULTI_TERMINAL_REQ,
   respSchema: message([]),
-  serialize: ({ authKey, groupId }) => ({
+  serialize: ({ authKey, groupId, profile = GROUP_CAPABILITY_PROFILE }) => ({
     f1: MULTI_TERMINAL_F1,
     f2: MULTI_TERMINAL_F2,
-    f3: GROUP_CAPABILITY_PROFILE,
+    f3: profile,
     f4: {
       authKey,
       f2: 0,
@@ -519,17 +532,20 @@ export const MultiTerminalSync: TrpcSpec<{ authKey: Uint8Array; groupId: number 
 export const QUERY_ROOM_WANTED = [1, 2, 6, 5, 10, 11, 12, 14, 16] as const;
 
 /** `SsoQueryRoom` —— 查房间成员与状态。 */
-export const QueryGroupRoom: TrpcSpec<{ groupId: number; authKey: Uint8Array }, GroupRoomState> = {
+export const QueryGroupRoom: TrpcSpec<
+  { groupId: number; authKey: Uint8Array; streamPrefix: number },
+  GroupRoomState
+> = {
   cmd: GROUP_SSO_CMD.queryRoom,
   reqSchema: GROUP_QUERY_ROOM_REQ,
   respSchema: GROUP_QUERY_ROOM_RSP,
-  serialize: ({ authKey, groupId }) => ({
+  serialize: ({ authKey, groupId, streamPrefix }) => ({
     roomId: groupId,
     wanted: [...QUERY_ROOM_WANTED],
     f3: 2,
     media: {
       authKey,
-      f2: GROUP_INVITE_MEDIA_F2,
+      f2: streamPrefix,
       f3: 10,
       f4: 1,
       f7: groupId >>> 0,
@@ -544,26 +560,36 @@ export const QueryGroupRoom: TrpcSpec<{ groupId: number; authKey: Uint8Array }, 
 export type GroupCallSignalingNative = Parameters<typeof invokeTrpc>[0];
 
 /**
- * 开房 + 邀请，一步完成。
- *
- * 两步之间失败时房间会泄漏在服务端（无副作用，到期自清），调用方拿到异常后
- * 不必自己回收。
+ * 开房并等调用方完成 UDP 入房、发出认证请求后邀请。
  */
 export async function startGroupCall(
   nt: GroupCallSignalingNative,
   pid: number,
-  params: { selfUid: string; targetUids: string[]; groupId: number },
+  params: {
+    selfUid: string;
+    targetUids: string[];
+    groupId: number;
+    profile?: number;
+    media?: GroupCallMediaMode;
+  },
+  enterRoom: (room: GroupRoom) => Promise<number>,
 ): Promise<{ room: GroupRoom; invited: Array<{ uid: string; accepted: boolean }> }> {
   if (params.targetUids.length === 0) throw new Error('至少需要一个邀请目标');
   if (!params.groupId) throw new Error('必须指定群号（群通话是按群开房间的）');
   const room = await invokeTrpc(nt, pid, CreateGroupRoom, {
     selfUid: params.selfUid,
     groupId: params.groupId,
+    profile: params.profile,
+    media: params.media,
   });
+  const streamPrefix = await enterRoom(room);
   const { invited } = await invokeTrpc(nt, pid, InviteToGroupRoom, {
     targetUids: params.targetUids,
     authKey: room.authKey,
     groupId: params.groupId,
+    streamPrefix,
+    profile: params.profile,
+    media: params.media,
   });
   return { room, invited };
 }
@@ -572,7 +598,7 @@ export async function startGroupCall(
 export async function queryGroupRoom(
   nt: GroupCallSignalingNative,
   pid: number,
-  params: { groupId: number; authKey: Uint8Array },
+  params: { groupId: number; authKey: Uint8Array; streamPrefix: number },
 ): Promise<GroupRoomState> {
   return invokeTrpc(nt, pid, QueryGroupRoom, params);
 }
@@ -580,7 +606,12 @@ export async function queryGroupRoom(
 // ─────────────────────────── 测试辅助 ───────────────────────────
 
 /** 单测用：编码开房请求。 */
-export function encodeCreateGroupRoomReq(params: { selfUid: string; groupId: number }): Uint8Array {
+export function encodeCreateGroupRoomReq(params: {
+  selfUid: string;
+  groupId: number;
+  profile?: number;
+  media?: GroupCallMediaMode;
+}): Uint8Array {
   return encode(GROUP_CREATE_ROOM_REQ, CreateGroupRoom.serialize(params));
 }
 
@@ -589,13 +620,20 @@ export function encodeInviteReq(params: {
   targetUids: string[];
   authKey: Uint8Array;
   groupId: number;
+  streamPrefix: number;
+  profile?: number;
+  media?: GroupCallMediaMode;
   now: number;
 }): Uint8Array {
   return encode(GROUP_INVITE_ROOM_REQ, InviteToGroupRoom.serialize(params));
 }
 
 /** 单测用：编码查询请求。 */
-export function encodeQueryReq(params: { groupId: number; authKey: Uint8Array }): Uint8Array {
+export function encodeQueryReq(params: {
+  groupId: number;
+  authKey: Uint8Array;
+  streamPrefix: number;
+}): Uint8Array {
   return encode(GROUP_QUERY_ROOM_REQ, QueryGroupRoom.serialize(params));
 }
 
