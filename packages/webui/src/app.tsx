@@ -22,8 +22,6 @@ type Screen = 'boot' | 'gate' | 'login' | 'console';
 export interface LoginHint {
   /** 递增标识，让同样内容的提示也能重新触发。 */
   id: number;
-  /** 希望页面切到的 tab。 */
-  tab: 'qr';
   notice: string;
 }
 
@@ -67,8 +65,7 @@ export function App() {
         if (event.notice?.kind === 'a1-expired') {
           setLoginHint({
             id: Date.now(),
-            tab: 'qr',
-            notice: '本机保存的 a1 已失效，已清除凭据 —— 请用扫码重新登录。',
+            notice: '凭据已失效并清除。',
           });
         }
         if (!event.phase) return;
