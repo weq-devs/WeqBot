@@ -1,8 +1,8 @@
 /**
- * 空间写操作（P8.5）：改说说权限 / 拉黑 / 回复与转发说说。
+ * 空间写操作（P8.5）：改说说权限、回复与转发说说。
  *
  * 搬运自 SnowLuma `protocol/src/web/qzone.ts` 的 `updateQzoneMsgRight` /
- * `setQzoneBlack` / `replyQzoneComment`，只把凭据参数换成 {@link WebCredential}、
+ * `replyQzoneComment`，只把凭据参数换成 {@link WebCredential}、
  * 传输换成 `./http`。**写操作不做自动重试**（重放会产生重复回复或重复提交）。
  *
  * 2026-11-16 补齐 `forwardQzoneMsg`：来源 WeQ `account/web/qzone_write_actions.ts`。
@@ -211,42 +211,6 @@ export async function setQzoneMsgRight(
     throw new Error(`说说权限修改失败：code=${data.code} ${data.message ?? ''}`.trim());
   }
   return { ugc_right: Number(data.ugc_right ?? right) };
-}
-
-/** 拉黑 / 解除拉黑某人（作用在本账号空间）。 */
-export async function setQzoneBlack(
-  cred: WebCredential,
-  targetUin: string,
-  ban: boolean,
-): Promise<void> {
-  if (!/^[1-9]\d*$/.test(targetUin)) throw new Error('targetUin 必须是正整数');
-  const text = await webRequestText(
-    `https://h5.qzone.qq.com/proxy/domain/w.qzone.qq.com/cgi-bin/right/cgi_black_action_new?g_tk=${computeBkn(cred.pskey || cred.skey)}`,
-    {
-      method: 'POST',
-      cookie: cookieHeader(cred),
-      body: new URLSearchParams({
-        uin: cred.uin,
-        act_uin: targetUin,
-        action: ban ? '1' : '2',
-        fupdate: '1',
-        qzreferrer: `https://user.qzone.qq.com/${cred.uin}/main`,
-      }).toString(),
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-    },
-  );
-  const data = parseQzoneJson<{ code?: number; subcode?: number; message?: string; msg?: string }>(
-    text.replace(/\{\s*name\s*:/, '{"name":'),
-  );
-  const verb = ban ? '拉黑' : '解除拉黑';
-  if (typeof data.subcode === 'number' && data.subcode !== 0) {
-    throw new Error(
-      `空间${verb}失败：subcode=${data.subcode} ${data.message ?? data.msg ?? ''}`.trim(),
-    );
-  }
-  if (typeof data.code === 'number' && data.code !== 0) {
-    throw new Error(`空间${verb}失败：code=${data.code} ${data.message ?? data.msg ?? ''}`.trim());
-  }
 }
 
 /**

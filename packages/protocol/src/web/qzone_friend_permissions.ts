@@ -1,5 +1,6 @@
 import { computeBkn, cookieHeader, WebAuthError, type WebCredential } from './credential';
 import { WEB_READ_RETRY, webRequestText } from './http';
+import { assertQzoneWriteAccepted, parseQzoneFormReply } from './qzone-form-reply';
 import { parseQzoneCallback } from './qzone';
 
 export type QzoneFriendPermission = 'blocked' | 'hidden';
@@ -76,24 +77,28 @@ export async function setQzoneFriendPermission(
   kind: QzoneFriendPermission,
   target: string,
   enabled: boolean,
-  beforeSend: () => void,
+  beforeSend?: () => void,
 ) {
   if (!/^[1-9]\d{4,11}$/.test(target) || target === cred.uin) throw new Error('空间权限目标无效');
+  const csrfKey = kind === 'blocked' ? cred.pskey || cred.skey : cred.pskey;
   const form = new URLSearchParams({
     uin: cred.uin,
     fupdate: '1',
-    g_tk: String(computeBkn(cred.pskey)),
+    g_tk: String(computeBkn(csrfKey)),
     ...(kind === 'blocked'
       ? { act_uin: target, action: enabled ? '1' : '2' }
       : { ouin: target, otype: enabled ? '0' : '1' }),
   });
-  beforeSend();
-  accepted(
-    await webRequestText(`${prefix}${endpoints[kind][1]}`, {
-      method: 'POST',
-      cookie: cookieHeader(cred),
-      headers: { Referer: `https://user.qzone.qq.com/${cred.uin}` },
-      body: form.toString(),
-    }),
-  );
+  beforeSend?.();
+  const text = await webRequestText(`${prefix}${endpoints[kind][1]}`, {
+    method: 'POST',
+    cookie: cookieHeader(cred),
+    headers: { Referer: `https://user.qzone.qq.com/${cred.uin}` },
+    body: form.toString(),
+  });
+  if (kind === 'blocked') {
+    assertQzoneWriteAccepted(parseQzoneFormReply(text), enabled ? '禁访' : '解除禁访');
+    return;
+  }
+  accepted(text);
 }
