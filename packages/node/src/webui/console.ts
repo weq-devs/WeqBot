@@ -17,6 +17,7 @@
  * - 日志里出现 a1 / skey / pskey 一律由 `Observability` 的脱敏兜底。
  */
 
+import { randomBytes } from 'node:crypto';
 import { statfsSync } from 'node:fs';
 import { arch, cpus, freemem, loadavg, totalmem, uptime } from 'node:os';
 import { getLogDirectory, isWeqBotError, TypedEventBus, type Logger } from '@weqbot/common';
@@ -27,7 +28,13 @@ import {
   type BotOneBotConfig,
   type BotSnapshot,
 } from '@weqbot/bot';
-import type { BotEventMap, CredentialVault, StoredAccount } from '@weqbot/session';
+import {
+  groupScopedVault,
+  type AccountGroup,
+  type BotEventMap,
+  type CredentialVault,
+  type StoredAccount,
+} from '@weqbot/session';
 import type {
   DeviceProfile,
   LoginProgressEvent,
@@ -60,6 +67,13 @@ export interface ConsoleAccount {
    * vault 是我们自己存的，`login-db` 是 QQ 本体最后写入的。
    */
   source: AccountSource;
+  /**
+   * 账号分组。本机组 = 复用本机 uid / guid；自主组 = 自持 guid。
+   *
+   * 页面按 `group` 分 tab，`source` 只用来解释「这条凭据是哪来的」；两者不能
+   * 互相推导（本机组的兜底条目也来自 vault）。
+   */
+  group: AccountGroup;
   nickname?: string;
   avatarUrl?: string;
   lastLoginAt?: number;
@@ -112,9 +126,18 @@ export interface AttachOptions {
 /** 账号来源：我们自己的凭据库，或本机 `login.db`。 */
 export type AccountSource = 'vault' | 'login-db';
 
-/** `startAccount` 的选项：页面可以指定用哪个来源的凭据。 */
+/**
+ * `startAccount` 的选项：页面指定用哪一**组**账号。
+ *
+ * 分组不是展示层的标签，而是凭据与设备身份的边界：
+ *
+ * - `local`：本机账号。a1 每次从 `login.db` 现解，uid / guid 复用本机的；
+ * - `self`：自主账号。凭据来自 vault，guid 是首次扫码时生成并持久化的那个。
+ *
+ * 省略时按「有自主凭据就自主，否则本机」推断，保留旧调用方的行为。
+ */
 export interface StartAccountOptions {
-  source?: AccountSource;
+  group?: AccountGroup;
 }
 
 export interface ConsoleOverview {
@@ -285,6 +308,8 @@ export class ConsoleRuntime {
   private bot: Bot | undefined;
   private phase: ConsolePhase = 'no-account';
   private startedAccount: string | undefined;
+  /** 在线账号属于哪一组；失效清理 / 忘记凭据只动这一组。 */
+  private startedGroup: AccountGroup | undefined;
   private received = 0;
   private sent = 0;
   private readonly heartbeats: number[] = [];
@@ -396,12 +421,15 @@ export class ConsoleRuntime {
   }
 
   /**
-   * 本机账号列表：`login.db` 解出来的行 + vault 里已有的凭据。
+   * 账号列表：按**分组**列出能上线的账号。
    *
-   * **两个来源不合并**，每条带 `source` 由页面分开展示 —— 它们的语义完全不同：
-   * vault 是「我们自己存的、用来上线的 a1」，`login.db` 是「QQ 本体最后写进去的」。
-   * a1 失效时只清 vault 那一条，`login.db` 那条必须留着（QQ 侧可能已经刷新过 a1，
-   * 我们不知道）。
+   * - 本机组（`local`）：`login.db` 解出来的行，外加 vault 里的本机镜像（仅当
+   *   同一个 uin 在 `login.db` 里读不到时——否则它会和 login.db 那条重复）；
+   * - 自主组（`self`）：只有 vault，guid 自持。
+   *
+   * 两组**不合并**，每条带 `group` 与 `source`：分组决定用哪份设备身份，来源解释
+   * 这条凭据是哪来的。a1 失效时的清理也只看组：本机组不动 `login.db`（QQ 侧可能
+   * 已经刷新过 a1，我们不知道），自主组删 vault 那一条。
    *
    * **两个来源都只列出能直接上线的账号** —— 没有 a1 的行不出现。列表是「点一下就能
    * 登录」的入口，而 `startAccount` 拿不到 a1 时必然报 `NO_CREDENTIAL`；把这些行一起
@@ -413,23 +441,28 @@ export class ConsoleRuntime {
     const paths = await this.paths();
     const out: ConsoleAccount[] = [];
     // vault 里的凭据一定有 a1（`get()` 读不出 a1 会直接抛 CREDENTIAL_CORRUPT）。
+    // 自主组也走这里 —— 它只有 vault 一个来源。
     for (const account of await this.options.vault.list()) {
       out.push({
         uin: account.uin,
         uid: account.uid,
         source: 'vault',
+        group: account.group,
         avatarUrl: avatarUrlOf(account.uin),
         ...(account.lastOnlineAt ? { lastLoginAt: account.lastOnlineAt } : {}),
       });
     }
 
     await this.refreshLoginAccounts();
+    const localFromLoginDb = new Set<string>();
     for (const row of this.readLoginDbAccounts()) {
       if (!row.a1Payload) continue;
+      localFromLoginDb.add(row.uin);
       out.push({
         uin: row.uin,
         uid: row.uid,
         source: 'login-db',
+        group: 'local',
         ...(row.userName ? { nickname: row.userName } : {}),
         // 头像统一走同源代理：页面的 CSP 不放行外网图片域名，而 login.db 里的
         // `avatarUrl`（thirdqq.qlogo.cn 带 k/kti 签名）需要服务端原样转发才有。
@@ -440,16 +473,23 @@ export class ConsoleRuntime {
       if (row.avatarUrl) this.avatarSources.set(row.uin, row.avatarUrl);
     }
 
-    // 「QQ 本体在线」按 uin 探测一次（同一 uin 可能在两个来源里各有一条）。
+    // 本机组以 `login.db` 为准：vault 里的本机镜像只是「库读不出来时的兜底」，
+    // 两边都列一次只会让同一账号在一屏里出现两遍（而且两份 a1 指向同一设备）。
+    const rows = out.filter(
+      (item) =>
+        !(item.group === 'local' && item.source === 'vault' && localFromLoginDb.has(item.uin)),
+    );
+
+    // 「QQ 本体在线」按 uin 探测一次（同一 uin 可能在两个组里各有一条）。
     // 探测不到（推不出 dbPath / native 缺能力）时不给这个字段 —— 页面据此
     // 区分「已知不在线」与「不知道」，不用 `false` 冒充结论。
     const stateByUin = new Map<string, QqAccountState>();
-    for (const item of out) {
+    for (const item of rows) {
       if (stateByUin.has(item.uin)) continue;
       stateByUin.set(item.uin, await this.qqStateOf(item.uin, item.uid, paths));
     }
 
-    return out
+    return rows
       .map((item) => {
         const state = stateByUin.get(item.uin) ?? {};
         return {
@@ -623,6 +663,9 @@ export class ConsoleRuntime {
     });
     this.bot = bot;
     this.startedAccount = uin;
+    // 有头模式不落 vault、也不属于任何一组：它借的是本机 QQ 的运行中会话。
+    // 设备身份仍然是本机 guid（与 QQ 一致），但这份凭据不该被当成可复用的。
+    this.startedGroup = undefined;
     this.wireBot(bot);
 
     await this.bringUp(bot, uin);
@@ -749,11 +792,14 @@ export class ConsoleRuntime {
   }
 
   /**
-   * 用本机凭据登录。
+   * 无头上线（本机缓存一键登录 / 自主凭据两种）。
    *
-   * 顺序：取 a1（来源见 {@link resolveCredential}）→ 结束正用着这个账号的 QQ 本体
-   * （{@link stopQqBody}）→ `createBot().start()`。
-   * `device` 取自 `major.node`，`guid` 取自数据根；两者缺一都明确失败，不猜。
+   * 顺序：定分组（{@link defaultGroupFor}）→ 取 a1（{@link resolveCredential}）
+   * → 结束正用着这个账号的 QQ 本体（{@link stopQqBody}）→ `createBot().start()`
+   * → 本机组把 a1 写回 `login.db`（{@link writeBackA1}）。
+   *
+   * `device` 取自 `major.node`；`guid` 按分组取：本机组用数据根里那条（QQ 自己的
+   * 设备身份），自主组用 vault 里存的那个（首次扫码生成）。两者缺一都明确失败，不猜。
    *
    * 返回登录前结束掉的 QQ 进程数，页面据此提示「已接管账号」。
    */
@@ -766,9 +812,10 @@ export class ConsoleRuntime {
     const paths = await this.paths();
     const environment = await this.environment();
 
-    // 1. 凭据。页面会明确告诉我们要用哪一份（列表里同一 uin 可能有两条）；
-    //    没指定时保留旧行为：vault 优先，其次 login.db。
-    const stored = await this.resolveCredential(uin, options.source, paths, environment);
+    // 1. 分组 + 凭据。页面会明确告诉我们要用哪一组；没指定时按「有自主凭据就自主」
+    //    推断。分组决定用哪份设备身份，所以必须在取凭据之前定下来。
+    const group = options.group ?? (await this.defaultGroupFor(uin));
+    const stored = await this.resolveCredential(uin, group, paths, environment);
 
     this.phase = 'starting';
     this.emitPhase('starting', '读取凭据');
@@ -824,17 +871,33 @@ export class ConsoleRuntime {
     const bot = this.botFactory({
       config: { ...botConfig, account: { uin } },
       native: this.options.native,
-      vault: this.options.vault,
+      // 限定到这一组：bot 内部的 `vault.get(uin)` 与 a1 轮换回写都落到同一组，
+      // 不会把自主账号的凭据写进本机组（反之亦然）。
+      vault: groupScopedVault(this.options.vault, group),
       logger: this.log.child('bot'),
       onActionCall: (entry) => this.observability.recordAction(entry),
     });
     this.bot = bot;
     this.startedAccount = uin;
+    this.startedGroup = group;
     this.wireBot(bot);
 
-    await this.bringUp(bot, uin);
-    this.log.info('账号已上线', { uin, endedQq });
+    await this.bringUp(bot, uin, group);
+    // 本机组：a1 可能刚被服务端轮换过（`quickLogin` 返回值与入参不同），要写回
+    // `login.db`，否则 QQ 本体那边会一直拿着旧 a1。失败只告警，不拖累上线。
+    if (group === 'local') await this.writeBackA1(uin, stored.a1);
+    this.log.info('账号已上线', { uin, group, endedQq });
     return { endedQq };
+  }
+
+  /**
+   * 默认分组：vault 里有自主凭据就用自主组，否则本机组。
+   *
+   * 页面总是显式传组，这条只服务旧调用方（以及扫码回调之后的 `startAccount(uin)`）。
+   */
+  private async defaultGroupFor(uin: string): Promise<AccountGroup> {
+    const self = await this.options.vault.get(uin, 'self').catch(() => undefined);
+    return self && self.a1.length > 0 ? 'self' : 'local';
   }
 
   /**
@@ -844,7 +907,7 @@ export class ConsoleRuntime {
    * 一致，否则同一个错误在不同入口下会给出不同结论（比如 a1 失效在扫码下有
    * 提示、在手输路径下只给 INTERNAL）。
    */
-  private async bringUp(bot: Bot, uin: string): Promise<void> {
+  private async bringUp(bot: Bot, uin: string, group?: AccountGroup): Promise<void> {
     try {
       await bot.start();
       this.phase = 'online';
@@ -852,11 +915,12 @@ export class ConsoleRuntime {
     } catch (cause) {
       this.phase = 'offline';
       this.emitPhase('offline', messageOf(cause));
-      this.log.error('账号上线失败', { uin, cause: messageOf(cause) });
+      this.log.error('账号上线失败', { uin, group, cause: messageOf(cause) });
       // a1 失效同样是**预期内**的结果，而且处置是「丢掉这份凭据、改扫码」。
       // 不在这里删的话，下一次点同一行还会拿同一串失效 a1 再试一次。
       if (isWeqBotError(cause) && cause.code === 'A1_EXPIRED') {
-        await this.forgetExpiredCredential(uin);
+        // 只清这一组：本机组的 a1 失效不影响自主组同一 uin 的自持凭据。
+        await this.forgetExpiredCredential(uin, group ?? this.startedGroup ?? 'self');
         throw new HttpError(
           409,
           'A1_EXPIRED',
@@ -888,47 +952,55 @@ export class ConsoleRuntime {
 
   /**
    * 取这次上线要用的凭据。
-   *
-   * `source` 由登录页指定：列表里同一 uin 可能同时有「我们存的」和「QQ 存的」两条，
-   * 点哪条就用哪条。不指定时保留旧行为（vault 优先，其次 `login.db`），扫码回调
-   * 与旧的调用方走这一条。
+   * 分组决定**只能**从哪取：自主组只读 vault（自持 guid），本机组只读
+   * `login.db`（本机 uid / guid），不准跨组兑兑。本机组的唯一例外是
+   *「`login.db` 里没这个账号的 a1」：那时用 vault 里的本机镜像兜底（同组、
+   *同一设备身份，不是混用）。
    */
   private async resolveCredential(
     uin: string,
-    source: AccountSource | undefined,
+    group: AccountGroup,
     paths: QqPaths,
     environment: LoginEnvironment,
   ): Promise<StoredAccount> {
-    if (source === 'login-db') {
-      // 明确要用 QQ 那份：不能因为 vault 里也有就直接返回旧值。
-      return this.accountFromLoginDb(uin, paths, environment);
-    }
-    if (source === 'vault') {
-      const stored = await this.options.vault.get(uin);
+    if (group === 'self') {
+      const stored = await this.options.vault.get(uin, 'self');
       if (!stored || stored.a1.length === 0) {
-        throw new HttpError(400, 'NO_CREDENTIAL', '本机凭据库里没有这个账号，请改用 QQ 登录记录');
+        throw new HttpError(
+          400,
+          'NO_CREDENTIAL',
+          '自主凭据里没有这个账号的可用 a1，请用手机扫码登录',
+        );
       }
       return this.refreshDevice(stored, environment);
     }
-    const stored = await this.options.vault.get(uin);
-    return !stored || stored.a1.length === 0
-      ? this.accountFromLoginDb(uin, paths, environment)
-      : this.refreshDevice(stored, environment);
+
+    // 本机组：`login.db` 是唯一权威 —— 每次现解，不复用 vault 里的旧副本。
+    try {
+      return await this.accountFromLoginDb(uin, paths, environment);
+    } catch (cause) {
+      if (!(cause instanceof HttpError) || cause.code !== 'NO_CREDENTIAL') throw cause;
+      const stored = await this.options.vault.get(uin, 'local');
+      if (!stored || stored.a1.length === 0) throw cause;
+      this.log.info('login.db 里没有可用 a1，改用 vault 里的本机凭据', { uin });
+      return this.refreshDevice(stored, environment);
+    }
   }
 
   /**
-   * a1 失效后的清理：只删 vault，**不动 `login.db`**。
+   * a1 失效后的清理：只删**这一组**的 vault 凭据，**不动 `login.db`**，也不动
+   * 另一组同名账号。
    *
    * `login.db` 是 QQ 本体写的，那边的 a1 可能已经在我们不知道的时候刷新过 ——
    * 删掉它等于替用户丢了一份可能还有效的凭据。删完要立刻失效 `login.db` 行缓存，
    * 否则列表下次还显示旧快照。
    */
-  private async forgetExpiredCredential(uin: string): Promise<void> {
+  private async forgetExpiredCredential(uin: string, group: AccountGroup = 'self'): Promise<void> {
     try {
-      await this.options.vault.delete(uin);
-      this.log.info('a1 已失效，已清除 vault 里的凭据', { uin });
+      await this.options.vault.delete(uin, group);
+      this.log.info('a1 已失效，已清除 vault 里这一组的凭据', { uin, group });
     } catch (cause) {
-      this.log.warn('清除失效凭据失败（已忽略）', { uin, cause: messageOf(cause) });
+      this.log.warn('清除失效凭据失败（已忽略）', { uin, group, cause: messageOf(cause) });
     }
     this.loginRowsCache = undefined;
     void this.refreshLoginAccounts().catch((cause) => {
@@ -1008,6 +1080,8 @@ export class ConsoleRuntime {
       // a1Payload 是 hex 串；vault 存的是原始字节。
       a1: new Uint8Array(Buffer.from(row.a1Payload, 'hex')),
       guid,
+      // 本机组：guid 就是本机数据根里那条，uid 也是 QQ 自己的。
+      group: 'local',
       device,
       a1Origin: 'login-db',
     };
@@ -1017,6 +1091,64 @@ export class ConsoleRuntime {
       throw new HttpError(500, 'VAULT_WRITE_FAILED', `写凭据失败：${messageOf(cause)}`);
     }
     return stored;
+  }
+
+  /**
+   * 本机账号上线后把本次用的 a1 写回 `login.db`。
+   *
+   * 为什么必须写回：本机组用的就是 QQ 本体那份设备身份，`quickLogin` 成功后服务端
+   * 可能轮换 a1。只写 vault 的话 QQ 本体那边一直是旧 a1 —— 下次 QQ 启动要重新登录，
+   * 而我们下次一键登录又会拿旧的去换票，两边越走越远。
+   *
+   * 只在**轮换过**才写：没轮换时写进去的还是同一串字节，白开一次库（还要跟 QQ 抢
+   * 写锁）。写失败只告警 —— a1 已经能用，不该因为回写失败把上线判失败。
+   */
+  private async writeBackA1(uin: string, used: Uint8Array): Promise<void> {
+    const binding = this.options.binding;
+    if (!binding.updateLoginDbA1) {
+      this.log.debug('原生组件没有 updateLoginDbA1，跳过 a1 回写', { uin });
+      return;
+    }
+
+    // `createBot` 在轮换时会把新 a1 写进本组的 vault，这里读回来就是最新的。
+    let latest: StoredAccount | undefined;
+    try {
+      latest = await this.options.vault.get(uin, 'local');
+    } catch (cause) {
+      this.log.warn('读回写后的凭据失败（跳过 a1 回写）', { uin, cause: messageOf(cause) });
+      return;
+    }
+    const a1 = latest?.a1 && latest.a1.length > 0 ? latest.a1 : used;
+    if (sameBytes(a1, used)) return;
+
+    const rows = await this.refreshLoginAccounts();
+    const row = rows.find((item) => item.uin === uin);
+    if (!row) {
+      // 本机库里本来就没有这条（例如 QQ 重装后旧库没了），无处可写。
+      this.log.debug('login.db 里没有这个账号，a1 未回写', { uin });
+      return;
+    }
+    try {
+      const result = binding.updateLoginDbA1(
+        row.dbPath,
+        uin,
+        Buffer.from(a1).toString('hex'),
+        row.algo,
+      );
+      // 库里内容变了，下次读账号必须重新解密，不能拿旧快照骗页面。
+      this.loginRowsCache = undefined;
+      if (!result.verified || result.updatedRows === 0) {
+        this.log.warn('a1 回写 login.db 未通过自检', {
+          uin,
+          updatedRows: result.updatedRows,
+          verified: result.verified,
+        });
+        return;
+      }
+      this.log.info('a1 已写回 login.db', { uin, format: result.format });
+    } catch (cause) {
+      this.log.warn('a1 回写 login.db 失败（已忽略）', { uin, cause: messageOf(cause) });
+    }
   }
 
   /**
@@ -1039,9 +1171,12 @@ export class ConsoleRuntime {
     if (!environment.client) {
       throw new HttpError(400, 'NO_CLIENT_META', '找不到可解析的 major.node，无法开始扫码');
     }
-    const paths = await this.paths();
-    const guid = this.readGuid(paths.dataRoot);
-    if (!guid) throw new HttpError(400, 'NO_GUID', '读不到设备 guid，无法开始扫码');
+    // 自主组的设备身份：**随机生成**，绝不借本机 guid。
+    //
+    // 借本机 guid 的后果是服务端把自主账号当成这台机器上的 QQ：本机 QQ 一登录，
+    // 两边就互踢 / 触发设备确认。首次扫码生成、随账号存进 vault，之后这个账号的
+    // 登录（quickLogin）一直用它；重新扫码 = 换设备身份（与 QQ 自己的扫码语义一致）。
+    const guid = randomGuid();
 
     const snapshot: QrSnapshot = { state: 'waiting-scan', expiresAt: Date.now() + QR_TIMEOUT_MS };
     const promise = this.runQrLogin(snapshot, binding, environment, guid);
@@ -1117,8 +1252,9 @@ export class ConsoleRuntime {
       if (!result.uin) throw new Error('扫码完成但没有返回 uin');
       update({ state: 'confirmed', uin: result.uin });
       await this.persistQrAccount(result, environment, guid);
-      // 扫码成功后直接上线；失败由调用方从 `startAccount` 的错误里看到。
-      await this.startAccount(result.uin);
+      // 扫码成功后直接上线；这一条一定是自主组。失败由调用方从 `startAccount`
+      // 的错误里看到。
+      await this.startAccount(result.uin, { group: 'self' });
       return snapshot;
     } catch (cause) {
       const message = messageOf(cause);
@@ -1142,12 +1278,21 @@ export class ConsoleRuntime {
     }
   }
 
+  /**
+   * 扫码成功后落盘：进 **`self` 组**，带上本次扫码用的设备 guid。
+   *
+   * `guid` 必须是这次 `qrLogin` 实际传进去的那个 —— 服务端下发的 a1 就绑在它上面，
+   * 存成别的（例如从本机数据根读到的 guid）下次换票会直接失败。
+   *
+   * 同一个 uin 如果已有本机组凭据（QQ 本体也在用这个号），**不动它**：两组在
+   * vault 里是两个文件，本机组那份由 `login.db` 刷新。
+   */
   private async persistQrAccount(
     result: QuickLoginResult,
     environment: LoginEnvironment,
     guid: string,
   ): Promise<void> {
-    const existing = await this.options.vault.get(result.uin);
+    const existing = await this.options.vault.get(result.uin, 'self');
     const device = deviceProfileOf(environment);
     await this.options.vault.put({
       uin: result.uin,
@@ -1157,10 +1302,11 @@ export class ConsoleRuntime {
         result.a1 && result.a1.length > 0
           ? new Uint8Array(result.a1)
           : (existing?.a1 ?? new Uint8Array()),
-      guid: existing?.guid ?? guid,
+      guid,
+      group: 'self',
       device: existing?.device ?? device,
       a1Origin: 'qr',
-    } as StoredAccount);
+    } satisfies StoredAccount);
   }
 
   /** 取消正在进行的扫码（页面点「刷新」或关页时）。 */
@@ -1255,8 +1401,10 @@ export class ConsoleRuntime {
   async logout(options: { forgetCredential?: boolean } = {}): Promise<void> {
     const bot = this.bot;
     const uin = this.startedAccount;
+    const group = this.startedGroup;
     this.bot = undefined;
     this.startedAccount = undefined;
+    this.startedGroup = undefined;
     for (const off of this.unsubscribers) off();
     this.unsubscribers = [];
     this.received = 0;
@@ -1270,10 +1418,12 @@ export class ConsoleRuntime {
         this.log.warn('账号下线时出错（已忽略）', { cause: messageOf(cause) });
       }
     }
-    if (options.forgetCredential && uin) {
+    // 只删在线账号那一组：同 uin 的本机 / 自主凭据是两个独立身份，不能一起删。
+    // 有头模式没有组（不碰 vault）—— 不能借此删掉同名的自主凭据。
+    if (options.forgetCredential && uin && group) {
       try {
-        await this.options.vault.delete(uin);
-        this.log.info('凭据已删除', { uin });
+        await this.options.vault.delete(uin, group);
+        this.log.info('凭据已删除', { uin, group });
       } catch (cause) {
         this.log.warn('删除凭据失败', { uin, cause: messageOf(cause) });
       }
@@ -1367,8 +1517,10 @@ export class ConsoleRuntime {
    */
   private async handleCredentialExpired(uin: string | undefined): Promise<void> {
     const bot = this.bot;
+    const group = this.startedGroup;
     this.bot = undefined;
     this.startedAccount = undefined;
+    this.startedGroup = undefined;
     for (const off of this.unsubscribers) off();
     this.unsubscribers = [];
     this.received = 0;
@@ -1377,7 +1529,7 @@ export class ConsoleRuntime {
     this.cachedNickname = undefined;
     // bot 自己已经停过了（offline 是 stop() 里发的），这里只兜底等它收尾。
     if (bot) await bot.stop('credential-expired').catch(() => undefined);
-    if (uin) await this.forgetExpiredCredential(uin);
+    if (uin && group) await this.forgetExpiredCredential(uin, group);
     this.phase = 'no-account';
     this.emitPhase(
       'no-account',
@@ -1486,7 +1638,10 @@ export class ConsoleRuntime {
     const cached = this.loginRowsCache?.rows.find((item) => item.uin === uin);
     if (cached) return cached.uid;
 
-    const stored = await this.options.vault.get(uin);
+    // 两组都可能持有这个 uin（同一账号既能本机登录也能扫码），先自主后本机 ——
+    // 两边 uid 一样，取哪个都不影响结果，但不要因为一组没有就当我们不知道。
+    const stored =
+      (await this.options.vault.get(uin, 'self')) ?? (await this.options.vault.get(uin, 'local'));
     if (stored?.uid) return stored.uid;
 
     try {
@@ -1513,11 +1668,15 @@ export class ConsoleRuntime {
         const resolved = isPromise(probe) ? undefined : probe;
         const algo = resolved ?? this.probeCache.get(dbPath);
         if (!(algo?.success && algo.pageHmacAlgorithm && algo.kdfHmacAlgorithm)) continue;
+        const cipher: LoginAlgo = {
+          pageHmacAlgorithm: algo.pageHmacAlgorithm,
+          kdfHmacAlgorithm: algo.kdfHmacAlgorithm,
+        };
+        // `dbPath` / `algo` 一眼不发给页面：回写 a1 时要拿它们重新开同一个库。
         rows.push(
-          ...binding.decryptLoginDb(dbPath, {
-            pageHmacAlgorithm: algo.pageHmacAlgorithm,
-            kdfHmacAlgorithm: algo.kdfHmacAlgorithm,
-          }),
+          ...binding
+            .decryptLoginDb(dbPath, cipher)
+            .map((row) => ({ ...row, dbPath, algo: cipher })),
         );
       } catch (cause) {
         this.log.warn('login.db 解密失败', { dbPath, cause: messageOf(cause) });
@@ -1571,14 +1730,39 @@ export class ConsoleRuntime {
   }
 }
 
+/** 解开 `login.db` 用到的 HMAC 算法（回写 a1 时原样复用）。 */
+interface LoginAlgo {
+  pageHmacAlgorithm: string;
+  kdfHmacAlgorithm: string;
+}
+
 interface LoginRow {
   uin: string;
   uid: string;
+  /** 这一行来自哪个 `login.db`。只在服务端用（回写 a1），不发给页面。 */
+  dbPath: string;
+  algo: LoginAlgo;
   avatarUrl?: string;
   userName?: string;
   lastLoginAt?: number;
   a1Payload?: string | null;
   guid?: string | null;
+}
+
+/**
+ * 自主组的设备 guid：32 位小写 hex。
+ *
+ * 必须是随机的：本机 guid 是本机 QQ 的设备身份，借给自主账号用会让服务端把两边
+ * 当成同一台设备（互相顶下线 / 反复设备确认）。
+ */
+function randomGuid(): string {
+  return randomBytes(16).toString('hex');
+}
+
+function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
+  if (a.length !== b.length) return false;
+  for (let i = 0; i < a.length; i += 1) if (a[i] !== b[i]) return false;
+  return true;
 }
 
 function dedupeByUin(rows: LoginRow[]): LoginRow[] {

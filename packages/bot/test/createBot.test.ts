@@ -41,6 +41,7 @@ const ACCOUNT: StoredAccount = {
   uid: 'u_test',
   a1: new Uint8Array([1, 2, 3, 4]),
   guid: 'a'.repeat(32),
+  group: 'self',
   device: DEVICE,
 };
 
@@ -53,8 +54,9 @@ const SILENT = createLogger('test', { level: 'error' });
 function makeVault(account: StoredAccount = ACCOUNT) {
   const saved: StoredAccount[] = [];
   const vault: CredentialVault = {
-    list: async () => [{ uin: account.uin, uid: account.uid }],
-    get: async (uin) => (uin === account.uin ? account : undefined),
+    list: async () => [{ uin: account.uin, uid: account.uid, group: account.group }],
+    get: async (uin, group = account.group) =>
+      uin === account.uin && group === account.group ? account : undefined,
     put: async (next) => {
       saved.push(next);
     },

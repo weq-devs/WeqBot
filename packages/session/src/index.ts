@@ -30,11 +30,13 @@ export {
   type StateChange,
 } from './state';
 export type {
+  AccountGroup,
   AccountSummary,
   CredentialEnvelope,
   CredentialVault,
   StoredAccount,
 } from './credentials';
+export { groupScopedVault } from './credentials';
 export { IdentityCache } from './identity';
 export { PushBridge, type PushBridgeOptions, type PushBridgeResult } from './push';
 export {

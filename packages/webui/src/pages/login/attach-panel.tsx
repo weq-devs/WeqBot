@@ -1,7 +1,7 @@
 /**
  * 有头模式：接运行中的 QQ，而不是把 QQ 踢下线自己登录。
  *
- * 与「已保存 / QQ 记录」两个 tab 的根本差别是**不碰凭据**：a2 / d2 / d2key 从
+ * 与两个账号组（本机 / 自主）的根本差别是**不碰凭据**：a2 / d2 / d2key 从
  * QQ 进程的内存里读（必要时提权），QQ 继续在线，WeqBot 只是搭同一条 SSO 通道
  * 发协议包。所以列表是「进程」而不是「账号」—— 一个 QQ 多开就有多条。
  *
@@ -113,7 +113,7 @@ export function AttachPanel() {
           <strong>没有正在运行的 QQ</strong>
           <p>
             有头模式要接着 QQ 已经登好的会话，所以得先在本机登录 QQ。想不用打开 QQ
-            就上线，用「已保存」或「扫码登录」。
+            就上线，用「本机账号」「自主账号」或「扫码登录」。
           </p>
           <Button variant="secondary" onClick={refresh}>
             <RefreshCw size={15} aria-hidden="true" />

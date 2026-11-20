@@ -33,7 +33,7 @@ import {
   type ControlOneBotState,
   type ControlStatus,
 } from '@weqbot/control';
-import type { CredentialVault, StoredAccount } from '@weqbot/session';
+import { groupScopedVault, type CredentialVault, type StoredAccount } from '@weqbot/session';
 import type { DeviceProfile, NativePort } from '@weqbot/wire';
 import { maskOneBotConfig, OneBotConfigError, validateOneBotConfig } from './onebot-config';
 
@@ -137,6 +137,7 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
     uid?: string;
     device?: DeviceProfile;
     qqDbPath?: string;
+    group?: 'local' | 'self';
   }): Promise<ControlStatus> {
     if (opened === 'attach') {
       throw new WeqBotError(
@@ -163,13 +164,17 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
       });
     }
 
+    // 分组：宿主没说是哪组时按本机组处理 —— 控制通道的凭据绝大多数是宿主从本机
+    // `login.db` 解出来的。
+    const group = params.group ?? 'local';
     // 控制通道没给 uid 时保留 vault 里的旧值，别把它冲成空串。
-    const existing = await options.vault.get(options.uin);
+    const existing = await options.vault.get(options.uin, group);
     const account: StoredAccount = {
       uin: options.uin,
       uid: params.uid ?? existing?.uid ?? '',
       a1,
       guid: params.guid,
+      group,
       device: params.device,
       a1Origin: 'manual',
     };
@@ -192,7 +197,8 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
       const next = botFactory({
         config,
         native: options.native,
-        vault: options.vault,
+        // 限定到本次登录的组：bot 内部的 a1 轮换回写不会跨组写。
+        vault: groupScopedVault(options.vault, group),
         logger: log,
       });
       bot = next;

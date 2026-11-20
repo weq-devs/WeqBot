@@ -52,15 +52,27 @@ export interface LoginEnvironment {
 export type AccountSource = 'vault' | 'login-db';
 
 /**
- * 可以直接上线的本机账号。
+ * 账号分组（服务端严格隔离）。
+ *
+ * - `local`：本机账号。a1 每次从 `login.db` 现解，uid / guid 复用本机的；
+ *   上线后轮换的 a1 会写回 `login.db`。
+ * - `self`：自主账号。guid 是首次扫码时生成的随机值并持久化，之后一直复用它。
+ *
+ * 两组不能混：guid 混用会让服务端把自主账号当成这台机器上的 QQ。
+ */
+export type AccountGroup = 'local' | 'self';
+
+/**
+ * 可以上线的账号（按组列出）。
  *
  * 服务端只返回有 a1 的账号 —— 没有 a1 的行点进去必然失败，不做成可点条目。
- * `source` 让页面把两个来源分开展示：同一 uin 可能各有一条。
+ * `group` 决定用哪份设备身份，`source` 只解释凭据是哪来的。
  */
 export interface LoginAccount {
   uin: string;
   uid: string;
   source: AccountSource;
+  group: AccountGroup;
   nickname?: string;
   avatarUrl?: string;
   lastLoginAt?: number;
@@ -162,12 +174,12 @@ export interface LoginApi {
   environment(): Promise<LoginEnvironment>;
   accounts(): Promise<LoginAccount[]>;
   /**
-   * 用本机账号登录；成功后直接上线。
+   * 用账号凭据登录；成功后直接上线。
    *
-   * `source` 指定用哪份凭据：列表里同一 uin 可能有两条（vault / `login.db`），
-   * 点哪条就用哪条。省略时服务端按 vault 优先。
+   * `group` 指定用哪一组：列表里同一 uin 可能在两组里各有一条，点哪条就用哪组。
+   * 省略时服务端按「有自主凭据就自主」推断。
    */
-  start(uin: string, options?: { source?: AccountSource }): Promise<LoginStartResult>;
+  start(uin: string, options?: { group?: AccountGroup }): Promise<LoginStartResult>;
   /** 起一次扫码（45s 硬超时，重复调用复用同一次）。 */
   startQr(): Promise<QrSnapshot>;
   cancelQr(): Promise<void>;

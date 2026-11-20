@@ -107,7 +107,7 @@ test('login.db 里没有 a1 的行不出现在账号列表里', async () => {
 
 test('vault 里的账号一定在列表里（vault 保证有 a1）', async () => {
   const runtime = makeRuntime({
-    vault: [{ uin: '20001', uid: 'u_vault', lastOnlineAt: 1_700_000_000_000 }],
+    vault: [{ uin: '20001', uid: 'u_vault', group: 'self', lastOnlineAt: 1_700_000_000_000 }],
     rows: [],
   });
 
@@ -122,7 +122,7 @@ test('vault 里的账号一定在列表里（vault 保证有 a1）', async () =>
 
 test('vault 与 login.db 都有时列出两条，来源不同且不合并', async () => {
   const runtime = makeRuntime({
-    vault: [{ uin: '10001', uid: 'u_both' }],
+    vault: [{ uin: '10001', uid: 'u_both', group: 'self' }],
     rows: [{ uin: '10001', uid: 'u_both', a1Payload: 'abc', userName: '冬眠的猫' }],
   });
 
@@ -137,7 +137,7 @@ test('vault 与 login.db 都有时列出两条，来源不同且不合并', asyn
 
 test('login.db 行没有 a1 但 vault 有凭据时只列出 vault 那条', async () => {
   const runtime = makeRuntime({
-    vault: [{ uin: '10001', uid: 'u_both' }],
+    vault: [{ uin: '10001', uid: 'u_both', group: 'self' }],
     rows: [{ uin: '10001', uid: 'u_both', a1Payload: null, userName: '冬眠的猫' }],
   });
 
@@ -162,7 +162,7 @@ test('login.db 行没有 a1 且 vault 也没有时不出现', async () => {
 
 test('账号列表带 QQ 本体在线状态，且只认进程名像 QQ 的持有者', async () => {
   const runtime = makeRuntime({
-    vault: [{ uin: '10001', uid: 'u_a' }],
+    vault: [{ uin: '10001', uid: 'u_a', group: 'self' }],
     rows: [],
     qqDbPath: '/data/QQ/nt_db/nt_msg.db',
     // WeQ / WeqBot 自己也会持有这个库；按名字过滤才不会把登录页的徽标点错。
@@ -179,7 +179,7 @@ test('账号列表带 QQ 本体在线状态，且只认进程名像 QQ 的持有
 
 test('只有非 QQ 进程持有 nt_msg.db 时不算「QQ 本体在线」', async () => {
   const runtime = makeRuntime({
-    vault: [{ uin: '10001', uid: 'u_a' }],
+    vault: [{ uin: '10001', uid: 'u_a', group: 'self' }],
     rows: [],
     qqDbPath: '/data/QQ/nt_db/nt_msg.db',
     holders: [{ pid: 12, name: 'WeQ' }],
@@ -191,7 +191,7 @@ test('只有非 QQ 进程持有 nt_msg.db 时不算「QQ 本体在线」', async
 });
 
 test('探测不到在线状态时不发 qqOnline（不用 false 冒充结论）', async () => {
-  const runtime = makeRuntime({ vault: [{ uin: '10001', uid: 'u_a' }], rows: [] });
+  const runtime = makeRuntime({ vault: [{ uin: '10001', uid: 'u_a', group: 'self' }], rows: [] });
 
   const accounts = await runtime.accounts();
 
@@ -212,5 +212,35 @@ test('列表不暴露 a1 或它的存在性字段', async () => {
   assert.ok(
     !('hasA1' in (accounts[0] as object)),
     'a1 的存在性是服务端过滤条件，不是要发给页面的字段',
+  );
+});
+
+test('同一 uin 在两组里各一条时都列出（设备身份不同，不能合并）', async () => {
+  const runtime = makeRuntime({
+    vault: [{ uin: '10001', uid: 'u_both', group: 'self' }],
+    rows: [{ uin: '10001', uid: 'u_both', a1Payload: 'abc', userName: '冬眠的猫' }],
+  });
+
+  const accounts = await runtime.accounts();
+
+  assert.deepEqual(
+    accounts.map((item) => `${item.group}:${item.source}`).sort(),
+    ['local:login-db', 'self:vault'],
+    '自主组与本机组的同名账号是两台设备，页面要分开列',
+  );
+});
+
+test('本机组只列一条：vault 里的本机镜像被 login.db 那条顶掉', async () => {
+  const runtime = makeRuntime({
+    vault: [{ uin: '10001', uid: 'u_both', group: 'local' }],
+    rows: [{ uin: '10001', uid: 'u_both', a1Payload: 'abc', userName: '冬眠的猫' }],
+  });
+
+  const accounts = await runtime.accounts();
+
+  assert.deepEqual(
+    accounts.map((item) => `${item.group}:${item.source}`),
+    ['local:login-db'],
+    'login.db 是本机组的权威来源，镜像只在它读不出来时兜底',
   );
 });

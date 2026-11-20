@@ -145,7 +145,7 @@ export const httpApi: Api = {
     start: (uin, options) =>
       request<LoginStartResult>('/api/login/start', {
         method: 'POST',
-        body: options?.source ? { uin, source: options.source } : { uin },
+        body: options?.group ? { uin, group: options.group } : { uin },
       }),
     startQr: () => request<QrSnapshot>('/api/login/qr', { method: 'POST', body: {} }),
     cancelQr: () => request<void>('/api/login/qr', { method: 'DELETE' }),

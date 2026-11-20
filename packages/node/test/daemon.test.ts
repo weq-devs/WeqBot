@@ -24,16 +24,21 @@ const DEVICE = {
 const unixOnly = process.platform === 'win32' ? 'unix socket 专属' : false;
 
 function memoryVault(): CredentialVault & { accounts: Map<string, StoredAccount> } {
+  // 键是 `${group}:${uin}`：同一个 uin 的本机 / 自主凭据是两个身份，测试里也不能互相覆盖。
   const accounts = new Map<string, StoredAccount>();
+  const keyOf = (uin: string, group: string) => `${group}:${uin}`;
   return {
     accounts,
-    list: async () => [...accounts.values()].map((a) => ({ uin: a.uin, uid: a.uid })),
-    get: async (uin) => accounts.get(uin),
+    list: async (group) =>
+      [...accounts.values()]
+        .filter((item) => !group || item.group === group)
+        .map((item) => ({ uin: item.uin, uid: item.uid, group: item.group })),
+    get: async (uin, group = 'self') => accounts.get(keyOf(uin, group)),
     put: async (account) => {
-      accounts.set(account.uin, account);
+      accounts.set(keyOf(account.uin, account.group), account);
     },
-    delete: async (uin) => {
-      accounts.delete(uin);
+    delete: async (uin, group = 'self') => {
+      accounts.delete(keyOf(uin, group));
     },
   };
 }
@@ -108,7 +113,7 @@ test('daemon：客户端断开后继续跑，事件广播给所有连接', { ski
     });
     assert.equal(login.state, 'online');
     assert.equal(login.sessionId, 7);
-    assert.deepEqual([...(vault.accounts.get('10002')?.a1 ?? [])], [9, 8, 7]);
+    assert.deepEqual([...(vault.accounts.get('local:10002')?.a1 ?? [])], [9, 8, 7]);
 
     // 第二条连接也看得到同一次登录的结果。
     assert.equal((await second.request('status', {})).state, 'online');
