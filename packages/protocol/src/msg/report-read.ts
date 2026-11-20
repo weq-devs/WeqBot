@@ -5,7 +5,13 @@ import { ReadedReport } from './read-report';
 // 字段对照 acidify 的 SsoReadedReport；私聊使用会话级 NT 序号，不是 clientSeq。
 export type ReadReportParams =
   | { kind: 'group'; groupUin: number; sequence: number }
-  | { kind: 'c2c'; targetUid: string; sequence: number; timestamp: number };
+  | { kind: 'c2c'; targetUid: string; sequence: number; timestamp: number }
+  | { kind: 'official'; targetUid: string; sequence: 0; timestamp: number };
+
+/** 公众号零序号按消息时间推进，普通会话按 NT 序号推进。 */
+export function readReportWatermark(target: ReadReportParams): number {
+  return target.kind === 'official' ? target.timestamp : target.sequence;
+}
 
 export namespace ReportRead {
   export const cmd = 'trpc.msg.msg_svc.MsgService.SsoReadedReport';
@@ -25,13 +31,17 @@ export namespace ReportRead {
       type: message([
         { name: 'targetUid', tag: 2, type: 'string' },
         { name: 'timestamp', tag: 3, type: 'uint64' },
-        { name: 'sequence', tag: 4, type: 'uint64' },
+        { name: 'sequence', tag: 4, type: 'uint64', force: true },
       ]),
     },
   ]);
 
   export function serialize(p: ReadReportParams): Record<string, unknown> {
-    if (!Number.isSafeInteger(p.sequence) || p.sequence <= 0 || p.sequence > 0xffffffff)
+    if (
+      !Number.isSafeInteger(p.sequence) ||
+      (p.kind === 'official' ? p.sequence !== 0 : p.sequence <= 0) ||
+      p.sequence > 0xffffffff
+    )
       throw new Error('已读上报序号必须是有效的 NT 消息序号。');
     if (p.kind === 'group') {
       if (!Number.isSafeInteger(p.groupUin) || p.groupUin <= 0)
@@ -56,7 +66,7 @@ export namespace ReportRead {
     params: ReadReportParams,
   ): Promise<'acknowledged' | 'unconfirmed'> {
     const response = await sendPacket(nt, pid, cmd, encode(reqSchema, serialize(params)));
-    if (response.length === 0) return 'acknowledged';
+    if (response.length === 0) return params.kind === 'official' ? 'unconfirmed' : 'acknowledged';
     try {
       const result = ReadedReport.deserialize(
         decode(ReadedReport.respSchema, response, { strict: true }),
