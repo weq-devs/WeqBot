@@ -9,7 +9,7 @@
  * body[0:7]    流标识（`18 57 06 aa XX XX 00`，每成员不同）
  * body[7]      0x01（c2s）/ 0x02（s2c）—— 方向
  * body[8]      0xa7（音频）/ 0x83（视频）
- * body[9:14]   包序号（5B，逐包递增）
+ * body[9:14]   视频为媒体标志与两个 16 位毫秒时钟，音频保留原有序号解析
  * body[14]     音频 0x79 / 视频 0x83
  * body[15]     音频 0xa7（c2s）/ 0x05（s2c）；视频 0xa7
  * body[16]     **track 类型**：1 = 音频，2 = 视频，3 = 视频（另一路编码）
@@ -107,7 +107,7 @@ export interface GroupMediaHeader {
   direction: number;
   /** `body[8]`：0xa7（音频）/ 0x83（视频）。 */
   codec: number;
-  /** `body[9:14]` 的包序号（5B 大端）。 */
+  /** 音频包序号。视频的这五个字节包含媒体标志和时间戳。 */
   seq: number;
   /** `body[16]`：track 类型，见 {@link GroupTrack}。 */
   track: number;
@@ -346,77 +346,87 @@ export function buildGroupAudioFrame(params: {
 }
 
 /**
- * 把一个 H.264 帧切成若干个视频分片（`0x17`）。
- *
- * 分片上限默认 1000 字节：抓包里单包载荷最大约 1100，留一点余量避免超过 MTU 太多。
+ * 群视频发送使用两个低 16 位毫秒时钟。分片按 wire 长度对齐，校验片从续片载荷
+ * 偏移开始异或，包含首片附带的三个字节。
  */
 export function buildGroupVideoFragments(params: {
   route: number;
   ownerUin: number;
   stream: Uint8Array;
+  /** 供直接调用者提供时钟。会话会显式传发送与采集时间。 */
   seq: number;
-  /** Annex B 裸流。 */
+  sentAt?: number;
+  capturedAt?: number;
   data: Uint8Array;
-  /** 每片载荷上限。 */
   maxPayload?: number;
-  /** 同一帧内固定，逐帧递增。 */
   frameIndex?: number;
-  /** 视频分片计数。 */
   packetIndex?: number;
-  /** 本帧是否关键帧。 */
   keyframe?: boolean;
+  /** 与本场 QQ 信令能力档匹配的媒体头。 */
+  profile?: number;
+  /** 低分辨率的第二路 H.264 使用短头。 */
+  secondary?: boolean;
+  /** 与关键帧同一组的流标记。 */
+  groupIndex?: number;
 }): Uint8Array[] {
   assertStream(params.stream);
-  const maxPayload = params.maxPayload ?? 1000;
+  const maxPayload = params.maxPayload ?? 960;
   if (!Number.isInteger(maxPayload) || maxPayload < 16) throw new RangeError('分片上限太小');
-
   if (params.data.length === 0) return [];
-  const total = Math.ceil(params.data.length / maxPayload);
-  if (total > 0xff) throw new RangeError(`分片数超过 255：${total}`);
 
-  const out: Uint8Array[] = [];
-  let cursor = 0;
-  // 第一片包含 3 个额外头字节。无冗余上行样本的分片使用接近相等的大小。
-  const continuationSize = Math.ceil((params.data.length + 3) / total);
-  for (let idx = 0; idx < total; idx++) {
-    const headerSize = idx === 0 ? VIDEO_FIRST_PAYLOAD_OFFSET : VIDEO_CONTINUATION_OFFSET;
-    const minimum = params.data.length - cursor - maxPayload * (total - idx - 1);
-    const size = Math.max(minimum, Math.min(maxPayload, continuationSize - (idx === 0 ? 3 : 0)));
-    const chunk = params.data.subarray(cursor, cursor + size);
-    cursor += chunk.length;
-    const body = new Uint8Array(headerSize + chunk.length);
-    // 字段布局按 698 个真实上行视频包统计得出（见文件头注释）。
-    body.set(params.stream, 0);
-    body[7] = 0x01; // c2s
-    body[8] = 0xa7; // codec 标记
-    body[9] = 0x83; // 视频标记
-    // 序号是 4 字节（[10:14]），不是 5 字节。
-    writeU32be(body, 10, (params.seq + idx) >>> 0);
-    body[14] = 0x83;
-    body[15] = 0xa7;
-    body[16] = GroupTrack.video;
-    body[17] = params.keyframe ? 0x00 : 0x07;
-    body[18] = idx;
-    body[19] = total; // 本帧总分片数
-    body[20] = 0x00;
-    body[21] = 0x0c;
-    body[22] = (params.frameIndex ?? 0) & 0xff;
-    body[23] = 0x01;
-    body[24] = 0x04;
-    body[25] = 0x04;
-    body[26] = 0x02;
-    body[28] = 0x04;
-    body[29] = 0x08;
-    const packetIndex = (params.packetIndex ?? params.seq) + idx;
-    body[30] = packetIndex & 0xff;
-    body[31] = (packetIndex >>> 8) & 0xff;
-    if (idx === 0) {
-      body[34] = 0x03;
+  const continuationOffset = params.secondary ? 24 : VIDEO_CONTINUATION_OFFSET;
+  const total = Math.ceil((params.data.length + 3) / maxPayload);
+  const parityCount = total > 1 ? 1 : 0;
+  if (total + parityCount > 0xff) throw new RangeError(`分片数超过 255：${total + parityCount}`);
+
+  const shardSize = Math.ceil((params.data.length + 3) / total);
+  const shards: Uint8Array[] = [];
+  const frameIndex = params.frameIndex ?? 0;
+  const payload = new Uint8Array(total * shardSize);
+  const extensionIndex = params.keyframe ? 0 : (frameIndex - 1) & 0xffff;
+  payload.set([extensionIndex & 0xff, extensionIndex >>> 8, 0x03]);
+  payload.set(params.data, 3);
+  const parity = new Uint8Array(shardSize);
+  for (let index = 0; index < total; index++) {
+    const shard = payload.subarray(index * shardSize, (index + 1) * shardSize);
+    shards.push(shard);
+    if (parityCount) {
+      for (let byte = 0; byte < shardSize; byte++) parity[byte] = parity[byte]! ^ shard[byte]!;
     }
-    body.set(chunk, headerSize);
-    out.push(wrapMedia((params.route + idx) & 0xffffff, params.ownerUin, body));
   }
-  return out;
+  if (parityCount) shards.push(parity);
+
+  const legacy = params.profile !== undefined && params.profile < 10065;
+  const marker = legacy ? 0xa7 : 0xfa;
+  const codec = legacy ? 0x83 : 0x80;
+  const sendTick = params.sentAt ?? params.seq;
+  const frameTick = params.capturedAt ?? sendTick;
+  return shards.map((shard, index) => {
+    const body = new Uint8Array(continuationOffset + shard.length);
+    body.set(params.stream);
+    body[7] = 0x01;
+    body[8] = body[15] = marker;
+    body[9] = body[14] = codec;
+    body[10] = (sendTick >>> 8) & 0xff;
+    body[11] = sendTick & 0xff;
+    body[12] = frameTick & 0xff;
+    body[13] = (frameTick >>> 8) & 0xff;
+    body[16] = params.secondary ? GroupTrack.videoAlt : GroupTrack.video;
+    body[17] = params.keyframe ? 0 : params.secondary ? 2 : 7;
+    body[18] = index;
+    body[19] = total;
+    body[20] = parityCount;
+    body[22] = params.secondary && params.keyframe ? 0 : frameIndex & 0xff;
+    body[23] = (params.groupIndex ?? 1) & 0xff;
+    if (!params.secondary) {
+      body.set([0x0c, body[22]!, body[23]!, 4, 4, 2, 0, 4, 8], 21);
+      const packetIndex = (params.packetIndex ?? params.seq) + index;
+      body[30] = packetIndex & 0xff;
+      body[31] = (packetIndex >>> 8) & 0xff;
+    }
+    body.set(shard, continuationOffset);
+    return wrapMedia((params.route + index) & 0xffffff, params.ownerUin, body);
+  });
 }
 
 // ─────────────────────────── 小工具 ───────────────────────────
@@ -431,7 +441,7 @@ function writeSeq5(buf: Uint8Array, off: number, value: number): void {
   writeU32be(buf, off + 1, value >>> 0);
 }
 
-/** 把媒体 body 包进 `0x02` 外层（`kind = 0x04`、`cmd = 0x17`）。 */
+/** 把媒体 body 包进 `0x02` 上行外层（`kind = 0x00`、`cmd = 0x17`）。 */
 function wrapMedia(route: number, ownerUin: number, body: Uint8Array): Uint8Array {
   const total = 17 + body.length + 1;
   if (total > 0xffff) throw new RangeError(`群通话媒体包超过 65535 字节：${total}`);
