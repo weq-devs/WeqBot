@@ -75,7 +75,7 @@ export const ROUTING_HEAD: ProtoMessage = message([
 
 // ---------- ContentHead / MessageBody ----------
 
-/** 发送侧 ContentHead：群聊只给 type=1；私聊另给 c2cCmd=11（零值按 proto3 缺省省略）。 */
+/** 默认 ContentHead 按 proto3 省略零值。 */
 export const SEND_CONTENT_HEAD: ProtoMessage = message([
   f('type', 1, 'uint32'),
   f('subType', 2, 'uint32'),
@@ -83,13 +83,8 @@ export const SEND_CONTENT_HEAD: ProtoMessage = message([
 ]);
 
 /**
- * 群临时会话的 ContentHead —— 与 {@link SEND_CONTENT_HEAD} 同字段，区别只在
- * **零值也上 wire**：真机抓包（2026-09-29，QQ NT 在群里发起临时会话）是
- * `12 06 08 01 10 00 18 00`，`subType=0` 与 `c2cCmd=0` 都显式写出来，
- * 而 proto3 缺省会把这俩 0 省掉。
- *
- * 单独开一份、而不是给共用那份加 `force`：群聊 / 私聊的字节都已被真机验证过
- * （群聊黄金字节见 `test/send_msg.test.ts`），不该跟着变 —— `./send` 按场景选 schema。
+ * 群聊、有 UID 的纯文本私聊和群临时会话显式写出 `subType=0` 和 `c2cCmd=0`。
+ * 真机抓包中的 ContentHead 字节为 `12 06 08 01 10 00 18 00`。
  */
 export const SEND_CONTENT_HEAD_TEMP: ProtoMessage = message([
   f('type', 1, 'uint32'),
@@ -97,10 +92,7 @@ export const SEND_CONTENT_HEAD_TEMP: ProtoMessage = message([
   f('c2cCmd', 3, 'uint32', { force: true }),
 ]);
 
-/**
- * 控制结构（Request field 12）。**私聊文本**带 msgFlag=当前秒（真机验证过能发出去）；
- * 群聊不带，群临时会话改走 field 6（见 {@link SEND_SYNC_COOKIE}）。
- */
+/** 控制结构（Request field 12），用于原有 UIN 私聊格式和设备文本。 */
 export const MESSAGE_CONTROL: ProtoMessage = message([f('msgFlag', 1, 'int32')]);
 
 /**
@@ -111,8 +103,7 @@ export const MESSAGE_CONTROL: ProtoMessage = message([f('msgFlag', 1, 'int32')])
  * （都是 len-delimited）完全一样，只是「解自己的请求」时会得到一串裸字节。这里按真机
  * 解出来的类型声明成嵌套消息，于是 msgFlag 有名字。
  *
- * 私聊**文本**消息目前仍写 field 12（{@link MESSAGE_CONTROL}）；群临时会话与私聊文件
- * 走这一格 —— 见 `./send` 里 `RoutingPlan.timestampField` 的说明。
+ * 有 UID 的纯文本私聊、群临时会话和私聊文件都使用这一格。
  */
 export const SEND_SYNC_COOKIE: ProtoMessage = message([f('msgFlag', 1, 'uint32')]);
 
@@ -140,10 +131,7 @@ export const SEND_MESSAGE_REQUEST: ProtoMessage = message([
 ]);
 
 /**
- * 群临时会话/设备文件用的请求容器 —— 与 {@link SEND_MESSAGE_REQUEST} 逐字段相同，只把
- * `contentHead` 换成「零值也上 wire」的 {@link SEND_CONTENT_HEAD_TEMP}。
- *
- * 用映射而不是手抄一遍字段表：主 schema 一改这里跟着走，不会漂移。
+ * 需要显式写入 ContentHead 零值的请求使用 {@link SEND_CONTENT_HEAD_TEMP}。
  */
 export const SEND_MESSAGE_REQUEST_TEMP: ProtoMessage = message(
   SEND_MESSAGE_REQUEST.fields.map((field) =>

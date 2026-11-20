@@ -590,8 +590,10 @@ export interface MediaSendContext {
   /** 自己账号的 uin（highway 帧头要带）。 */
   uin: string | number;
   scene: SendScene;
-  /** 随消息一起带出的装扮（气泡 / 字体 / 挂件），缺省不带。 */
+  /** 随消息一起发送的装扮（气泡、字体、挂件）。 */
   dress?: SendDress;
+  /** 按群聊抓包显式发送未设置的装扮字段。 */
+  includeDefaultDress?: boolean;
   /** 群号（scene = group 时必填）。 */
   groupId?: number;
   /** 对方 uid（私聊 / 群临时会话必填）。 */
@@ -1082,39 +1084,36 @@ export function swapFontId16(itemId: number): number {
 /**
  * 装扮 → **前置**的装扮 elems（真机抓包里它们排在正文元素之前）。
  *
- * 一个 `generalFlags` 同时承载字体与挂件（真机就是这么合的），气泡单独一个 elem；
- * 三项都缺省 / 为 0 时返回空数组，一个字节都不多写 —— 不传 `dress` 就不会改变
- * 现有消息的字节（回归面为零）。
+ * `generalFlags` 同时承载字体与挂件，气泡单独一个 elem。
+ * 群聊发包启用 `includeDefaultDress`，使用默认值填充这两个元素。
  */
-export function buildDressElems(dress: SendDress | undefined): Record<string, unknown>[] {
-  if (!dress) return [];
+export function buildDressElems(
+  dress: SendDress | undefined,
+  includeDefaultDress = false,
+): Record<string, unknown>[] {
   const out: Record<string, unknown>[] = [];
 
-  const widgetId = normalizeDressId(dress.widgetId, 'widgetId');
-  const fontId = normalizeDressId(dress.fontId, 'fontId');
-  const fontId2 = normalizeDressId(dress.fontId2, 'fontId2');
-  const fontId1Raw = normalizeDressId(dress.fontId1Raw, 'fontId1Raw');
-  const fontId2Raw = normalizeDressId(dress.fontId2Raw, 'fontId2Raw');
+  const widgetId = normalizeDressId(dress?.widgetId, 'widgetId');
+  const fontId = normalizeDressId(dress?.fontId, 'fontId');
+  const fontId2 = normalizeDressId(dress?.fontId2, 'fontId2');
+  const fontId1Raw = normalizeDressId(dress?.fontId1Raw, 'fontId1Raw');
+  const fontId2Raw = normalizeDressId(dress?.fontId2Raw, 'fontId2Raw');
   // 字体槽位：`*Raw` 是「原样写」通道，优先；没给才用「真实 itemId」的便利字段做换算。
   // 保留历史实验参数编码；当前字体通过 fontId2Raw 原样写入。
   const font1 = fontId1Raw > 0 ? fontId1Raw : fontId;
   const font2 = fontId2Raw > 0 ? fontId2Raw : fontId2 > 0 ? swapFontId16(fontId2) : 0;
-  if (widgetId > 0 || font1 > 0 || font2 > 0) {
+  if (includeDefaultDress || widgetId > 0 || font1 > 0 || font2 > 0) {
     const generalFlags: Record<string, unknown> = {
-      // 真机（qqhook 16:02:55 抓包）里 `.1` 与 `.17` **每条都写**（`.17 = 0` 表示
-      // 没有挂件）；`.16 = 0` 只在该条消息带挂件时出现。三者都是 schema 上的
-      // force 字段，少写会让收端把整格 generalFlags 当残缺数据忽略掉 —— 表现就是
-      // 气泡正常（独立 bubble elem）、挂件丢失。
       bubbleDiyTextId: 0,
       widgetId,
     };
-    if (widgetId > 0) generalFlags.flag16 = 0;
-    generalFlags.font = buildFontBlock(font1, font2);
+    if (includeDefaultDress || widgetId > 0) generalFlags.flag16 = 0;
+    generalFlags.font = buildFontBlock(font1, font2, includeDefaultDress);
     out.push({ generalFlags });
   }
 
-  const bubbleId = normalizeDressId(dress.bubbleId, 'bubbleId');
-  if (bubbleId > 0) out.push({ bubble: { id: bubbleId } });
+  const bubbleId = normalizeDressId(dress?.bubbleId, 'bubbleId');
+  if (includeDefaultDress || bubbleId > 0) out.push({ bubble: { id: bubbleId } });
 
   return out;
 }
@@ -1129,22 +1128,25 @@ const NO_FONT_FLAG = 0x10000;
  * 体都没用 —— 无字体时 `.15 = 65536`（只有 bit16 标志位）。收端很可能以「这一格在
  * 不在」判断整条消息带不带装扮，省掉它会让同一格里的挂件一起失效。
  *
- * 两种形状（照抄真机字节，不能合并）：
- * - 无字体：`.15=65536 .25/.30/.31/.34=0 nested73{ .2=0 } .96=0`
- * - 有字体：在上面基础上多 `.41=0 .51=2 .52=8 .54/.55/.56=0 .71=2 .72=0`
+ * - 无字体且采用原有格式：`.15=65536 .25/.30/.31/.34=0 nested73{ .2=0 } .96=0`
+ * - 有字体或发送群聊默认装扮：多 `.41=0 .51=2 .52=8 .54/.55/.56=0 .71=2 .72=0`
  *   与 `nested73` 的五个零值子字段
  *
  * `.51/.52/.71` 是那款字体自带的元数据（对应 40801 的 41520~41522），当前模型没
  * 携带，这里按抓包里的值固定写 2 / 8 / 2 —— 抓到的两款不同字体都是这三个值。
  * `.109`（`{1:1, 4:<8 字节>}`，逐条不同）来源未知，同样不填。
  */
-function buildFontBlock(font1: number, font2: number): Record<string, unknown> {
+function buildFontBlock(
+  font1: number,
+  font2: number,
+  includeDefaultDress: boolean,
+): Record<string, unknown> {
   const hasFont = font1 > 0 || font2 > 0;
   const font: Record<string, unknown> = {};
   if (font1 > 0) font.fontId1 = font1;
   font.fontId2 = font2 > 0 ? font2 : NO_FONT_FLAG;
   Object.assign(font, { flag25: 0, flag30: 0, flag31: 0, flag34: 0 });
-  if (!hasFont) {
+  if (!includeDefaultDress && !hasFont) {
     font.nested73 = { flag2: 0 };
     font.flag96 = 0;
     return font;
@@ -1172,17 +1174,17 @@ function buildFontBlock(font1: number, font2: number): Record<string, unknown> {
  * 全部校验都在**任何副作用之前**完成（媒体上传的版本会先把整条消息校验一遍），
  * 免得前半条已经产生副作用、后半条才报错。
  *
- * `options.dress` 给了就把装扮 elems 前置到元素数组最前面（与真机顺序一致）。
+ * 装扮元素排在正文之前，与真机顺序一致。
  */
 export function buildSendElems(
   elements: readonly SendElement[],
-  options: { scene?: SendScene; dress?: SendDress } = {},
+  options: { scene?: SendScene; dress?: SendDress; includeDefaultDress?: boolean } = {},
 ): Record<string, unknown>[] {
   if (!Array.isArray(elements) || elements.length === 0) {
     throw new Error('消息不能为空');
   }
   // 装扮先校验、先打包：坏 id 要在打包任何元素之前就报错。
-  const dressElems = buildDressElems(options.dress);
+  const dressElems = buildDressElems(options.dress, options.includeDefaultDress);
   return [...dressElems, ...elements.flatMap((element) => buildSendElemList(element))];
 }
 
@@ -1299,7 +1301,7 @@ export async function buildSendElemsWithMedia(
   if (!Array.isArray(elements) || elements.length === 0) throw new Error('消息不能为空');
 
   // 装扮与媒体无关，但顺序要和同步版本一致（装扮在最前）——先校验、先打包。
-  const dressElems = buildDressElems(ctx.dress);
+  const dressElems = buildDressElems(ctx.dress, ctx.includeDefaultDress);
 
   const hasMedia = elements.some((element) => isSendUploadElement(element));
   if (!hasMedia) {
