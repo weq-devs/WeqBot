@@ -7,6 +7,7 @@
 
 import type { LogLevel } from '@weqbot/common';
 import type { OneBotConfig } from '@weqbot/onebot';
+import type { VerifyFileOptions } from '@weqbot/wire';
 
 /** OneBot 配置的别名，避免与 `config.onebot` 字段名混淆。 */
 export type BotOneBotConfig = OneBotConfig;
@@ -44,6 +45,14 @@ export interface BotConfig {
     dataDir?: string;
   };
   session?: {
+    /**
+     * mode 2 的 `verify_file` 上报（`trpc.o3.report.Report.SsoReport`）。
+     *
+     * native 始终每 3600 s 报一条；这里只决定报文内容。不给时 native 按平台给
+     * 默认清单 —— 独立部署已经够用，宿主（控制台）探到真实安装位置时才覆盖。
+     * mode 1 完全忽略：那条连接的上报归 QQ 本体。
+     */
+    verifyFile?: VerifyFileOptions;
     /**
      * 首屏同步的额外等待（ms），默认 15s。
      *

@@ -54,7 +54,13 @@ import { HttpError } from './http-util';
 import type { Observability } from './observability';
 import { findNtMsgDb } from './qq-account';
 import { clearQqHintsCache, ensureQqHints } from './qq-detect';
-import { discoverQqPaths, LOGIN_DB_KEY, type QqPathOverrides, type QqPaths } from './qq-paths';
+import {
+  discoverQqPaths,
+  LOGIN_DB_KEY,
+  type QqPathOverrides,
+  type QqPaths,
+  verifyFileOptionsFor,
+} from './qq-paths';
 
 export type ConsolePhase = 'no-account' | 'starting' | 'online' | 'offline';
 
@@ -866,6 +872,14 @@ export class ConsoleRuntime {
     const wrapperPath = this.options.config.native?.wrapperPath ?? environment.wrapperNode ?? null;
     if (wrapperPath) {
       botConfig.native = { ...botConfig.native, wrapperPath };
+    }
+
+    // 同理，`verify_file` 的路径也交给控制台：native 的默认清单按平台换根，
+    // 但它不知道便携版 / 自定义 `installDir` 的安装位置，而我们已经探到了。
+    // 显式配置优先（用户手填的路径说明他就是要报那一套）。
+    const verifyFile = this.options.config.session?.verifyFile ?? verifyFileOptionsFor(paths);
+    if (verifyFile) {
+      botConfig.session = { ...botConfig.session, verifyFile };
     }
 
     const bot = this.botFactory({

@@ -23,6 +23,7 @@ import type {
   SessionInfo,
   SessionStatusEvent,
   SsoSessionConfig,
+  VerifyFileOptions,
 } from './types';
 
 /** napi 的 `Buffer` 参数不接受裸 `Uint8Array`，进原生前统一转换。 */
@@ -45,6 +46,7 @@ interface RawOpenSessionOptions {
   vmRva?: number | null;
   device?: DeviceProfile;
   wireProfile?: string;
+  verifyFile?: VerifyFileOptions;
 }
 
 interface RawQuickLoginOptions extends Omit<QuickLoginOptions, 'a1'> {
@@ -345,6 +347,8 @@ export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
         vmRva: options.signer.vmRva,
         device: options.device,
         wireProfile: options.wireProfile,
+        // 老产物不认这个键（napi 只读自己声明的字段），省略时行为与升级前一致。
+        ...(options.verifyFile ? { verifyFile: options.verifyFile } : {}),
       });
   }
 

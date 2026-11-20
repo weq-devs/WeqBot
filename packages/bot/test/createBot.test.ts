@@ -191,6 +191,8 @@ test('start: quickLogin → openSession(mode 2) → online', async () => {
   assert.equal(harness.calls.lastOpen?.device?.os, 'linux');
   assert.equal(harness.calls.lastOpen?.signer.wrapperPath, '/tmp/wrapper.node');
   assert.equal(harness.calls.lastOpen?.session.secToken?.length, 12);
+  // 没配置 session.verifyFile 时不传这个键，让 native 用平台默认清单。
+  assert.equal(harness.calls.lastOpen?.verifyFile, undefined);
   assert.equal(bot.protocol?.sessionId, 7);
 
   // quickLogin 轮换了 a1，应写回 vault。
@@ -206,6 +208,76 @@ test('start: quickLogin → openSession(mode 2) → online', async () => {
   assert.equal(harness.calls.closeSession, 1);
   assert.equal(harness.calls.pushUnsubscribed, 1);
   assert.equal(harness.calls.statusUnsubscribed, 1);
+});
+
+test('start: 有头模式（mode 1）即使配置了 verifyFile 也不上报', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative({
+    openSession: async (options) => {
+      harness.calls.openSession += 1;
+      harness.calls.lastOpen = options;
+      return {
+        sessionId: 9,
+        uin: ACCOUNT.uin,
+        uid: ACCOUNT.uid,
+        mode: 1,
+        state: 'open',
+        registered: false,
+        synced: false,
+      };
+    },
+  });
+  const bot = createBot({
+    config: {
+      ...CONFIG,
+      session: {
+        syncGraceMs: 0,
+        verifyFile: { paths: ['/opt/QQ/qq'], fileMarks: ['1', '1', '1', '1'] },
+      },
+    },
+    native: harness.native,
+    vault,
+    logger: SILENT,
+    attach: {
+      pid: 4242,
+      uin: ACCOUNT.uin,
+      uid: ACCOUNT.uid,
+      guid: ACCOUNT.guid,
+      a2: 'a2',
+      d2: 'd2',
+      d2Key: '00',
+      subAppId: DEVICE.subAppId,
+    },
+  });
+
+  await bot.start();
+  assert.equal(harness.calls.lastOpen?.mode, 1);
+  // 那条连接的在线状态与上报归 QQ 本体；我们再报一遍等于同设备两个客户端。
+  assert.equal(harness.calls.lastOpen?.verifyFile, undefined);
+
+  await bot.stop('closed');
+});
+
+test('start: session.verifyFile 原样透传给 openSession(mode 2)', async () => {
+  const { vault } = makeVault();
+  const harness = makeNative();
+  const verifyFile = {
+    paths: ['/opt/QQ/resources/app/background.js'],
+    fileMarks: ['1', '1', '1', '1'],
+    binaryPath: '/opt/QQ/qq',
+    sendOnRegister: true,
+  };
+  const bot = createBot({
+    config: { ...CONFIG, session: { syncGraceMs: 0, verifyFile } },
+    native: harness.native,
+    vault,
+    logger: SILENT,
+  });
+
+  await bot.start();
+  assert.deepEqual(harness.calls.lastOpen?.verifyFile, verifyFile);
+
+  await bot.stop('closed');
 });
 
 test('start: 缺 openSession 能力时明确拒绝', async () => {

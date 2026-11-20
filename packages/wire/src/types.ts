@@ -224,6 +224,35 @@ export interface OpenSessionOptions {
   device?: DeviceProfile;
   /** wire 档位名（见 TODO「wire profile」）。mode 2 可选。 */
   wireProfile?: string;
+  /**
+   * mode 2 的 `verify_file` 上报参数（`trpc.o3.report.Report.SsoReport`）。
+   *
+   * 留空 = native 按平台给默认清单，仍然每 3600 s 上报一次。mode 1 忽略：
+   * 那条连接的上报归 QQ 本体，我们再报一遍等于同一设备出现两个客户端。
+   */
+  verifyFile?: VerifyFileOptions;
+}
+
+/**
+ * `verify_file` 上报参数（对应 nt_helper 的 `VerifyFileOptions`）。
+ *
+ * 上报的路径**不需要**对应真实文件 —— 服务端没有独立渠道核实客户端磁盘布局。
+ * 宿主能探到真实安装位置时（`@weqbot/node` 的 `qq-paths`）喂真值更自然；
+ * 探不到就整项省略，交给 native 的平台默认。
+ */
+export interface VerifyFileOptions {
+  /**
+   * 四类受检文件的标记，顺序固定为
+   * `application.asar` / `major.node` / `package.json` / `wrapper.node`。
+   * 取值只用 `"0"`（缺失）或 `"1"`（存在），必须恰好 4 项。
+   */
+  fileMarks?: string[];
+  /** 上报的文件路径清单（顺序即上报顺序）。 */
+  paths?: string[];
+  /** 上报的可执行文件路径。 */
+  binaryPath?: string;
+  /** 注册成功后是否立刻发一条（之后仍按 3600 s 周期）。默认 `false`。 */
+  sendOnRegister?: boolean;
 }
 
 /** `openSession` 的结果。 */

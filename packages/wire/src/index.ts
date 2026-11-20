@@ -27,4 +27,5 @@ export type {
   SignMode,
   SignerPaths,
   SsoSessionConfig,
+  VerifyFileOptions,
 } from './types';
