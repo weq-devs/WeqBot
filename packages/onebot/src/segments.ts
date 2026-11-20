@@ -209,6 +209,14 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
 
   // ─── 表情弹射 ───────────────────────────────────────────────────────────
   emojiBounce: {
+    toSegment: (element) => ({
+      type: 'emoji_bounce',
+      data: {
+        face_id: intOr(element.emojiBounceId),
+        count: intOr(/弹射了(\d+)个/.exec(str(element.emojiBounceTextSummary))?.[1], 1),
+        name: str(element.emojiBounceName),
+      },
+    }),
     fromSegment: (data) => {
       const faceId = intOr(data.face_id ?? data.id, -1);
       if (faceId < 0) return null;

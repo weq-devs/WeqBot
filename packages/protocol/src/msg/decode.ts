@@ -30,10 +30,12 @@ import {
 } from './schemas';
 import {
   BUBBLE_VIDEO_BUSINESS_TYPE,
-  FLASH_PHOTO_FALLBACK_TEXT,
+  EMOJI_BOUNCE_EXTRA,
   FLASH_PHOTO_PB,
   FLASH_PHOTO_SERVICE_TYPE,
+  POKE_EXTRA,
 } from './send-schemas';
+import { specialFallbackKind } from './special-fallback';
 
 export interface DecodedDress {
   /** 气泡 itemId，无则为 0（elem tag 9.1）。 */
@@ -214,13 +216,43 @@ function liftBubbleVideoElem(
   return out;
 }
 
-/** 是否是闪照的兜底纯文本（`[闪照]请使用新版手机QQ查看闪照。`）。 */
-function isFlashPhotoFallbackElem(lifted: Record<string, unknown>): boolean {
-  return (
-    lifted.kind === 'text' &&
-    typeof lifted.textContent === 'string' &&
-    lifted.textContent.trim() === FLASH_PHOTO_FALLBACK_TEXT
-  );
+function liftEmojiBounceElem(pb: {
+  count?: number;
+  name?: string;
+  detail?: { faceId?: number; name?: string; name2?: string };
+}): Record<string, unknown> | undefined {
+  if (!pb.detail) return undefined;
+  const name = pb.name || pb.detail.name || pb.detail.name2 || '';
+  // QQ 按有符号 32 位读取数量。把数字放在名字前面，兼容已有摘要读者。
+  const count = (pb.count ?? 0) | 0;
+  const label = name ? `[${name}]` : '[表情]';
+  const textSummary = count > 0 ? `弹射了${count}个${label}` : '[表情弹射]';
+  return {
+    kind: 'emojiBounce',
+    emojiBounceId: pb.detail.faceId ?? 0,
+    emojiBounceName: name,
+    emojiBounceDetail: { name, textSummary },
+    emojiBounceTextSummary: textSummary,
+    emojiBouncePcText: textSummary,
+  };
+}
+
+/** 只隐藏紧跟在对应结构化元素之后的兼容文案。 */
+function isTrailingFallback(
+  element: Record<string, unknown>,
+  previous: Record<string, unknown> | undefined,
+): boolean {
+  if (!previous || element.kind !== 'text' || typeof element.textContent !== 'string') return false;
+  switch (specialFallbackKind(element.textContent)) {
+    case 'flashPhoto':
+      return previous.kind === 'pic' && previous.isFlash === true;
+    case 'emojiBounce':
+      return previous.kind === 'emojiBounce';
+    case 'pokeEmoji':
+      return previous.kind === 'face' && previous.subType === 5;
+    default:
+      return false;
+  }
 }
 
 /**
@@ -259,7 +291,7 @@ function liftFlashPhotoElem(pb: Record<string, unknown>): Record<string, unknown
   if (pic?.filePath !== undefined) out.fileName = pic.filePath;
   if (pic?.fileLen !== undefined) out.fileSize = pic.fileLen;
   // 闪照的可下载路径就是这个服务端签发的老式路径，与 resId(10) 同值。
-  const token = (pic?.downloadPath ?? pic?.resId) as string | undefined;
+  const token = (pic?.downloadPath || pic?.resId) as string | undefined;
   if (token !== undefined) out.fileToken = token;
   if (pic?.imgType !== undefined) out.imgType = pic.imgType;
   if (pic?.picMd5 instanceof Uint8Array) out.md5Bytes = pic.picMd5;
@@ -502,7 +534,8 @@ function liftReplyElem(src: Record<string, unknown>): Record<string, unknown> {
         return undefined;
       }
     })
-    .filter((el): el is Record<string, unknown> => el !== undefined);
+    .filter((el): el is Record<string, unknown> => el !== undefined)
+    .filter((el, i, elements) => !isTrailingFallback(el, elements[i - 1]));
   const out: Record<string, unknown> = { kind: 'reply' };
   if (seq !== undefined) {
     out.origMsgSeq = seq;
@@ -551,6 +584,21 @@ function liftElem(
   const common = elem.commonElem as
     | { serviceType?: number; businessType?: number; pbElem?: Uint8Array }
     | undefined;
+  if (common?.serviceType === 2) {
+    // type、combo 都为 0 时，proto3 可以省略整个 pbElem。
+    const pb = common.pbElem
+      ? (decode(POKE_EXTRA, common.pbElem) as { type?: number; combo?: number })
+      : undefined;
+    return {
+      kind: 'face',
+      faceId: pb?.type ?? common.businessType ?? 0,
+      subType: 5,
+      interactiveFaceCombo: pb?.combo ?? 0,
+    };
+  }
+  if (common?.serviceType === 23 && common.pbElem) {
+    return liftEmojiBounceElem(decode(EMOJI_BOUNCE_EXTRA, common.pbElem));
+  }
   if (common?.serviceType === 33 && common.pbElem) {
     return liftFaceElem(decode(FACE_COMMON_PB, common.pbElem) as Record<string, unknown>);
   }
@@ -737,22 +785,10 @@ export function decodeMessageBody(raw: RawMessageBody): DecodedMessage {
 
   // 装扮和元素无关：散落在 elems 里的装扮 elem 只用于聚合 dress，不进 elements。
   const dress: DecodedDress = { bubble: 0, font: 0, widget: 0 };
-  const elements: Record<string, unknown>[] = [];
-  for (const elem of elems) {
-    const lifted = liftElem(elem, dress);
-    if (lifted === undefined) continue;
-    // 闪照后面紧跟的那条 `[闪照]请使用新版手机QQ查看闪照。` 是老客户端兜底文案
-    // （见 `send-elements` 的 FLASH_PHOTO_FALLBACK_TEXT）。闪照本体已经能渲染时再画
-    // 一行灰字纯属噪音，所以紧跟在闪照元素后面、内容完全一致的那条直接丢掉。
-    if (
-      elements.length > 0 &&
-      (elements[elements.length - 1] as { isFlash?: boolean }).isFlash === true &&
-      isFlashPhotoFallbackElem(lifted)
-    ) {
-      continue;
-    }
-    elements.push(lifted);
-  }
+  const elements = elems
+    .map((elem) => liftElem(elem, dress))
+    .filter((el): el is Record<string, unknown> => el !== undefined)
+    .filter((el, i, elements) => !isTrailingFallback(el, elements[i - 1]));
 
   // 私聊文件不在 richText.elems 里：老 wire 走 MsgBody.msgContent 的 notOnlineFile
   //（部分消息也会放在 richText.notOnlineFile，两种都收）。

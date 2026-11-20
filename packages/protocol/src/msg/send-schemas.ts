@@ -288,13 +288,7 @@ export const MARKET_FACE_PB_RESERVE: ProtoMessage = message([
 /** 闪照的 commonElem.serviceType。 */
 export const FLASH_PHOTO_SERVICE_TYPE = 3;
 
-/**
- * 闪照后面紧跟的兜底纯文本（给不认识 serviceType=3 的老客户端看）。
- *
- * 放在 schema 层而不是 `send-elements`：收侧解码要用它把这条噪音文案认出来丢掉，
- * 而 `decode` 不该为了一个字符串把整个上传模块（highway / native）拖进来。
- */
-export const FLASH_PHOTO_FALLBACK_TEXT = '[闪照]请使用新版手机QQ查看闪照。';
+export { FLASH_PHOTO_FALLBACK_TEXT } from './special-fallback';
 
 /**
  * 泡泡消息的 commonElem.businessType —— 与普通视频（21）只差这一个值。
