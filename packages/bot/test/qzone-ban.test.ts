@@ -66,6 +66,7 @@ test('禁访明确拒绝或缺少回执时返回失败且只写一次', async (t
   for (const [body, expected] of [
     ['<script>frameElement.callback({code:0,subcode:7,msg:"合成拒绝"});</script>', /合成拒绝/],
     ['<script>const text = "frameElement.callback({code:0})";</script>', /未确认/],
+    ['<script>frameElement.callback({code:0}, null);</script>', /未确认/],
     ['{"name":"synthetic"}', /未确认/],
   ] as const) {
     const fetch = t.mock.method(globalThis, 'fetch', async () => new Response(body));

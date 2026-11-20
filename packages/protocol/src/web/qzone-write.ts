@@ -6,8 +6,7 @@
  * 传输换成 `./http`。**写操作不做自动重试**（重放会产生重复回复或重复提交）。
  *
  * 2026-11-16 补齐 `forwardQzoneMsg`：来源 WeQ `account/web/qzone_write_actions.ts`。
- * 那条链路刻意**不引** `@babel/parser` + `parse5`，回执解析换成
- * {@link ./qzone-form-reply} 的零依赖词法扫描（行为按 WeQ 的 13 条用例对齐）。
+ * WeQ 和 OneBot 共用表单请求与 {@link parseQzoneFormReply} 回执校验。
  */
 
 import { computeBkn, cookieHeader, WebAuthError, type WebCredential } from './credential';
@@ -316,28 +315,81 @@ async function postQzoneForm(
   cred: WebCredential,
   cgi: string,
   params: Record<string, string>,
+  requestText: typeof webRequestText,
 ): Promise<Record<string, unknown>> {
-  const text = await webRequestText(
-    `${FORM_CGI}/${cgi}?g_tk=${computeBkn(cred.pskey || cred.skey)}`,
-    {
-      method: 'POST',
-      cookie: cookieHeader(cred),
-      body: new URLSearchParams({
-        code_version: '1',
-        format: 'fs',
-        out_charset: 'UTF-8',
-        hostuin: cred.uin,
-        qzreferrer: `https://user.qzone.qq.com/${cred.uin}`,
-        ...params,
-      }).toString(),
-      headers: {
-        'User-Agent': FORM_UA,
-        Referer: `https://user.qzone.qq.com/${cred.uin}`,
-        'Content-Type': 'application/x-www-form-urlencoded',
-      },
+  const text = await requestText(`${FORM_CGI}/${cgi}?g_tk=${computeBkn(cred.pskey || cred.skey)}`, {
+    method: 'POST',
+    cookie: cookieHeader(cred),
+    body: new URLSearchParams({
+      code_version: '1',
+      format: 'fs',
+      out_charset: 'UTF-8',
+      hostuin: cred.uin,
+      qzreferrer: `https://user.qzone.qq.com/${cred.uin}`,
+      ...params,
+    }).toString(),
+    headers: {
+      'User-Agent': FORM_UA,
+      Referer: `https://user.qzone.qq.com/${cred.uin}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
     },
-  );
+  });
   return parseQzoneFormReply(text);
+}
+
+export interface QzoneFeedReplyTarget {
+  rootId: string;
+  rootUin: string;
+  uin: string;
+  nickname: string;
+}
+
+/** 信息流定向回复，支持图片和独立的根评论与目标身份。 */
+export async function replyQzoneFeedComment(
+  cred: WebCredential,
+  hostUin: string,
+  tid: string,
+  target: QzoneFeedReplyTarget,
+  content: string,
+  imageUrl?: string,
+  requestText = webRequestText,
+): Promise<void> {
+  assertQzoneIdentity(hostUin, tid);
+  if (
+    !/^\d{1,20}$/.test(target.rootId) ||
+    !/^[1-9]\d{4,19}$/.test(target.rootUin) ||
+    !/^[1-9]\d{4,19}$/.test(target.uin)
+  )
+    throw new Error('请重新读取评论后选择回复目标。');
+  if (!content.trim() || content.length > 4096) throw new Error('回复内容为空或过长。');
+  const encodedNick = (target.nickname || target.uin).replace(
+    /[%,}{:]/g,
+    (char) => `%${char.charCodeAt(0).toString(16).toUpperCase()}`,
+  );
+  const params: Record<string, string> = {
+    hostUin,
+    format: 'json',
+    uin: cred.uin,
+    topicId: `${hostUin}_${tid}__1`,
+    feedsType: '100',
+    commentId: target.rootId,
+    commentUin: target.rootUin,
+    content: `@{uin:${target.uin},nick:${encodedNick},who:1,auto:1}${content}`,
+    inCharset: 'utf-8',
+    outCharset: 'utf-8',
+    plat: 'qzone',
+    source: 'ic',
+    ref: 'feeds',
+    private: '0',
+    paramstr: '1',
+    platformid: '52',
+  };
+  if (imageUrl) {
+    params.richtype = '1';
+    params.richval = imageUrl;
+  }
+  const response = await postQzoneForm(cred, 'emotion_cgi_re_feeds', params, requestText);
+  assertQzoneWriteAccepted(response, '回复');
 }
 
 /**
@@ -354,19 +406,25 @@ export async function forwardQzoneMsg(
   tid: string,
   reason = '',
   beforeSend?: () => void,
+  requestText = webRequestText,
 ): Promise<void> {
   assertQzoneIdentity(hostUin, tid);
   if (reason.length > 4096) throw new Error('转发语过长。');
   beforeSend?.();
-  const response = await postQzoneForm(cred, 'emotion_cgi_forward_v6', {
-    tid,
-    t1_uin: hostUin,
-    t1_source: '1',
-    signin: '0',
-    con: reason,
-    with_cmt: '0',
-    fwdToWeibo: '0',
-    forward_source: '1',
-  });
+  const response = await postQzoneForm(
+    cred,
+    'emotion_cgi_forward_v6',
+    {
+      tid,
+      t1_uin: hostUin,
+      t1_source: '1',
+      signin: '0',
+      con: reason,
+      with_cmt: '0',
+      fwdToWeibo: '0',
+      forward_source: '1',
+    },
+    requestText,
+  );
   assertQzoneWriteAccepted(response, '转发');
 }

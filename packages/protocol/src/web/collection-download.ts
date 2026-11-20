@@ -52,6 +52,15 @@ export interface CollectionDownloadResource {
   cookie: string;
 }
 
+export class CollectionDownloadRejectedError extends Error {
+  constructor(
+    readonly code: number,
+    detail: string,
+  ) {
+    super(`收藏附件下载申请失败（代码 ${code}）${detail ? `：${detail}` : ''}。`);
+  }
+}
+
 export interface CollectionDownloadParams {
   uin: string;
   pskey: string;
@@ -59,9 +68,9 @@ export interface CollectionDownloadParams {
   file: CollectionFile;
   /** 当前 QQ 的 `<version>-<build>`；不在白名单内直接拒绝。 */
   clientBuild: string;
-  transport?: CollectionTransport;
-  signal?: AbortSignal;
-  timeoutMs?: number;
+  transport?: CollectionTransport | undefined;
+  signal?: AbortSignal | undefined;
+  timeoutMs?: number | undefined;
 }
 
 function hasControl(value: string, spaces = false): boolean {
@@ -176,9 +185,9 @@ export async function applyCollectionFileDownload(
       uin: params.uin,
       pskey: params.pskey,
       body: requestBytes(params),
-      ...(params.transport ? { transport: params.transport } : {}),
-      ...(params.signal ? { signal: params.signal } : {}),
-      ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
+      transport: params.transport,
+      signal: params.signal,
+      timeoutMs: params.timeoutMs,
     }),
   );
   params.signal?.throwIfAborted();
@@ -199,14 +208,23 @@ export async function applyCollectionFileDownload(
   const split = bytes.length - bodySize;
   const headBytes = bytes.subarray(16, split);
 
-  const head = decode(COLLECTION_DOWNLOAD_RESP_HEAD, headBytes);
+  let head: Record<string, unknown>;
+  try {
+    // 接受完整字段之后的填充，保留字段内部的零字节和空字符串。
+    head = decode(COLLECTION_DOWNLOAD_RESP_HEAD, headBytes, {
+      strict: true,
+      allowTrailingZeroPadding: true,
+    });
+  } catch (cause) {
+    throw new Error('收藏附件下载申请返回无效响应。', { cause });
+  }
   const retCode = typeof head.retCode === 'number' ? head.retCode : 0;
   if (retCode !== 0) {
-    const message =
+    const detail =
       (typeof head.retMsg === 'string' && head.retMsg) ||
       (typeof head.promptMsg === 'string' && head.promptMsg) ||
       '';
-    throw new Error(`收藏附件下载申请失败（代码 ${retCode}）${message ? `：${message}` : ''}。`);
+    throw new CollectionDownloadRejectedError(retCode, detail);
   }
   // 头里的身份 / 序号必须与本次请求对得上，否则拿到的可能是别的会的响应。
   if (

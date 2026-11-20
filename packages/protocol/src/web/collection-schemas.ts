@@ -271,8 +271,12 @@ export const COLLECTION_DOWNLOAD_RESP_HEAD = message([
 
 export const COLLECTION_DOWNLOAD_APPLY_REQ = message([
   { name: 'cid', tag: 1, type: 'string' },
-  { name: 'file', tag: 2, type: COLLECTION_FILE },
-  { name: 'thumbnail', tag: 3, type: 'bool' },
+  {
+    name: 'file',
+    tag: 2,
+    type: message(COLLECTION_FILE.fields.map((field) => ({ ...field, force: true }))),
+  },
+  { name: 'thumbnail', tag: 3, type: 'bool', force: true },
 ]);
 
 export const COLLECTION_DOWNLOAD_REQ_OPERATION = message([
