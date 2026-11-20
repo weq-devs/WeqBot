@@ -31,6 +31,7 @@ export {
   type ControlKind,
   type ControlMethod,
   type ControlMethods,
+  type ControlObservedMessage,
   type ControlOneBotConfig,
   type ControlOneBotListener,
   type ControlOneBotState,

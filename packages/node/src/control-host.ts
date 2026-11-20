@@ -31,6 +31,7 @@ import {
   type ControlOneBotConfig,
   type ControlOneBotListener,
   type ControlOneBotState,
+  type ControlObservedMessage,
   type ControlStatus,
 } from '@weqbot/control';
 import type { CredentialVault, StoredAccount } from '@weqbot/session';
@@ -86,6 +87,8 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
    * 这里用一个入口记账，比在两条链路里各写一遍守卫可靠。
    */
   let opened: 'none' | 'login' | 'attach' = 'none';
+  let attachedPid: number | undefined;
+  const observedMessages = new Map<string, Promise<boolean>>();
 
   const broadcast = (envelope: ControlEnvelope): void => {
     for (const sink of sinks) sink(envelope);
@@ -93,6 +96,8 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
 
   const status = (): ControlStatus => ({
     uin: options.uin,
+    ...(opened === 'none' ? {} : { mode: opened === 'attach' ? 'attached' : 'standalone' }),
+    ...(attachedPid === undefined ? {} : { attachedPid }),
     state: controlState(bot?.state),
     sessionId: bot?.sessionId ?? null,
     lastEventAt,
@@ -286,7 +291,7 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
 
     // 宿主最容易误判的一点：attach 成功后 `CONTROL_EVENTS.onebot` 永远安静。
     // 在日志里说清楚，比等对方提 issue 强。
-    log.info('mode 1 只发不收：不会有 OneBot 事件推送（需要事件请宿主持久化来源）', {
+    log.info('mode 1 不订阅 QQ 服务端推送；可接收宿主数据库观察', {
       uin: options.uin,
       pid: params.pid,
     });
@@ -301,6 +306,7 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
       });
       bot = next;
       opened = 'attach';
+      attachedPid = params.pid;
       attachBot(next);
       await next.start();
       return status();
@@ -379,6 +385,57 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
     return bot !== undefined && bot.state !== 'closed' && bot.state !== 'idle';
   }
 
+  async function observeMessage(value: unknown): Promise<{ accepted: boolean }> {
+    const input = value as { sessionId?: unknown; message?: ControlObservedMessage } | null;
+    const adapter = bot?.onebot;
+    if (
+      closed ||
+      opened !== 'attach' ||
+      bot?.state !== 'online' ||
+      !adapter ||
+      !input ||
+      typeof input.sessionId !== 'number' ||
+      input.sessionId !== bot.sessionId
+    )
+      return { accepted: false };
+
+    const message = input.message;
+    if (
+      !message ||
+      !isPositiveId(message.messageId) ||
+      !isPositiveId(message.peer?.id) ||
+      !isPositiveId(message.sender?.id) ||
+      (message.scene !== 'private' && message.scene !== 'group') ||
+      !Number.isSafeInteger(message.seq) ||
+      message.seq < 0 ||
+      !Number.isSafeInteger(message.time) ||
+      message.time <= 0 ||
+      !Array.isArray(message.elements) ||
+      message.elements.length === 0 ||
+      message.elements.some((element) => !element || typeof element.kind !== 'string')
+    ) {
+      throw new WeqBotError('CONTROL_PROTOCOL_ERROR', '本地消息字段不合法');
+    }
+
+    const key = `${input.sessionId}:${message.scene}:${message.peer.id}:${message.messageId}`;
+    const previous = observedMessages.get(key);
+    if (previous) return { accepted: await previous };
+    // 成功后保留消息身份，覆盖控制请求超时后数据库订阅重新读取同一页的情况。
+    const delivery = adapter.observeMessage({ ...message, self: { uin: options.uin } });
+    observedMessages.set(key, delivery);
+    let accepted = false;
+    try {
+      accepted = await delivery;
+      if (accepted && observedMessages.size > 4096) {
+        const oldest = observedMessages.keys().next();
+        if (!oldest.done) observedMessages.delete(oldest.value);
+      }
+      return { accepted };
+    } finally {
+      if (!accepted) observedMessages.delete(key);
+    }
+  }
+
   async function handle(
     envelope: ControlEnvelope,
     reply: (envelope: ControlEnvelope) => void,
@@ -428,6 +485,9 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
           reply(controlSuccess(envelope.id, await setOnebot(params?.config ?? null)));
           return;
         }
+        case 'onebot.observeMessage':
+          reply(controlSuccess(envelope.id, await observeMessage(envelope.params)));
+          return;
         case 'shutdown': {
           const params = envelope.params as { reason?: string } | undefined;
           reply(controlSuccess(envelope.id, null));
@@ -461,6 +521,10 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
       return closed;
     },
   };
+}
+
+function isPositiveId(value: unknown): value is string {
+  return typeof value === 'string' && /^[1-9]\d{0,19}$/.test(value);
 }
 
 /** 会话状态机 → 控制通道的 5 个粗粒度状态。 */

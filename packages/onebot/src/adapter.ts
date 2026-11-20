@@ -12,7 +12,7 @@
  */
 
 import { createLogger, WeqBotError, type Logger } from '@weqbot/common';
-import type { BotEvent, BotEventMap } from '@weqbot/session';
+import type { BotEvent, BotEventMap, InboundMessage } from '@weqbot/session';
 
 type BotEventMapEvent<K extends keyof BotEventMap> = BotEventMap[K];
 import { ActionRegistry, type ActionContext, type ActionDoc } from './action-registry';
@@ -154,6 +154,7 @@ export interface OneBotAdapter {
    * WebUI 调试页用。走的是同一个注册表，所以敏感能力 / 未注册能力照样 1404。
    */
   call(action: string, params: JsonObject): Promise<unknown>;
+  observeMessage(message: InboundMessage): Promise<boolean>;
   start(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -557,6 +558,12 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
      * 拿的是返回值本身，不靠 echo 配对）。
      */
     call: (action, params) => dispatch(action, params, { transport: 'webui', client: 'webui' }),
+
+    async observeMessage(message) {
+      if (!started || networks.length === 0) return false;
+      await onBotEvent({ type: 'message', message });
+      return started && networks.length > 0;
+    },
 
     async start() {
       if (starting) return starting;
