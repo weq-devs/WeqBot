@@ -1,5 +1,6 @@
-import { encode, message } from '../protobuf';
+import { decode, encode, message } from '../protobuf';
 import { sendPacket, type TrpcNative } from '../transport';
+import { ReadedReport } from './read-report';
 
 // 字段对照 acidify 的 SsoReadedReport；私聊使用会话级 NT 序号，不是 clientSeq。
 export type ReadReportParams =
@@ -55,6 +56,21 @@ export namespace ReportRead {
     params: ReadReportParams,
   ): Promise<'acknowledged' | 'unconfirmed'> {
     const response = await sendPacket(nt, pid, cmd, encode(reqSchema, serialize(params)));
-    return response.length === 0 ? 'acknowledged' : 'unconfirmed';
+    if (response.length === 0) return 'acknowledged';
+    try {
+      const result = ReadedReport.deserialize(
+        decode(ReadedReport.respSchema, response, { strict: true }),
+      );
+      if (result.resultCode !== 0) return 'unconfirmed';
+      const row =
+        params.kind === 'group'
+          ? result.groups.find((item) => item.groupId === params.groupUin)
+          : result.c2c.find((item) => item.uid === params.targetUid);
+      return row?.resultCode === 0 && row.readSeq >= params.sequence
+        ? 'acknowledged'
+        : 'unconfirmed';
+    } catch {
+      return 'unconfirmed';
+    }
   }
 }
