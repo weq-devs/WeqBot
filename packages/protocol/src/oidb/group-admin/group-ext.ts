@@ -60,6 +60,7 @@ const MODIFY_GROUP_EXT_RESP = message([
 export interface GroupExtRobotOption {
   robotMemberSwitch: number;
   robotMemberExamine: number;
+  settingFields?: Partial<Record<'robotMemberSwitch' | 'robotMemberExamine', number>>;
 }
 
 export interface FetchGroupExtInfoParams {
@@ -81,9 +82,14 @@ export namespace FetchGroupExtInfo {
     };
   }
 
-  export function deserialize(body: Record<string, unknown>): GroupExtRobotOption {
+  export function deserialize(
+    body: Record<string, unknown>,
+    params?: FetchGroupExtInfoParams,
+  ): GroupExtRobotOption {
     const items = (body.items as Record<string, unknown>[] | undefined) ?? [];
-    const item = items[0];
+    const item = params
+      ? items.find((entry) => toInt(entry.groupCode) === params.groupId)
+      : items[0];
     if (!item) throw new Error('读不到群机器人入群选项');
 
     const resultCode = toInt(item.resultCode);
@@ -93,6 +99,14 @@ export namespace FetchGroupExtInfo {
     return {
       robotMemberSwitch: toInt(ext.inviteRobotMemberSwitch),
       robotMemberExamine: toInt(ext.inviteRobotMemberExamine),
+      settingFields: {
+        ...(ext.inviteRobotMemberSwitch === undefined
+          ? {}
+          : { robotMemberSwitch: toInt(ext.inviteRobotMemberSwitch) }),
+        ...(ext.inviteRobotMemberExamine === undefined
+          ? {}
+          : { robotMemberExamine: toInt(ext.inviteRobotMemberExamine) }),
+      },
     };
   }
 

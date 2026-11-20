@@ -11,6 +11,7 @@
 
 import { computeBkn, cookieHeader, WebAuthError, type WebCredential } from './credential';
 import { webRequestText } from './http';
+import { assertQzoneWriteAccepted, parseQzoneFormReply } from './qzone-form-reply';
 import { parseQzoneJson } from './qzone';
 
 /** 空间风控 / 票据失效的通用错误码。 */
@@ -147,5 +148,5 @@ export async function deleteQzoneMsg(
     },
     body: body.toString(),
   });
-  parseQzoneJson<{ code?: number; subcode?: number; message?: string }>(text);
+  assertQzoneWriteAccepted(parseQzoneFormReply(text), '删除说说');
 }

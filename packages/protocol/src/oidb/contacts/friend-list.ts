@@ -220,16 +220,26 @@ export async function fetchAllFriends(
 ): Promise<{ friends: FriendListEntry[]; categories: FriendCategory[] }> {
   const friends: FriendListEntry[] = [];
   const categories: FriendCategory[] = [];
+  const seen = new Set<string>();
+  const cursors = new Set<string>();
   let cookie: Uint8Array | undefined;
   const maxPages = options.maxPages ?? 100;
 
   for (let page = 0; page < maxPages; page++) {
     const result = await FetchFriendListPage.invoke(nt, sessionId, cookie ? { cookie } : {});
-    friends.push(...result.friends);
+    for (const entry of result.friends) {
+      if (!entry.friend.uid || entry.friend.uin <= 0 || seen.has(entry.friend.uid))
+        throw new Error('好友名册返回无效或重复的账号');
+      seen.add(entry.friend.uid);
+      friends.push(entry);
+    }
     if (page === 0) categories.push(...result.categories);
-    if (!result.cookie || result.cookie.length === 0) break;
+    if (!result.cookie?.length) return { friends, categories };
+    const next = Buffer.from(result.cookie).toString('hex');
+    if (cursors.has(next)) throw new Error('好友名册分页重复');
+    cursors.add(next);
     cookie = result.cookie;
   }
 
-  return { friends, categories };
+  throw new Error('好友名册分页超过上限');
 }

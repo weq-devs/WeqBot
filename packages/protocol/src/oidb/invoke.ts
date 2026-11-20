@@ -29,7 +29,7 @@ export interface OidbSpec<TParams, TResult> {
   /** 同一字段有多种已确认 wire 形态时，由具体协议合并解码。 */
   decodeResponseBody?: (bytes: Uint8Array) => Record<string, unknown>;
   serialize(params: TParams): Record<string, unknown>;
-  deserialize(body: Record<string, unknown>): TResult;
+  deserialize(body: Record<string, unknown>, params: TParams): TResult;
 }
 
 export async function invokeOidb<TParams, TResult>(
@@ -55,6 +55,7 @@ export async function invokeOidb<TParams, TResult>(
     spec.decodeResponseBody
       ? spec.decodeResponseBody(respBytes)
       : decode(spec.respSchema, respBytes),
+    params,
   );
 }
 

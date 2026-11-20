@@ -353,6 +353,7 @@ export interface QzoneMsgListResult {
   owner?: { uin: string; nickname: string };
   /** 账号说说总数(不是本页条数)。 */
   total: number;
+  totalKnown?: true;
   list: QzoneEmotion[];
 }
 
@@ -412,6 +413,9 @@ export function mapMsgList(data: RawMsgListRet): QzoneMsgListResult {
       ? { owner: { uin: ownerUin, nickname: ownerName.trim() } }
       : {}),
     total: Number(data.total ?? list.length),
+    ...(data.total !== undefined && String(data.total).match(/^\d+$/)
+      ? { totalKnown: true as const }
+      : {}),
     list: list.map((e) => {
       const pics = e.pic ?? [];
       // Official mood UI renders getRTCount() from rt_sum; fwdnum is a different counter.
