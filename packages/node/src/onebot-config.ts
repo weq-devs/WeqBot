@@ -124,6 +124,13 @@ function normalizeNetworks<T extends { name?: string; accessToken?: string }>(
     if (record.port !== undefined && (typeof record.port !== 'number' || record.port < 0)) {
       throw new OneBotConfigError('BAD_CONFIG', `${label}[${index}].port 必须是非负整数`);
     }
+    if (
+      label === 'httpServers' &&
+      record.enableCors !== undefined &&
+      typeof record.enableCors !== 'boolean'
+    ) {
+      throw new OneBotConfigError('BAD_CONFIG', `${label}[${index}].enableCors 必须是布尔值`);
+    }
     if (record.messageFormat !== 'array' && record.messageFormat !== 'string') {
       record.messageFormat = 'array';
     }

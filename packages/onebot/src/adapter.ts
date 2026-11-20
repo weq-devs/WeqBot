@@ -12,7 +12,7 @@
  */
 
 import { createLogger, WeqBotError, type Logger } from '@weqbot/common';
-import type { BotEvent, BotEventMap } from '@weqbot/session';
+import type { BotEvent, BotEventMap, InboundMessage } from '@weqbot/session';
 
 type BotEventMapEvent<K extends keyof BotEventMap> = BotEventMap[K];
 import { ActionRegistry, type ActionContext, type ActionDoc } from './action-registry';
@@ -154,6 +154,7 @@ export interface OneBotAdapter {
    * WebUI 调试页用。走的是同一个注册表，所以敏感能力 / 未注册能力照样 1404。
    */
   call(action: string, params: JsonObject): Promise<unknown>;
+  observeMessage(message: InboundMessage): Promise<boolean>;
   start(): Promise<void>;
   stop(): Promise<void>;
 }
@@ -415,6 +416,7 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
             ...(server.accessToken ? { accessToken: server.accessToken } : {}),
             messageFormat: server.messageFormat,
             reportSelfMessage: server.reportSelfMessage,
+            ...(server.enableCors === true ? { enableCors: true } : {}),
             ...(server.enableWebSocket ? { enableWebSocket: true } : {}),
           },
           dispatchFor('http', server.name),
@@ -557,6 +559,12 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
      */
     call: (action, params) => dispatch(action, params, { transport: 'webui', client: 'webui' }),
 
+    async observeMessage(message) {
+      if (!started || networks.length === 0) return false;
+      await onBotEvent({ type: 'message', message });
+      return started && networks.length > 0;
+    },
+
     async start() {
       if (starting) return starting;
       if (started) throw new Error('OneBot 适配器已经启动');
@@ -585,8 +593,9 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
         const seen = new WeakSet<object>();
         const deliver = (event: BotEvent): void => {
           if (typeof event !== 'object' || event === null) return;
-          if (seen.has(event)) return;
-          seen.add(event);
+          const identity = event.type === 'message' ? event.message : event;
+          if (seen.has(identity)) return;
+          seen.add(identity);
           void onBotEvent(event);
         };
         unsubscribers.push(

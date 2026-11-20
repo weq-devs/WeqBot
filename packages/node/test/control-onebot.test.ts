@@ -21,6 +21,8 @@ import {
   type ControlFailure,
   type ControlOneBotConfig,
   type ControlOneBotState,
+  type ControlObservedMessage,
+  type ControlStatus,
 } from '@weqbot/control';
 import type { BotEventMap, CredentialVault, StoredAccount } from '@weqbot/session';
 import type { DeviceProfile, NativePort } from '@weqbot/wire';
@@ -292,6 +294,62 @@ test('attach 不写 vault，且 uin 不一致直接拒绝', async () => {
   assert.equal(created[0]?.attach?.pid, 1234);
   assert.equal(created[0]?.attach?.uin, '10002');
   assert.equal(created[0]?.attach?.a2, 'aa');
+});
+
+test('宿主消息属于当前借用会话，重放只投递一次，自建模式忽略宿主来源', async () => {
+  const message: ControlObservedMessage = {
+    messageId: '1234567890123456789',
+    scene: 'group',
+    peer: { id: '55001' },
+    sender: { id: '20003' },
+    seq: 5,
+    time: 1700000000,
+    elements: [{ kind: 'text', textContent: '本地消息' }],
+  };
+  const delivered: Array<{ self: { uin: string } }> = [];
+  const makeHost = () =>
+    createControlHost({
+      uin: '10002',
+      native: {} as NativePort,
+      vault: memoryVault(),
+      botFactory: () => ({
+        ...fakeBot(undefined),
+        onebot: {
+          observeMessage: async (value) => {
+            delivered.push(value);
+            return true;
+          },
+        } as NonNullable<Bot['onebot']>,
+      }),
+    });
+  const host = makeHost();
+  const attach = await call<unknown, ControlStatus>(host, 'attach', {
+    pid: 1234,
+    uin: '10002',
+    uid: 'uid-1',
+    guid: 'guid-1',
+    a2: 'aa',
+    d2: 'bb',
+    d2Key: 'cc',
+    subAppId: DEVICE.subAppId,
+  });
+  assert.ok(attach.ok);
+  assert.equal(attach.result.mode, 'attached');
+  assert.equal(attach.result.attachedPid, 1234);
+  const rejected = await call(host, 'onebot.observeMessage', { sessionId: 6, message });
+  assert.deepEqual(rejected, { ok: true, result: { accepted: false } });
+  const results = await Promise.all([
+    call(host, 'onebot.observeMessage', { sessionId: 7, message }),
+    call(host, 'onebot.observeMessage', { sessionId: 7, message }),
+  ]);
+  assert.deepEqual(results, Array(2).fill({ ok: true, result: { accepted: true } }));
+  assert.deepEqual(delivered, [{ ...message, self: { uin: '10002' } }]);
+
+  const standalone = makeHost();
+  await call(standalone, 'login', { a1: '090807', guid: 'guid-1', uid: 'uid-1', device: DEVICE });
+  const differentMode = await call(standalone, 'onebot.observeMessage', { sessionId: 7, message });
+  assert.deepEqual(differentMode, { ok: true, result: { accepted: false } });
+  assert.equal(delivered.length, 1);
 });
 
 test('attach 之后 login 被拒（两条凭据路径互斥）', async () => {

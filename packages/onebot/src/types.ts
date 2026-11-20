@@ -60,6 +60,7 @@ export interface HttpServerNetwork extends NetworkBase, WsFrameLimitConfig {
   host?: string;
   port: number;
   path?: string;
+  enableCors?: boolean;
   /** 在同一个 HTTP 监听上接受 OneBot WS 客户端。 */
   enableWebSocket?: boolean;
 }

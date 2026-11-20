@@ -15,8 +15,10 @@
  *   2. 日志只走 stderr —— stdout 留给可能被重定向的诊断输出。
  */
 
+import { realpathSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { createLogger, configureLogging } from '@weqbot/common';
 import { adaptNativeBinding } from '@weqbot/wire';
 import { FileCredentialVault } from '@weqbot/session';
@@ -121,8 +123,17 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
   return -1;
 }
 
+function isEntryPoint(path: string | undefined): boolean {
+  if (!path) return false;
+  try {
+    return realpathSync(path) === fileURLToPath(import.meta.url);
+  } catch {
+    return false;
+  }
+}
+
 // 直接执行时进 main；被测试 import 时不自动跑。
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+if (isEntryPoint(process.argv[1])) {
   void main().then((code) => {
     if (code >= 0) process.exit(code);
   });

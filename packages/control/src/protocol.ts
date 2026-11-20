@@ -85,6 +85,7 @@ export interface ControlHttpServer extends ControlNetworkBase {
   host?: string;
   port: number;
   path?: string;
+  enableCors?: boolean;
   /** 同一个监听上是否同时接受 OneBot WS 客户端。 */
   enableWebSocket?: boolean;
 }
@@ -133,6 +134,20 @@ export interface ControlOneBotState {
   config: ControlOneBotConfig | null;
   /** 实时监听；账号未上线时为空数组。 */
   listeners: ControlOneBotListener[];
+}
+
+/** 宿主观察到的本地 QQ 消息。账号身份来自 daemon 进程，调用方不提供 self。 */
+export interface ControlObservedMessage {
+  messageId: string;
+  seq: number;
+  clientSequence?: number;
+  ntMsgSeq?: number;
+  random?: number;
+  time: number;
+  scene: 'private' | 'group';
+  peer: { id: string; uid?: string };
+  sender: { id: string; uid?: string; name?: string };
+  elements: Array<Record<string, unknown> & { kind: string }>;
 }
 
 /**
@@ -224,6 +239,11 @@ export interface ControlMethods {
     params: { config: ControlOneBotConfig | null };
     result: ControlOneBotState;
   };
+  /** 借用 QQ 会话时接收宿主观察的新消息，复用 OneBot 网络及消息缓存。 */
+  'onebot.observeMessage': {
+    params: { sessionId: number; message: ControlObservedMessage };
+    result: { accepted: boolean };
+  };
   /** 主动下线并退出进程；宿主在 `before-quit` 里调。 */
   shutdown: { params: { reason?: string }; result: null };
 }
@@ -235,6 +255,8 @@ export type ControlResult<M extends ControlMethod> = ControlMethods[M]['result']
 /** sidecar 暴露给宿主的只读状态。 */
 export interface ControlStatus {
   uin: string | null;
+  mode?: 'attached' | 'standalone';
+  attachedPid?: number;
   state: 'idle' | 'connecting' | 'online' | 'degraded' | 'closed';
   /** 会话 ID（native 分配）；未打开会话时 null。 */
   sessionId: number | null;
