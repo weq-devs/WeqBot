@@ -39,6 +39,8 @@ export interface TransGroupFileResult {
 export interface TransGroupFileParams {
   groupId: number;
   fileId: string;
+  /** 原文件的业务号，从群文件列表取得。旧调用省略时沿用 102。 */
+  busId?: number;
 }
 
 export namespace TransGroupFile {
@@ -55,8 +57,11 @@ export namespace TransGroupFile {
     }
     const fileId = String(p.fileId ?? '').trim();
     if (!fileId) throw new Error('fileId 不能为空');
+    const busId = p.busId ?? 102;
+    if (!Number.isInteger(busId) || busId <= 0 || busId > 0xffffffff)
+      throw new Error('群文件业务号无效');
     return {
-      transFile: { groupUin: BigInt(p.groupId), appId: 7, busId: 102, fileId },
+      transFile: { groupUin: BigInt(p.groupId), appId: 7, busId, fileId },
     };
   };
 
