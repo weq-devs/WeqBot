@@ -13,6 +13,7 @@ export interface GroupFileItem {
   busId: number;
   uploadedTime: number;
   expireTime: number;
+  expireTimeKnown?: true;
   modifiedTime: number;
   downloadedTimes: number;
   uploaderUin: number;
@@ -90,6 +91,9 @@ export namespace ListGroupFiles {
           busId: toInt(f.busId),
           uploadedTime: toInt(f.uploadedTime),
           expireTime: toInt(f.expireTime),
+          ...(typeof f.expireTime === 'number' || typeof f.expireTime === 'bigint'
+            ? { expireTimeKnown: true as const }
+            : {}),
           modifiedTime: toInt(f.modifiedTime),
           downloadedTimes: toInt(f.downloadedTimes),
           uploaderUin: toInt(f.uploaderUin),

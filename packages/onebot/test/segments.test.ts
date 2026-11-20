@@ -15,12 +15,19 @@ test('入站文本 / at / 表情 → segment', async () => {
     { kind: 'text', textContent: '你好' },
     { kind: 'at', atTargetUin: 10001, textContent: '@某人 ' },
     { kind: 'face', faceId: 14 },
+    {
+      kind: 'emojiBounce',
+      emojiBounceId: 182,
+      emojiBounceName: '笑哭',
+      emojiBounceTextSummary: '对方弹射了10个[笑哭]',
+    },
   ];
   const segments = await elementsToSegments(elements, { isGroup: true, selfId: 1 });
   assert.deepEqual(segments, [
     { type: 'text', data: { text: '你好' } },
     { type: 'at', data: { qq: '10001' } },
     { type: 'face', data: { id: '14' } },
+    { type: 'emoji_bounce', data: { face_id: 182, name: '笑哭', count: 10 } },
   ]);
 });
 

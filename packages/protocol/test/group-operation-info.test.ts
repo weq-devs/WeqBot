@@ -105,3 +105,24 @@ test('永久全员禁言的 uint64 最大值不会丢掉其他权限', () => {
 test('无效群号不能发出权限请求', () => {
   for (const groupId of [0, -1, 1.5, Number.NaN]) assert.throws(() => Query.serialize({ groupId }));
 });
+
+test('管理员权限解析收到原请求，拒绝错群或错成员', async () => {
+  const { GetAdminPermissions } = await import('../src/oidb/group-admin/admin-permissions');
+  const { nt } = fakeOidb(() =>
+    encode(GetAdminPermissions.respSchema, {
+      groupCode: 123n,
+      members: [{ memberUin: 10001n, ext: { permissions: { items: [{ item: 2, value: 2 }] } } }],
+    }),
+  );
+  const permission = await GetAdminPermissions.invoke(nt, 9, { groupId: 123, userId: 10001 });
+  assert.equal(permission.recallMemberMessage, false);
+  assert.equal(permission.kickMember, null);
+  await assert.rejects(
+    () => GetAdminPermissions.invoke(nt, 9, { groupId: 456, userId: 10001 }),
+    /群号/,
+  );
+  await assert.rejects(
+    () => GetAdminPermissions.invoke(nt, 9, { groupId: 123, userId: 10002 }),
+    /匹配成员/,
+  );
+});

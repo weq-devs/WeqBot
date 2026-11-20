@@ -145,15 +145,14 @@ test('收藏分页：游标按最小 modifyTime 前进，到底后吃掉游标',
 });
 
 test('收藏分页：非法到底标记 / 游标不前进都拒绝', async () => {
-  await assert.rejects(
-    getCollectionPage({
-      uin: '10001',
-      pskey: 'PSKEY',
-      transport: async () =>
-        envelope({ operation: { getCollectionList: { items: [], reachedBottom: 7 } } }),
-    }),
-    /invalid reachedBottom/,
-  );
+  const unknownBottom = {
+    uin: '10001',
+    pskey: 'PSKEY',
+    transport: async () =>
+      envelope({ operation: { getCollectionList: { items: [], reachedBottom: 7 } } }),
+  };
+  await assert.rejects(getCollectionPage(unknownBottom), /invalid reachedBottom/);
+  await assert.rejects(getCollectionList(unknownBottom), /invalid reachedBottom/);
 
   // 报了还有更多，却给出不比请求游标更旧的时间戳 → 继续拉就是死循环。
   await assert.rejects(
@@ -256,14 +255,20 @@ const FILE = {
   ntUid: '',
 };
 
-function downloadResponse(apply: Record<string, unknown>): Uint8Array {
+function downloadResponse(
+  apply: Record<string, unknown>,
+  headerTail = new Uint8Array(),
+): Uint8Array {
   return encodeCollectionEnvelope(
-    encode(COLLECTION_DOWNLOAD_RESP_HEAD, {
-      uin: 10001n,
-      sequence: 1,
-      command: 2,
-      operation: 20_014,
-    }),
+    Buffer.concat([
+      encode(COLLECTION_DOWNLOAD_RESP_HEAD, {
+        uin: 10001n,
+        sequence: 1,
+        command: 2,
+        operation: 20_014,
+      }),
+      headerTail,
+    ]),
     encode(COLLECTION_DOWNLOAD_RESP_BODY, { operation: { apply } }),
   );
 }
@@ -303,6 +308,38 @@ test('收藏附件下载：请求头用自己的版本，响应拼出一一次�
 
   assert.equal(resource.url, 'https://ftn.qq.com/ftn_handler/abcd/?fname=a%20b.txt');
   assert.equal(resource.cookie, 'skey=v1');
+});
+
+test('收藏附件下载：只接受完整头部字段之后的零填充', async () => {
+  const apply = {
+    key: new Uint8Array([0xab, 0xcd]),
+    httpsHost: 'ftn.qq.com',
+    httpsPort: 443,
+    cookieName: 'skey',
+    cookieValue: 'v1',
+    route: { type: 1 },
+  };
+  const params = {
+    uin: '10001',
+    pskey: 'PSKEY',
+    cid: 'c1',
+    clientBuild: '7.0.2-53644',
+    file: FILE,
+  };
+  const result = await applyCollectionFileDownload({
+    ...params,
+    transport: async () => downloadResponse(apply, Uint8Array.of(0)),
+  });
+  assert.equal(result.url, 'https://ftn.qq.com/ftn_handler/abcd/?fname=a%20b.txt');
+  for (const tail of [Uint8Array.of(0x2a, 0x05, 0x61), Uint8Array.of(0, 0, 1)]) {
+    await assert.rejects(
+      applyCollectionFileDownload({
+        ...params,
+        transport: async () => downloadResponse(apply, tail),
+      }),
+      /返回无效响应/,
+    );
+  }
 });
 
 test('收藏附件下载：未验证版本 / 服务端错误 / 非 QQ 域都拒收', async () => {

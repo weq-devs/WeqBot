@@ -1,9 +1,7 @@
 /**
  * 空间写接口回执解析 + 转发请求形状。
  *
- * 用例来自 WeQ `packages/service/test/qzone_web_actions.test.ts`（13 条）：
- * 那边用 `@babel/parser` + `parse5` 做 AST 判断，这边换成零依赖词法扫描，
- * 但**行为必须一致** —— 字符串 / 注释 / 伪回调都不能被当成成功回执。
+ * 复用 WeQ 的 HTML／JavaScript 解析行为，字符串、注释和伪回调均不算回执。
  *
  * 网络层用假的 `fetch` 拦住 `webRequestText`，只验请求体与解析结果。
  */
@@ -84,6 +82,19 @@ test('其它函数名不算回执', () => {
   );
 });
 
+test('只接受实际脚本里恰有一个对象实参的 FormSender 回调', () => {
+  for (const html of [
+    '<html><script>frameElement.callback({code:0}, null);</script></html>',
+    '<html><!-- <script>frameElement.callback({code:0});</script> --></html>',
+  ]) {
+    assert.throws(() => parseQzoneFormReply(html), /未确认/);
+  }
+  assert.equal(
+    parseQzoneFormReply('<script>parent["frameElement"]["callback"]({code:0});</script>').code,
+    0,
+  );
+});
+
 test('两个回调 / 零个回调都算结果未确认', () => {
   assert.throws(
     () =>
@@ -154,7 +165,7 @@ test('needVerify / verifyurl 明确提示去空间验证', async () => {
 });
 
 test('登录态失效抛 WebAuthError（好让 withRetry 换票）', async () => {
-  for (const code of [-3000, -4009, -10000, -10001, -10003]) {
+  for (const code of [-3000, -4009, -10001, -10003]) {
     transport(JSON.stringify({ code }));
     await assert.rejects(
       () => forwardQzoneMsg(cred, '10004', 'post', ''),
@@ -162,6 +173,12 @@ test('登录态失效抛 WebAuthError（好让 withRetry 换票）', async () =>
       `code=${code} 应换票`,
     );
   }
+  const calls = transport(JSON.stringify({ code: -10000, message: '使用人数过多' }));
+  await assert.rejects(
+    () => forwardQzoneMsg(cred, '10004', 'post', ''),
+    (error: Error) => error.name !== 'WebAuthError' && error.message.includes('使用人数过多'),
+  );
+  assert.equal(calls.length, 1);
 });
 
 test('身份非法 / 转发语过长在联网前拒绝', async () => {

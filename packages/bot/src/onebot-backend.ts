@@ -131,7 +131,7 @@ import {
   uploadGroupAlbumImage,
   uploadGroupAlbumVideo,
   setQzonePublicCommentLike,
-  setQzoneBlack,
+  setQzoneFriendPermission,
   setQzoneMsgRight,
   replyQzoneMsg,
   setQzonePublicFollow,
@@ -2746,7 +2746,7 @@ function createQzoneBackend(options: {
     },
     async setBan(userId: number, enable: boolean) {
       const cred = await source.forDomain(domain);
-      await setQzoneBlack(cred, String(userId), enable);
+      await setQzoneFriendPermission(cred, 'blocked', String(userId), enable);
     },
     async publish(content: string, images: string[], ugcRight?: number, targetUins?: string[]) {
       const cred = await source.forDomain(domain);

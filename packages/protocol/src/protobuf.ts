@@ -275,6 +275,14 @@ class Reader {
     return this.pos >= this.data.length;
   }
 
+  hasTrailingZeroPadding(): boolean {
+    if (this.data[this.pos] !== 0) return false;
+    if (this.data.subarray(this.pos + 1).some((byte) => byte !== 0)) {
+      throw new Error('protobuf: nonzero data after padding');
+    }
+    return true;
+  }
+
   varint(): bigint {
     let result = 0n;
     let shift = 0n;
@@ -383,15 +391,17 @@ function unzigzag(n: bigint): bigint {
 export function decode(
   schema: ProtoMessage,
   data: Uint8Array,
-  options: { strict?: boolean } = {},
+  options: { strict?: boolean; allowTrailingZeroPadding?: boolean } = {},
 ): Record<string, unknown> {
   const byTag = new Map<number, ProtoField>();
   for (const f of schema.fields) byTag.set(f.tag, f);
 
   const r = new Reader(data, options.strict);
   const out: Record<string, unknown> = {};
+  const nestedOptions = options.allowTrailingZeroPadding ? { strict: r.strict } : options;
 
   while (!r.eof) {
+    if (options.allowTrailingZeroPadding && r.hasTrailingZeroPadding()) break;
     const { field, wire } = r.tag();
     const def = byTag.get(field);
     if (options.strict && def && wire !== wireOf(def.type))
@@ -402,7 +412,7 @@ export function decode(
     }
 
     const value = isMessage(def.type)
-      ? decode(def.type, r.lenDelim(), options)
+      ? decode(def.type, r.lenDelim(), nestedOptions)
       : readScalar(r, def.type);
 
     if (def.repeated) {

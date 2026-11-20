@@ -99,6 +99,9 @@ export interface GroupDetailInfo {
   groupFlagExt4: number;
   noFingerOpen: number;
   noCodeFingerOpen: number;
+  settingFields?: Partial<
+    Record<'privilegeFlag' | 'groupFlagExt4' | 'noFingerOpen' | 'noCodeFingerOpen', number>
+  >;
 }
 
 export namespace FetchGroupDetail {
@@ -137,12 +140,15 @@ export namespace FetchGroupDetail {
     },
   });
 
-  export const deserialize = (body: Record<string, unknown>): GroupDetailInfo => {
+  export const deserialize = (body: Record<string, unknown>, params?: Params): GroupDetailInfo => {
     const info = body.groupInfo as Record<string, unknown> | undefined;
     const results = info?.results as Record<string, unknown> | undefined;
     if (!results) throw new Error('0x88D_0 回包缺少 groupInfo.results');
     const groupId = toInt(results.uin);
-    if (groupId !== toInt(info?.uin) && toInt(info?.uin) !== 0) {
+    if (
+      (params && groupId !== params.groupId) ||
+      (groupId !== toInt(info?.uin) && toInt(info?.uin) !== 0)
+    ) {
       throw new Error('0x88D_0 回包的群号不一致');
     }
     return {
@@ -155,6 +161,11 @@ export namespace FetchGroupDetail {
       groupFlagExt4: toInt(results.groupFlagExt4),
       noFingerOpen: toInt(results.noFingerOpen),
       noCodeFingerOpen: toInt(results.noCodeFingerOpen),
+      settingFields: Object.fromEntries(
+        ['privilegeFlag', 'groupFlagExt4', 'noFingerOpen', 'noCodeFingerOpen']
+          .filter((key) => results[key] !== undefined)
+          .map((key) => [key, toInt(results[key])]),
+      ),
     };
   };
 

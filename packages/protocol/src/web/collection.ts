@@ -23,6 +23,7 @@ import {
   COLLECTION_RESP_BODY,
   COLLECTION_RESP_HEAD,
 } from './collection-schemas';
+import { WebRequestError } from './http';
 
 const ENDPOINT = 'https://collector.weiyun.com/collector.fcg';
 const HOST = 'collector.weiyun.com';
@@ -93,7 +94,7 @@ export interface CollectionListParams {
   pskey: string;
   category?: number;
   count?: number;
-  transport?: CollectionTransport;
+  transport?: CollectionTransport | undefined;
 }
 
 export interface CollectionHttpRequest {
@@ -108,7 +109,7 @@ export interface CollectionHttpRequest {
    * 合成一个 signal 交给 `fetch`，否则取消只能等到超时。现有的自定义 transport
    * 可以不看它（它们可以只用 `timeoutMs`）。
    */
-  signal?: AbortSignal;
+  signal?: AbortSignal | undefined;
 }
 
 export type CollectionTransport = (request: CollectionHttpRequest) => Promise<Uint8Array>;
@@ -314,23 +315,13 @@ async function defaultTransport(request: CollectionHttpRequest): Promise<Uint8Ar
 export async function getCollectionList(
   params: CollectionListParams,
 ): Promise<CollectionListResult> {
-  const uin = positiveUin(params.uin);
-  if (!params.pskey) throw new Error('collection p_skey is empty');
   const category = validCategory(params.category ?? 0);
   const count = positiveCount(params.count ?? PAGE_SIZE);
   const targetMatchCount = category === 0 ? count : count + 1;
-  const transport = params.transport ?? defaultTransport;
-  const headers = {
-    'Content-Type': 'application/octet-stream',
-    Cookie: `uin=${params.uin};vt=${TICKET_TYPE};vi=${params.pskey};appid=${APP_ID}`,
-    Host: HOST,
-    Range: 'bytes=0-',
-  } as const;
 
   const matched: CollectionItem[] = [];
   const seen = new Set<string>();
-  let sequence = 1;
-  let timeStamp = INITIAL_TIMESTAMP;
+  let cursor: CollectionNetworkCursor | null = null;
   let serverHasMore = true;
   let errMsg = '';
   let pages = 0;
@@ -344,56 +335,29 @@ export async function getCollectionList(
     }
     pages += 1;
 
-    const bytes = await transport({
-      url: ENDPOINT,
-      headers,
-      body: requestBytes(uin, params.pskey, sequence, timeStamp),
+    const page = await readCollectionPage({
+      uin: params.uin,
+      pskey: params.pskey,
+      cursor,
+      transport: params.transport,
       timeoutMs: Math.min(REQUEST_TIMEOUT_MS, remaining),
     });
-    const { head, body } = decodeEnvelope(bytes);
-    const retCode = typeof head.retCode === 'number' ? head.retCode : 0;
-    if (retCode !== 0) {
-      throw new Error(
-        `collection service error ${retCode}: ${str(head.retMsg) || str(head.promptMsg) || 'unknown error'}`,
-      );
-    }
-    errMsg = str(head.retMsg);
+    errMsg = page.errMsg;
+    serverHasMore = page.hasMore;
+    cursor = page.nextCursor;
 
-    const operation = body.operation as Record<string, unknown> | undefined;
-    const page = operation?.getCollectionList as Record<string, unknown> | undefined;
-    if (!page) throw new Error('collection response is missing operation 20000');
-
-    const wireItems = (page.items as Record<string, unknown>[] | undefined) ?? [];
-    serverHasMore = num(page.reachedBottom) === 0;
-    let nextTimeStamp: bigint | null = null;
-
-    for (const wireItem of wireItems) {
+    for (const wireItem of page.items) {
       const cid = str(wireItem.cid);
-      if (!cid) throw new Error('collection item is missing cid');
       if (!wireItem.author) throw new Error(`collection item ${cid} is missing author`);
-      const modifyTime =
-        typeof wireItem.modifyTime === 'bigint'
-          ? wireItem.modifyTime
-          : BigInt(typeof wireItem.modifyTime === 'number' ? wireItem.modifyTime : 0);
-      if (modifyTime <= 0n) throw new Error(`collection item ${cid} is missing modifyTime`);
-      if (nextTimeStamp === null || modifyTime < nextTimeStamp) nextTimeStamp = modifyTime;
-
+      if (typeof wireItem.modifyTime !== 'bigint' || wireItem.modifyTime <= 0n) {
+        throw new Error(`collection item ${cid} is missing modifyTime`);
+      }
       const item = mapItem(wireItem);
       const identity = `cid:${item.cid}`;
       if (seen.has(identity)) continue;
       seen.add(identity);
       if (category === 0 || item.category === category) matched.push(item);
     }
-
-    if (matched.length >= targetMatchCount || !serverHasMore) break;
-    if (wireItems.length === 0 || nextTimeStamp === null || nextTimeStamp === 0n) {
-      throw new Error('collection pagination made no progress while more data was reported');
-    }
-    if (nextTimeStamp >= timeStamp) {
-      throw new Error(`collection pagination cursor did not decrease: ${nextTimeStamp}`);
-    }
-    timeStamp = nextTimeStamp;
-    sequence += 1;
   }
 
   const collectionItemList = matched.slice(0, count);
@@ -426,9 +390,9 @@ export interface CollectionPageParams {
   uin: string;
   pskey: string;
   cursor?: CollectionNetworkCursor | null;
-  transport?: CollectionTransport;
-  signal?: AbortSignal;
-  timeoutMs?: number;
+  transport?: CollectionTransport | undefined;
+  signal?: AbortSignal | undefined;
+  timeoutMs?: number | undefined;
   /** 解码前交出来的原始响应（归档未知字段 / 真机回放）。 */
   onRawResponse?: (capture: {
     sequence: number;
@@ -522,9 +486,9 @@ export interface CollectionDetailParams {
   pskey: string;
   /** 1..20 个 cid；空 / 重复 / 控制字符会直接报错（服务端会整批失败）。 */
   cids: readonly string[];
-  transport?: CollectionTransport;
-  signal?: AbortSignal;
-  timeoutMs?: number;
+  transport?: CollectionTransport | undefined;
+  signal?: AbortSignal | undefined;
+  timeoutMs?: number | undefined;
   onRawResponse?: (capture: {
     cids: readonly string[];
     response: Uint8Array;
@@ -536,9 +500,9 @@ export interface PostCollectorParams {
   pskey: string;
   /** 已拼好的信封（见 `encodeCollectionEnvelope`）。 */
   body: Uint8Array;
-  transport?: CollectionTransport;
-  signal?: AbortSignal;
-  timeoutMs?: number;
+  transport?: CollectionTransport | undefined;
+  signal?: AbortSignal | undefined;
+  timeoutMs?: number | undefined;
 }
 
 function assertPskey(pskey: string): void {
@@ -691,9 +655,11 @@ export async function postCollector(params: PostCollectorParams): Promise<Uint8A
   } catch (cause) {
     if (controller.signal.aborted) {
       if (params.signal?.aborted) {
-        throw new Error('collection request was cancelled', { cause: params.signal.reason });
+        throw new WebRequestError('cancelled', '收藏请求已取消。', { cause: params.signal.reason });
       }
-      throw new Error(`collection request timed out after ${timeoutMs}ms`, { cause });
+      throw new WebRequestError('timeout', `collection request timed out after ${timeoutMs}ms`, {
+        cause,
+      });
     }
     throw cause;
   } finally {
@@ -713,6 +679,14 @@ export async function postCollector(params: PostCollectorParams): Promise<Uint8A
 export async function getCollectionPage(
   params: CollectionPageParams,
 ): Promise<CollectionCursorPage> {
+  const page = await readCollectionPage(params);
+  return { ...page, items: page.items.map(mapItem) };
+}
+
+/** 读取一页线上的条目，保留 bigint、字段缺失及原始信封供宿主映射。 */
+export async function readCollectionPage(
+  params: CollectionPageParams,
+): Promise<Omit<CollectionCursorPage, 'items'> & { items: Record<string, unknown>[] }> {
   const uin = positiveUin(params.uin);
   assertPskey(params.pskey);
 
@@ -731,9 +705,9 @@ export async function getCollectionPage(
     uin: params.uin,
     pskey: params.pskey,
     body: requestBytes(uin, params.pskey, sequence, timeStamp),
-    ...(params.transport ? { transport: params.transport } : {}),
-    ...(params.signal ? { signal: params.signal } : {}),
-    ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
+    transport: params.transport,
+    signal: params.signal,
+    timeoutMs: params.timeoutMs,
   });
   await params.onRawResponse?.({
     sequence,
@@ -760,7 +734,7 @@ export async function getCollectionPage(
 
   const wireItems = Array.isArray(page.items) ? (page.items as Record<string, unknown>[]) : [];
   const seen = new Set<string>();
-  const items: CollectionItem[] = [];
+  const items: Record<string, unknown>[] = [];
   let nextTimeStamp: bigint | null = null;
   for (const wireItem of wireItems) {
     const cid = str(wireItem.cid);
@@ -769,7 +743,7 @@ export async function getCollectionPage(
     if (nextTimeStamp === null || modifyTime < nextTimeStamp) nextTimeStamp = modifyTime;
     if (seen.has(cid)) continue;
     seen.add(cid);
-    items.push(mapItem(wireItem));
+    items.push(wireItem);
   }
 
   // 报了还有更多，但游标没往前走 → 继续拉只会死循环，宁可报错也不要卡住宿主。
@@ -798,6 +772,14 @@ export async function getCollectionPage(
 export async function getCollectionDetails(
   params: CollectionDetailParams,
 ): Promise<CollectionDetail[]> {
+  const details = await readCollectionDetails(params);
+  return details.map(({ cid, content }) => ({ cid, content: mapContent(content) }));
+}
+
+/** 读取并按请求顺序关联原始详情，留给宿主转换为各自的缓存模型。 */
+export async function readCollectionDetails(
+  params: CollectionDetailParams,
+): Promise<Array<{ cid: string; content: Record<string, unknown> }>> {
   const uin = positiveUin(params.uin);
   assertPskey(params.pskey);
 
@@ -817,9 +799,9 @@ export async function getCollectionDetails(
     uin: params.uin,
     pskey: params.pskey,
     body: detailRequestBytes(uin, params.pskey, params.cids),
-    ...(params.transport ? { transport: params.transport } : {}),
-    ...(params.signal ? { signal: params.signal } : {}),
-    ...(params.timeoutMs ? { timeoutMs: params.timeoutMs } : {}),
+    transport: params.transport,
+    signal: params.signal,
+    timeoutMs: params.timeoutMs,
   });
   await params.onRawResponse?.({ cids: params.cids, response: bytes });
 
@@ -842,6 +824,6 @@ export async function getCollectionDetails(
   }
   return contents.map((raw, index) => ({
     cid: params.cids[index]!,
-    content: mapContent(raw),
+    content: raw,
   }));
 }
