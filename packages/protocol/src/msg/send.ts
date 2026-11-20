@@ -2,17 +2,18 @@
  * 发消息 —— `MessageSvc.PbSendMsg`（原始 SSO 命令，无 OIDB 信封）。
  *
  * 四个场景共用同一条命令，设备正文另走 msgContent：
- *   群聊       routingHead.grp.groupCode          + contentHead { type: 1 }
- *   私聊       routingHead.c2c.{uin,uid}          + contentHead { type:1, c2cCmd:11 }
+ *   群聊       routingHead.grp.groupCode          + contentHead { type:1, subType:0, c2cCmd:0 }
+ *   私聊文本（有 UID）routingHead.c2c.uid         + contentHead { type:1, subType:0, c2cCmd:0 }
+ *                                                 + syncCookie.msgFlag（field 6）
+ *   其余私聊   routingHead.c2c.{uin,uid?}          + contentHead { type:1, c2cCmd:11 }
  *                                                 + ctrl.msgFlag（field 12）
  *   群临时会话 routingHead.grpTmp{groupUin,toUid} + contentHead { type:1, subType:0, c2cCmd:0 }
  *                                                 + syncCookie.msgFlag（field 6）
  *   我的设备   routingHead.trans0x211{toUin,ccCmd:7,uid} + 数据线 msgContent
  *
- * 私聊与群临时会话**不是同一套字节**，两边都有真机说法：私聊那两个值（c2cCmd=11 +
- * ctrl@12）是被真机验证过能发出去的既有形状；群临时会话按 2026-09-29 的真机抓包对齐
- * —— `subType=0` / `c2cCmd=0` 显式写、时间戳落在 field 6。见 `./send-schemas` 的
- * SEND_CONTENT_HEAD_TEMP / SEND_SYNC_COOKIE，以及 `resolveRouting` 里的逐场景说明。
+ * 2026-11-21 的真机私聊文本抓包使用 UID 路由，并与群临时会话共用显式零值的
+ * ContentHead 和 field 6 时间戳格式。见 `./send-schemas` 的 SEND_CONTENT_HEAD_TEMP /
+ * SEND_SYNC_COOKIE。
  * （对照 SnowLuma `packages/core/src/bridge/apis/message.ts` 的 sendGroup /
  * sendPrivate / sendGroupTempMessage。）
  *
@@ -68,7 +69,7 @@ export interface SendMessageParams {
   groupId?: number;
   /** 私聊目标 QQ 号（四种目标只指定一种）。 */
   userUin?: number;
-  /** 私聊目标 uid；带上则一并写进 routingHead.c2c.uid（媒体消息必需）。 */
+  /** 私聊目标 uid；纯文本有 uid 时按 UID 路由，媒体消息需要 uid。 */
   userUid?: string;
   /** 群临时会话目标（四种目标只指定一种）。 */
   groupTemp?: SendGroupTempTarget;
@@ -80,11 +81,11 @@ export interface SendMessageParams {
   elements: SendElement[];
   /** 客户端随机数（去重 / 回执用）；缺省随机生成。 */
   random?: number;
-  /** 客户端序号；缺省群聊 0、私聊/临时会话自增。 */
+  /** 客户端序号，缺省使用进程内自增序号。 */
   clientSequence?: number;
   /**
-   * 覆盖时间戳（Unix 秒）；缺省当前时间。只有私聊（`ctrl`，field 12）与群临时会话
-   * （`syncCookie`，field 6）带；群聊不带。
+   * 覆盖时间戳（Unix 秒）；缺省当前时间。有 UID 的纯文本私聊和群临时会话写
+   * `syncCookie`（field 6），其余普通私聊写 `ctrl`（field 12）。
    */
   msgFlag?: number;
   /** 发送场景覆盖；缺省按 routing 推导。 */
@@ -175,13 +176,10 @@ function defaultRandom(): number {
   return randomInt(1, 0x7fffffff);
 }
 
-/**
- * 私聊 clientSequence 的自增游标（群聊不用）。与 QQ 客户端一样是会话内单调递增
- * 的序号，用于回执对账；跨进程重启从 1 重新开始没有影响。
- */
+/** 进程内的 clientSequence 游标，从 1 到 uint32 上限循环。 */
 let clientSequenceCursor = 0;
 export function nextClientSequence(): number {
-  clientSequenceCursor = (clientSequenceCursor + 1) & 0xffffffff;
+  clientSequenceCursor = (clientSequenceCursor % 0xffffffff) + 1;
   return clientSequenceCursor;
 }
 
@@ -189,15 +187,9 @@ interface RoutingPlan {
   scene: SendScene;
   routingHead: Record<string, unknown>;
   contentHead: Record<string, unknown>;
-  /**
-   * 请求容器用哪份 schema —— 群临时会话要「零值也上 wire」的那份
-   * （{@link SEND_MESSAGE_REQUEST_TEMP}），其余场景用主 schema。
-   */
+  /** 请求 schema 决定 ContentHead 是否显式编码零值。 */
   requestSchema: ProtoMessage;
-  /**
-   * 时间戳写哪一格：私聊 `ctrl`（field 12，既有形状）/ 群临时会话 `syncCookie`
-   * （field 6，2026-09-29 真机抓包）/ 群聊 `null`（不带）。
-   */
+  /** 时间戳的位置，null 表示省略。 */
   timestampField: 'ctrl' | 'syncCookie' | null;
   msgContent?: Uint8Array;
 }
@@ -265,9 +257,8 @@ function resolveRouting(params: SendMessageParams): RoutingPlan {
     return {
       scene: 'group',
       routingHead: { grp: { groupCode: params.groupId } },
-      // 群聊不带 c2cCmd/subType，也不带时间戳。
-      contentHead: { type: 1 },
-      requestSchema: SEND_MESSAGE_REQUEST,
+      contentHead: { type: 1, subType: 0, c2cCmd: 0 },
+      requestSchema: SEND_MESSAGE_REQUEST_TEMP,
       timestampField: null,
     };
   }
@@ -275,6 +266,15 @@ function resolveRouting(params: SendMessageParams): RoutingPlan {
   if (params.userUin !== undefined) {
     if (!Number.isSafeInteger(params.userUin) || params.userUin <= 0) {
       throw new Error(`userUin 非法: ${String(params.userUin)}`);
+    }
+    if (params.userUid && params.elements.every((element) => element.kind === 'text')) {
+      return {
+        scene: 'c2c',
+        routingHead: { c2c: { uid: params.userUid } },
+        contentHead: { type: 1, subType: 0, c2cCmd: 0 },
+        requestSchema: SEND_MESSAGE_REQUEST_TEMP,
+        timestampField: 'syncCookie',
+      };
     }
     return {
       scene: 'c2c',
@@ -298,8 +298,6 @@ function resolveRouting(params: SendMessageParams): RoutingPlan {
   return {
     scene: 'group-temp',
     routingHead: { grpTmp: { groupUin: temp.groupUin, toUid: temp.toUid } },
-    // 同一套 c2c 形状，但真机（2026-09-29 抓包）把 subType=0 / c2cCmd=0 也显式写出来，
-    // 时间戳则落在 field 6：所以这里换 schema + 换格子，与私聊那支**故意不一样**。
     contentHead: { type: 1, subType: 0, c2cCmd: 0 },
     requestSchema: SEND_MESSAGE_REQUEST_TEMP,
     timestampField: 'syncCookie',
@@ -332,6 +330,7 @@ function resolveMediaContext(
     uin: media.uin,
     scene: resolveScene(params),
     ...(params.dress ? { dress: params.dress } : {}),
+    includeDefaultDress: params.groupId !== undefined,
     // 群临时会话不算群场景：上传走私聊形状（与 SnowLuma 一致）。
     groupId: params.groupId,
     userUid: params.userUid ?? params.groupTemp?.toUid,
@@ -352,13 +351,8 @@ function assembleRequest(
   if (!Number.isSafeInteger(random) || random < 0) {
     throw new Error(`random 非法: ${String(params.random)}`);
   }
-  // 私聊、群临时及设备消息用自增序号；设备文件虽不带 ctrl，也不能退成群聊的 0。
   const clientSequence =
-    params.clientSequence !== undefined
-      ? params.clientSequence
-      : plan.scene !== 'group'
-        ? nextClientSequence()
-        : 0;
+    params.clientSequence !== undefined ? params.clientSequence : nextClientSequence();
   if (!Number.isSafeInteger(clientSequence) || clientSequence < 0) {
     throw new Error(`clientSequence 非法: ${String(params.clientSequence)}`);
   }
@@ -402,6 +396,7 @@ export function buildSendRequest(params: SendMessageParams): SendRequestBuild {
       : buildSendElems(params.elements, {
           scene,
           ...(params.dress ? { dress: params.dress } : {}),
+          includeDefaultDress: plan.scene === 'group',
         }),
   );
 }
@@ -427,7 +422,11 @@ export async function buildSendRequestWithMedia(
     return assembleRequest(
       params,
       plan,
-      buildSendElems(params.elements, { scene, ...(params.dress ? { dress: params.dress } : {}) }),
+      buildSendElems(params.elements, {
+        scene,
+        ...(params.dress ? { dress: params.dress } : {}),
+        includeDefaultDress: plan.scene === 'group',
+      }),
     );
   }
   const elems = await buildSendElemsWithMedia(

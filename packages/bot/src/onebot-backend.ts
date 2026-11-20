@@ -163,6 +163,7 @@ import {
   sendC2cMessage,
   sendGroupMessage,
   sendMessage,
+  swapFontId16,
   SendAiVoice,
   SendFlashMsg,
   SendGroupSign,
@@ -283,7 +284,7 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
   }
 
   /**
-   * 发送侧的媒体上传上下文。
+   * 发送侧的媒体上传上下文及可选字体。
    *
    * 不带它时，元素里只要有 image / record / video / flashPhoto，协议层会在
    * `resolveMediaContext` 直接抛错（「需要 params.media」）。带上是无害的：
@@ -292,7 +293,7 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
    * `pid` 形参传的是 **sessionId** —— 协议层沿用了搬运时的命名，实际语义就是
    * 会话句柄（见 TODO §13-8 的技术债）。
    */
-  function mediaParams() {
+  function sendParams(fontId?: number) {
     return {
       media: {
         nt,
@@ -300,6 +301,7 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
         uin: selfUin,
         ...(selfUid ? { selfUid } : {}),
       },
+      ...(fontId === undefined ? {} : { dress: { fontId2Raw: 0x10000 | swapFontId16(fontId) } }),
     };
   }
 
@@ -930,8 +932,12 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
     };
   }
 
-  async function sendGroupElements(groupId: number, elements: SendElement[]): Promise<SendResult> {
-    const receipt = await sendGroupMessage(nt, sessionId, groupId, elements, mediaParams());
+  async function sendGroupElements(
+    groupId: number,
+    elements: SendElement[],
+    fontId?: number,
+  ): Promise<SendResult> {
+    const receipt = await sendGroupMessage(nt, sessionId, groupId, elements, sendParams(fontId));
     if (!receipt.ok) {
       throw new Error(`发送群消息失败：result=${receipt.result} ${receipt.errMsg}`);
     }
@@ -943,11 +949,15 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
     };
   }
 
-  async function sendPrivateElements(userId: number, elements: SendElement[]): Promise<SendResult> {
+  async function sendPrivateElements(
+    userId: number,
+    elements: SendElement[],
+    fontId?: number,
+  ): Promise<SendResult> {
     const uid = options.resolveUidUin?.uidByUin(String(userId));
     const receipt = await sendC2cMessage(nt, sessionId, userId, elements, {
       ...(uid ? { userUid: uid } : {}),
-      ...mediaParams(),
+      ...sendParams(fontId),
     });
     if (!receipt.ok) {
       throw new Error(`发送私聊消息失败：result=${receipt.result} ${receipt.errMsg}`);
@@ -1024,22 +1034,27 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       };
     },
 
-    async sendGroupMessage(groupId: number, message: Segment[]): Promise<SendResult> {
-      return sendGroupElements(groupId, await toElements(message));
+    async sendGroupMessage(
+      groupId: number,
+      message: Segment[],
+      fontId?: number,
+    ): Promise<SendResult> {
+      return sendGroupElements(groupId, await toElements(message), fontId);
     },
 
     async sendPrivateMessage(
       userId: number,
       message: Segment[],
       tempGroupId?: number,
+      fontId?: number,
     ): Promise<SendResult> {
       const elements = await toElements(message);
-      if (!tempGroupId) return sendPrivateElements(userId, elements);
+      if (!tempGroupId) return sendPrivateElements(userId, elements, fontId);
       const uid = options.resolveUidUin?.uidByUin(String(userId));
       const receipt = await sendMessage(nt, sessionId, {
         groupTemp: { groupUin: tempGroupId, toUid: uid ?? '' },
         elements,
-        ...mediaParams(),
+        ...sendParams(fontId),
       });
       if (!receipt.ok) {
         throw new Error(`发送私聊消息失败：result=${receipt.result} ${receipt.errMsg}`);

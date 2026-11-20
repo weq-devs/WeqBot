@@ -17,16 +17,21 @@ const DEVICE = {
 };
 
 function memoryVault(): CredentialVault & { accounts: Map<string, StoredAccount> } {
+  // 键是 `${group}:${uin}`：同一个 uin 的本机 / 自主凭据是两个身份，测试里也不能互相覆盖。
   const accounts = new Map<string, StoredAccount>();
+  const keyOf = (uin: string, group: string) => `${group}:${uin}`;
   return {
     accounts,
-    list: async () => [...accounts.values()].map((a) => ({ uin: a.uin, uid: a.uid })),
-    get: async (uin) => accounts.get(uin),
+    list: async (group) =>
+      [...accounts.values()]
+        .filter((item) => !group || item.group === group)
+        .map((item) => ({ uin: item.uin, uid: item.uid, group: item.group })),
+    get: async (uin, group = 'self') => accounts.get(keyOf(uin, group)),
     put: async (account) => {
-      accounts.set(account.uin, account);
+      accounts.set(keyOf(account.uin, account.group), account);
     },
-    delete: async (uin) => {
-      accounts.delete(uin);
+    delete: async (uin, group = 'self') => {
+      accounts.delete(keyOf(uin, group));
     },
   };
 }
@@ -111,7 +116,7 @@ test('ping / login / status / shutdown 全链路', async () => {
   assert.ok(login && login.kind === 'response' && login.ok);
   assert.equal((login.result as { state: string }).state, 'online');
   assert.equal((login.result as { sessionId: number }).sessionId, 7);
-  assert.deepEqual([...h.vault.accounts.get('10002')!.a1], [9, 8, 7]);
+  assert.deepEqual([...h.vault.accounts.get('local:10002')!.a1], [9, 8, 7]);
 
   h.stdin.write(`${JSON.stringify(controlRequest(3, 'status', {}))}\n`);
   await waitFor(() => h.decoded.length >= 3);
@@ -183,7 +188,7 @@ test('启动期配置（--config）透传进 BotConfig，凭据仍只来自 logi
   assert.equal(config.qq?.dbPath, '/from/config.db');
   assert.equal(config.account.uin, '10002');
   // 凭据不出现在配置里。
-  assert.deepEqual([...h.vault.accounts.get('10002')!.a1], [9, 8, 7]);
+  assert.deepEqual([...h.vault.accounts.get('local:10002')!.a1], [9, 8, 7]);
 });
 
 test('login 的 qqDbPath 覆盖配置文件的值', async () => {

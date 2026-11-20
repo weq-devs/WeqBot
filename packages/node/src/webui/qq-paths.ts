@@ -23,6 +23,7 @@
 import { existsSync, readFileSync, readdirSync, statSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { posix, win32 } from 'node:path';
+import type { VerifyFileOptions } from '@weqbot/wire';
 import type { QqHints } from './qq-detect';
 import { normalizeQqDataRoot, normalizeQqInstallDir } from './qq-normalize';
 
@@ -561,6 +562,58 @@ export function readQqVersion(appDir: string | null, path: typeof posix = posix)
   } catch {
     return null;
   }
+}
+
+/**
+ * 由探测结果拼 `verify_file`（`trpc.o3.report.Report.SsoReport`）的上报参数。
+ *
+ * 三端共用同一套形状，只换安装根：Windows 的 app 目录在
+ * `<root>/versions/<cur>/resources/app`，macOS 在 `QQ.app/Contents/Resources/app`，
+ * Linux 是 `/opt/QQ/resources/app` —— 这些差异 `discoverQqPaths` 已经抹平
+ * （`appDir` 就是 `<…>/resources/app`），这里只做字符串拼接与存在性标记。
+ *
+ * **探不到就不猜**：没有 `appDir` 时返回 undefined，让 native 按平台默认；
+ * 半份路径比默认值更容易与服务端的形态比对不一致。
+ */
+export function verifyFileOptionsFor(paths: QqPaths): VerifyFileOptions | undefined {
+  const { appDir, qqExe } = paths;
+  if (!appDir) return undefined;
+
+  // 拼路径要用与探测时相同的方言。不按 `paths.platform` 判，而是看 `appDir`
+  // 本身：测试 / 交叉检查会在 Linux 上用 POSIX 串模拟 Windows 布局
+  // （`discoverQqPaths({ platform: 'win32', pathStyle: 'posix' })`），
+  // 真机 Windows 的 `appDir` 则是反斜杠串 —— 以探测结果为准最不容易错。
+  const dialect = appDir.includes('\\') ? win32 : posix;
+  const app = (...parts: string[]) => dialect.join(appDir, ...parts);
+  // 抓包里 13 条路径的顺序，与 native 的默认清单一致；只换安装根。
+  const candidates = [
+    app('app_launcher', 'index.js'),
+    app('app_launcher', 'launcher.js'),
+    app('application.asar', '165.background.js'),
+    app('application.asar', '288.background.js'),
+    app('application.asar', '357.background.js'),
+    app('application.asar', '571.background.js'),
+    app('application.asar', '790.background.js'),
+    app('application.asar', '86.background.js'),
+    app('application.asar', '875.background.js'),
+    app('application.asar', 'app_launcher', 'index.js'),
+    app('application.asar', 'app_launcher', 'launcher.js'),
+    app('application.asar', 'background.js'),
+    app('application.asar', 'node-plugin.background.js'),
+  ];
+  // 四类受检文件：顺序固定 application.asar / major.node / package.json / wrapper.node。
+  // 与 native 一致按**路径存在**判断 —— QQ 的 `application.asar` 本身就是个目录，
+  // 只认常规文件会把抓包里的 `"1"` 判成 `"0"`。
+  const fileMarks = ['application.asar', 'major.node', 'package.json', 'wrapper.node'].map(
+    (name) => (existsSync(app(name)) ? '1' : '0'),
+  );
+
+  return {
+    paths: candidates,
+    fileMarks,
+    // `qqExe` 探到了才给：探不到时 native 按平台默认，比编一个路径老实。
+    ...(qqExe ? { binaryPath: qqExe } : {}),
+  };
 }
 
 function firstExisting(candidates: string[]): string | null {

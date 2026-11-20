@@ -173,6 +173,13 @@ export interface ControlMethods {
       uid?: string;
       device?: DeviceProfile;
       qqDbPath?: string;
+      /**
+       * 账号分组，省略 = `local`。
+       *
+       * 宿主自己解 `login.db` 得到的凭据是本机账号（复用本机 guid）；扫码 / 自持
+       * 设备身份的是自主账号。两者在 vault 里分开存，不互相覆盖。
+       */
+      group?: 'local' | 'self';
     };
     result: ControlStatus;
   };

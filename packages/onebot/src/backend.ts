@@ -1135,11 +1135,16 @@ export interface OneBotBackend {
   /** 登录信息（`get_login_info`）。 */
   getLoginInfo(): Promise<LoginInfo>;
 
-  sendGroupMessage(groupId: number, message: import('./segments').Segment[]): Promise<SendResult>;
+  sendGroupMessage(
+    groupId: number,
+    message: import('./segments').Segment[],
+    fontId?: number,
+  ): Promise<SendResult>;
   sendPrivateMessage(
     userId: number,
     message: import('./segments').Segment[],
     tempGroupId?: number,
+    fontId?: number,
   ): Promise<SendResult>;
 
   recall(target: RecallTarget): Promise<void>;

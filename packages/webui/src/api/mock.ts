@@ -54,7 +54,7 @@ export const mockControls = {
     state.lockedUntil = 0;
     notify();
   },
-  /** 「已保存」来源的登录一律报 a1 失效，用来演示清理 + 跳扫码链路。 */
+  /** 自主组的登录一律报 a1 失效，用来演示清理 + 跳扫码链路。 */
   isExpireA1: () => mockExpireA1.enabled,
   setExpireA1(value: boolean): void {
     mockExpireA1.enabled = value;
@@ -109,30 +109,32 @@ const ENVIRONMENT: LoginEnvironment = {
 };
 
 // 服务端只返回有 a1 的账号（没有 a1 的点了必然失败），mock 保持一致。
-// `10002` 故意在两个来源里各有一条，用来验证「已保存 / QQ 记录」两个 tab 互不干扰。
+// `10002` 故意在两个组里各有一条，用来验证「本机 / 自主」两个 tab 互不干扰。
 const BASE_ACCOUNTS: readonly LoginAccount[] = [
   {
     uin: '10002',
     uid: 'u_LKt3AdAIMP-CUfn6ydzDzw',
     source: 'vault',
-    nickname: '冬眠的猫',
+    group: 'self',
+    nickname: '冬眠的猫（自主）',
     lastLoginAt: Date.now() - 3 * 60 * 60 * 1000,
-    // 演示「QQ 本体在线」徽标：vault 那条可以登录（QQ 没在用），
-    // login.db 那条会被标成「登录会先结束 QQ 进程」。
     qqOnline: false,
   },
   {
     uin: '10002',
     uid: 'u_LKt3AdAIMP-CUfn6ydzDzw',
     source: 'login-db',
+    group: 'local',
     nickname: '冬眠的猫',
     lastLoginAt: Date.now() - 3 * 60 * 60 * 1000,
+    // 演示「QQ 本体在线」徽标：同一账号在本机组里会被标成「登录会先结束 QQ 进程」。
     qqOnline: true,
   },
   {
     uin: '10001',
     uid: 'u_9kPq2SdLmNx6RtVw8YzAbc',
     source: 'login-db',
+    group: 'local',
     nickname: '小号测试',
     lastLoginAt: Date.now() - 9 * 24 * 60 * 60 * 1000,
     qqOnline: false,
@@ -140,7 +142,7 @@ const BASE_ACCOUNTS: readonly LoginAccount[] = [
 ];
 let ACCOUNTS: LoginAccount[] = [...BASE_ACCOUNTS];
 
-/** 开发面板的「模拟 a1 失效」开关：打开后 vault 来源的登录会报 409 A1_EXPIRED。 */
+/** 开发面板的「模拟 a1 失效」开关：打开后自主组的登录会报 409 A1_EXPIRED。 */
 const mockExpireA1 = { enabled: false };
 
 /**
@@ -486,11 +488,11 @@ export const mockApi = {
       await sleep(latency(200));
       return ACCOUNTS;
     },
-    async start(uin: string, options?: { source?: LoginAccount['source'] }) {
+    async start(uin: string, options?: { group?: LoginAccount['group'] }) {
       await sleep(latency(900));
-      if (mockExpireA1.enabled && options?.source === 'vault') {
-        // 与真后端一致：失效只清掉「我们存的」那一条，QQ 记录那条保留。
-        ACCOUNTS = ACCOUNTS.filter((item) => !(item.uin === uin && item.source === 'vault'));
+      if (mockExpireA1.enabled && options?.group === 'self') {
+        // 与真后端一致：失效只清掉这一组，同 uin 的另一组保留。
+        ACCOUNTS = ACCOUNTS.filter((item) => !(item.uin === uin && item.group === 'self'));
         throw new ApiError(409, 'A1_EXPIRED', '该账号的 a1 已失效，请扫码登录');
       }
       // 与真后端一致：登录前会结束正用着这个账号的 QQ 本体，之后在线状态变 false。

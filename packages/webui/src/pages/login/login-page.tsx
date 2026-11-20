@@ -1,15 +1,20 @@
 /**
- * 账号登录页：已保存的凭据 / QQ 登录记录 / 扫码 + 上线进度。
+ * 账号登录页：本机账号 / 自主账号 / 有头模式 / 扫码 + 上线进度。
  *
  * 环境检查已挪到「设置」页：登录只需要账号列表，安装路径和 wrapper 属于排障信息。
  *
- * **两个账号来源分成两个 tab**：vault 里的是「我们存的、用来上线的 a1」，`login.db`
- * 里的是「QQ 本体最后写进去的」。同一 uin 可能两边各有一条，语义不同、失效处理也不同
- * （a1 失效只清 vault 那条，见 `ConsoleRuntime.forgetExpiredCredential`），所以不合并。
+ * **两个账号组分成两个 tab**，因为它们连设备身份都不同（服务端看来是两合设备）：
  *
- * 三条路径都在服务端（`ConsoleRuntime.startAccount` / `startQrLogin`）；页面只展示
- * 状态。扫码进度走 SSE（`console` 事件里的 `qr`），不轮询二维码 —— 那会每 500ms
- * 拉一次 100KB 的 base64 图片。
+ * - **本机**：`login.db` 里 QQ 本体写的 a1，uid / guid 复用本机的；上线后轮换的
+ *   a1 会写回 `login.db`；
+ * - **自主**：扫码产生的凭据，guid 是首次扫码时随机生成并持久化的那个。
+ *
+ * 同一 uin 可能在两组里各有一条 —— 这正是要分开的原因（拿错 guid 就会被服务端
+ * 当成换设备）。有头模式不落凭据，仍用本机 guid。
+ *
+ * 三条路径都在服务端（`ConsoleRuntime.startAccount` / `startQrLogin` / `attachAccount`）；
+ * 页面只展示状态。扫码进度走 SSE（`console` 事件里的 `qr`），不轮询二维码 ——
+ * 那会每 500ms 拉一次 100KB 的 base64 图片。
  */
 
 import {
@@ -29,7 +34,7 @@ import { AnimatePresence, motion } from 'motion/react';
 import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
 import { api, ApiError } from '../../api';
 import type {
-  AccountSource,
+  AccountGroup,
   ConsolePhase,
   LoginAccount,
   LoginProgressEvent,
@@ -45,13 +50,8 @@ import type { LoginHint } from '../../app';
 import { AttachPanel } from './attach-panel';
 import './login.css';
 
-/** 四个 tab：两个账号来源 + 有头接入 + 扫码。 */
-type Tab = 'saved' | 'local' | 'attach' | 'qr';
-
-const ACCOUNT_SOURCE_OF: Record<'saved' | 'local', AccountSource> = {
-  saved: 'vault',
-  local: 'login-db',
-};
+/** 四个 tab：两个账号组 + 有头接入 + 扫码。 */
+type Tab = 'local' | 'self' | 'attach' | 'qr';
 
 export function LoginPage({
   phase,
@@ -64,7 +64,7 @@ export function LoginPage({
   onHintConsumed?(): void;
   onLocked(): void;
 }) {
-  const [tab, setTab] = useState<Tab>('saved');
+  const [tab, setTab] = useState<Tab>('local');
   const toast = useToast();
   /**
    * 账号列表每 4 秒重拉一次：`qqOnline` 是实时状态（用户可能在扫码期间打开 /
@@ -114,7 +114,7 @@ export function LoginPage({
   /**
    * 进度事件：**无论停在哪个 tab 都要听**。
    *
-   * 异常设备确认会在「已保存」/「QQ 记录」tab 里发生 —— 只订阅 `qr` tab 的话，
+   * 异常设备确认会在「本机账号」/「自主账号」tab 里发生 —— 只订阅 `qr` tab 的话，
    * 从账号列表点上线时页面收不到任何进度，用户看到的就是转圈。
    */
   useEffect(() => {
@@ -164,11 +164,11 @@ export function LoginPage({
     onHintConsumed?.();
   }, [hint, reloadAccounts, onHintConsumed, toast]);
 
-  const login = useEffectEvent(async (uin: string, source: AccountSource) => {
+  const login = useEffectEvent(async (uin: string, group: AccountGroup) => {
     setProgress(undefined);
-    setStarting(`${source}:${uin}`);
+    setStarting(`${group}:${uin}`);
     try {
-      const result = await api.login.start(uin, { source });
+      const result = await api.login.start(uin, { group });
       // QQ 本体正用着这个账号时，后端会先结束它再上线（页面上的徽标已经警告过）。
       if (result.endedQq > 0) {
         toast.push({
@@ -208,7 +208,8 @@ export function LoginPage({
         </motion.div>
         <motion.h1 variants={enterRise}>登录 QQ 账号</motion.h1>
         <motion.p variants={enterRise}>
-          用已经保存的凭据或本机 QQ 的登录记录上线，接上正在运行的 QQ，也可以用手机扫码。
+          「本机账号」复用本机 QQ 的 uid 与设备身份，「自主账号」是扫码产生的独立设备身份；
+          两者严格分开，不会串用 guid。也可以接上正在运行的 QQ（有头模式）。
           同一时刻只有一个账号在线；本机 QQ 的在线状态每 4 秒自动检查一次。
         </motion.p>
       </header>
@@ -237,8 +238,8 @@ export function LoginPage({
             <div className="login-tabs" role="tablist" aria-label="登录方式">
               {(
                 [
-                  ['saved', '已保存', KeyRound],
-                  ['local', 'QQ 记录', CircleUserRound],
+                  ['local', '本机账号', CircleUserRound],
+                  ['self', '自主账号', KeyRound],
                   ['attach', '有头模式', Plug],
                   ['qr', '扫码登录', QrCode],
                 ] as const
@@ -300,7 +301,7 @@ export function LoginPage({
                     <AccountsSkeleton />
                   ) : (
                     <AccountList
-                      accounts={accounts.filter((item) => item.source === ACCOUNT_SOURCE_OF[tab])}
+                      accounts={accounts.filter((item) => item.group === tab)}
                       tab={tab}
                       starting={starting}
                       progress={progress}
@@ -422,7 +423,7 @@ function QrPanel({
       <p className="login-qr-hint">
         {expired
           ? (qr?.error ?? '二维码已失效')
-          : `剩余 ${remaining} 秒 · 也可以直接用「已保存」或「QQ 记录」登录`}
+          : `剩余 ${remaining} 秒 · 也可以用「本机账号」或「自主账号」登录`}
       </p>
     </>
   );
@@ -448,12 +449,12 @@ function AccountList({
   onRescan,
 }: {
   accounts: LoginAccount[];
-  tab: 'saved' | 'local';
-  /** `${source}:${uin}`，与 `login()` 里设置的保持一致。 */
+  tab: 'local' | 'self';
+  /** `${group}:${uin}`，与 `login()` 里设置的保持一致。 */
   starting?: string;
   /** 正在上线那条的进度说明（异常设备确认时是「请在手机上确认」）。 */
   progress?: LoginProgressEvent;
-  onLogin(uin: string, source: AccountSource): void;
+  onLogin(uin: string, group: AccountGroup): void;
   onRescan(): void;
 }) {
   if (accounts.length === 0) return <EmptyAccounts tab={tab} onRescan={onRescan} />;
@@ -461,14 +462,14 @@ function AccountList({
   return (
     <ul className="login-accounts">
       {accounts.map((account) => {
-        const key = `${account.source}:${account.uin}`;
+        const key = `${account.group}:${account.uin}`;
         return (
           <li key={key}>
             <button
               type="button"
               className="login-account"
               disabled={starting !== undefined}
-              onClick={() => onLogin(account.uin, account.source)}
+              onClick={() => onLogin(account.uin, account.group)}
             >
               {account.avatarUrl ? (
                 <img
@@ -538,15 +539,15 @@ function AccountsSkeleton() {
   );
 }
 
-function EmptyAccounts({ tab, onRescan }: { tab: 'saved' | 'local'; onRescan(): void }) {
+function EmptyAccounts({ tab, onRescan }: { tab: 'local' | 'self'; onRescan(): void }) {
   return (
     <div className="login-empty">
       <AlertTriangle size={20} aria-hidden="true" />
-      <strong>{tab === 'saved' ? '还没有保存过凭据' : '没有可用的 QQ 登录记录'}</strong>
+      <strong>{tab === 'local' ? '没有可用的本机 QQ 登录记录' : '还没有自主账号'}</strong>
       <p>
-        {tab === 'saved'
-          ? 'WeqBot 保存的凭据用完之后会删掉（例如 a1 失效）。可以用 QQ 登录记录或扫码重新登录。'
-          : '这台机器上的 login.db 读不出来，或者记录里没有可用的 a1。用手机扫码登录更直接。'}
+        {tab === 'local'
+          ? '这台机器上的 login.db 读不出来，或者记录里没有可用的 a1。也可以用手机扫码登录（那样会建一个自主账号，设备身份与本机 QQ 无关）。'
+          : '扫码登录成功后会存一份自主凭据：guid 在首次扫码时生成，之后一直复用它。a1 失效时只删这一份，不影响本机账号。'}
       </p>
       <Button variant="secondary" onClick={onRescan}>
         <RefreshCw size={15} aria-hidden="true" />
@@ -567,7 +568,7 @@ function describe(cause: unknown): string {
     }
     // a1 失效：后端已经删掉 vault 里那份，这里要说清楚「为什么列表少了一条」。
     if (cause.code === 'A1_EXPIRED') {
-      return '保存的 a1 已失效，凭据已清除 —— 请用「QQ 记录」或扫码重新登录。';
+      return '保存的 a1 已失效，这一组的凭据已清除 —— 请用扫码登录，或换另一组账号。';
     }
     // 消息可能缺失（老后端 / 非 JSON 响应），此时 `ApiError` 的 message 退化成了
     // code。裸 code（`INTERNAL` / `BAD_JSON`）对用户没有任何意义，换成人话。

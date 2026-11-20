@@ -10,7 +10,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import test from 'node:test';
 import type { QqHints } from '../src/webui/qq-detect';
-import { discoverQqPaths } from '../src/webui/qq-paths';
+import { discoverQqPaths, verifyFileOptionsFor } from '../src/webui/qq-paths';
 
 /** 所有 fixture 都登记在这里，`after` 一次性清掉。 */
 const fixtures: string[] = [];
@@ -443,4 +443,75 @@ test('安装根覆盖可以是 resources/app，归一化回安装根', async () 
   assert.equal(paths.installRoot, install);
   assert.equal(paths.appDir, appDir);
   assert.equal(paths.sources.qqExe, 'override');
+});
+
+test('verify_file：按探测到的 resources/app 拼三端路径，标记跟着真实存在的文件走', async () => {
+  const root = await fixture();
+  const install = join(root, 'QQ');
+  const appDir = join(install, 'resources', 'app');
+  await mkdir(join(appDir, 'application.asar'), { recursive: true });
+  await mkdir(join(appDir, 'app_launcher'), { recursive: true });
+  await writeFile(join(install, 'qq'), '');
+  // 只有 wrapper.node 与 package.json 存在；application.asar 目录不算、「文件」。
+  await writeFile(join(appDir, 'wrapper.node'), '');
+  await writeFile(join(appDir, 'package.json'), '{"version":"3.2.35"}');
+
+  const paths = discoverQqPaths({
+    platform: 'linux',
+    home: root,
+    env: {},
+    overrides: { installDir: install },
+    hints: hintsOf({}),
+    pathStyle: 'posix',
+  });
+  const verify = verifyFileOptionsFor(paths);
+  assert.ok(verify);
+  // 13 条，顺序与抓包一致；第一项是 app_launcher。
+  assert.equal(verify.paths?.length, 13);
+  assert.equal(verify.paths?.[0], join(appDir, 'app_launcher', 'index.js'));
+  assert.equal(verify.paths?.[12], join(appDir, 'application.asar', 'node-plugin.background.js'));
+  // 标记顺序 application.asar / major.node / package.json / wrapper.node；
+  // `application.asar` 是目录，但**存在即报「1」**（native 同一条规则）。
+  assert.deepEqual(verify.fileMarks, ['1', '0', '1', '1']);
+  assert.equal(verify.binaryPath, join(install, 'qq'));
+});
+
+test('verify_file：Windows 用反斜杠拼，且探不到安装目录时整项省略', async () => {
+  const root = await fixture();
+  const qqRoot = join(root, 'QQ');
+  const versionDir = join(qqRoot, 'versions', '9.9.9');
+  const appDir = join(versionDir, 'resources', 'app');
+  await mkdir(appDir, { recursive: true });
+  await writeFile(join(qqRoot, 'QQ.exe'), '');
+  await writeFile(join(appDir, 'major.node'), '');
+
+  const paths = discoverQqPaths({
+    platform: 'win32',
+    home: root,
+    env: {},
+    overrides: { exe: join(qqRoot, 'QQ.exe') },
+    hints: hintsOf({}),
+    // 在 Linux 上模拟 Windows 布局：字符串是 POSIX 形态，用 posix 方言拼。
+    pathStyle: 'posix',
+  });
+  const verify = verifyFileOptionsFor(paths);
+  assert.ok(verify);
+  assert.equal(verify.paths?.[0], join(appDir, 'app_launcher', 'index.js'));
+  assert.deepEqual(verify.fileMarks, ['0', '1', '0', '0']);
+
+  // 真实 Windows 的 `appDir` 是反斜杠串，拼出来也必须是反斜杠。
+  const win = verifyFileOptionsFor({
+    ...paths,
+    appDir: 'C:\\Program Files\\Tencent\\QQNT\\versions\\9.9.9\\resources\\app',
+  });
+  assert.equal(
+    win?.paths?.[0],
+    'C:\\Program Files\\Tencent\\QQNT\\versions\\9.9.9\\resources\\app\\app_launcher\\index.js',
+  );
+
+  // 没有 `appDir`（QQ 没装 / 没探到）：不猜，交给 native 的平台默认。
+  assert.equal(
+    verifyFileOptionsFor({ ...paths, appDir: null, qqExe: null, wrapperNode: null }),
+    undefined,
+  );
 });

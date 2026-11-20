@@ -156,6 +156,7 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
         user_id: userId(),
         message: messageSchema(),
         auto_escape: autoEscape,
+        font_id: int('本条消息的聊天字体 ID', { minimum: 1, maximum: 65535 }),
       },
       ['message'],
     ),

@@ -1,8 +1,8 @@
 {
-  "tag": "nt-helper-20261116-af26ad3",
-  "commit": "af26ad36d5ff9add6e30ec38fd374d86fc77bd47",
-  "builtAt": "2026-11-16T09:35:44.000Z",
-  "expiresAt": "2027-01-15T09:35:44.000Z",
-  "pinnedAt": "2026-11-16",
+  "tag": "nt-helper-20261120-2f94b31",
+  "commit": "2f94b3174b64007917943f37c0f5388ca0dd8bbf",
+  "builtAt": "2026-11-20T18:42:19.000Z",
+  "expiresAt": "2027-01-19T18:42:19.000Z",
+  "pinnedAt": "2026-11-20",
   "note": "WeqBot 认这一份 native 构建（与 WeQ 同一份 full 产物；WeqBot 不用权限助手，也不读装扮资源）。升级：对同一明确 tag 使用 --version 验证后 --write-pin 并提交锚文件。"
 }

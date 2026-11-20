@@ -104,6 +104,7 @@ interface SendMsgParams {
   userId?: number;
   isGroup: boolean;
   segments: Segments;
+  fontId?: number;
 }
 
 export const sendMsg: ActionDefinition<SendMsgParams, SendOutcome> = {
@@ -119,14 +120,18 @@ export const sendMsg: ActionDefinition<SendMsgParams, SendOutcome> = {
     const isGroup = messageType === 'group' || (messageType !== 'private' && groupId !== undefined);
     if (isGroup && groupId === undefined) throw new ParamError('群消息需要 group_id');
     if (!isGroup && userId === undefined) throw new ParamError('私聊消息需要 user_id');
-    return { groupId, userId, isGroup, segments: messageSegments(raw) };
+    const fontId = raw.font_id === undefined ? undefined : requiredPositiveInt(raw, 'font_id');
+    if (fontId !== undefined && fontId > 0xffff) {
+      throw new ParamError('font_id 不能超过 65535');
+    }
+    return { groupId, userId, isGroup, segments: messageSegments(raw), fontId };
   },
-  run: async ({ groupId, userId, isGroup, segments }, ctx) => {
+  run: async ({ groupId, userId, isGroup, segments, fontId }, ctx) => {
     if (isGroup) {
-      const result = await ctx.backend.sendGroupMessage(groupId!, segments);
+      const result = await ctx.backend.sendGroupMessage(groupId!, segments, fontId);
       return intern(ctx, { isGroup: true, targetId: groupId!, ...result });
     }
-    const result = await ctx.backend.sendPrivateMessage(userId!, segments);
+    const result = await ctx.backend.sendPrivateMessage(userId!, segments, undefined, fontId);
     return intern(ctx, { isGroup: false, targetId: userId!, ...result });
   },
 };

@@ -657,7 +657,7 @@ export const GENERAL_FLAGS: ProtoMessage = message([
   f('font', 19, FONT_INFO),
 ]);
 
-export const BUBBLE_ELEM: ProtoMessage = message([f('id', 1, 'uint32')]);
+export const BUBBLE_ELEM: ProtoMessage = message([f('id', 1, 'uint32', { force: true })]);
 
 export const ELEM: ProtoMessage = message([
   f('text', 1, TEXT_ELEM),

@@ -23,6 +23,7 @@ import type {
   SessionInfo,
   SessionStatusEvent,
   SsoSessionConfig,
+  VerifyFileOptions,
 } from './types';
 
 /** napi 的 `Buffer` 参数不接受裸 `Uint8Array`，进原生前统一转换。 */
@@ -45,6 +46,7 @@ interface RawOpenSessionOptions {
   vmRva?: number | null;
   device?: DeviceProfile;
   wireProfile?: string;
+  verifyFile?: VerifyFileOptions;
 }
 
 interface RawQuickLoginOptions extends Omit<QuickLoginOptions, 'a1'> {
@@ -202,6 +204,32 @@ export interface RawNativeBinding {
     a1Payload?: string | null;
     guid?: string | null;
   }>;
+  /**
+   * 把 a1 加密后写回 `login.db` 的 `[1004]`（nt_helper 的 `updateLoginDbA1`）。
+   *
+   * 三端自己选加密方式（Linux / macOS 用设备 guid 派生，Windows 用 DPAPI），
+   * 只改 a1，不碰 `[1008]` / `[1013]` 等时间字段，提交前会回读自检。
+   * **同步**函数；QQ 本体持有该库的写锁时会失败，所以写之前必须先让它退出。
+   *
+   * 缺这个方法的老原生组件上，本机组只能「读 a1」不能「回写」，调用方要降级
+   * 而不是当作错误。
+   */
+  updateLoginDbA1?(
+    loginDbPath: string,
+    uin: string,
+    a1Payload: string,
+    algo: { pageHmacAlgorithm: string; kdfHmacAlgorithm: string },
+    dryRun?: boolean | null,
+  ): {
+    uin: string;
+    updatedRows: number;
+    /** 写入后回读解密，是否与传入的 a1 完全一致。 */
+    verified: boolean;
+    dryRun: boolean;
+    /** `guid-aes`（Linux / macOS）或 `dpapi`（Windows）。 */
+    format: string;
+    guid?: string | null;
+  };
   /** `major.node` → `{ appid, qua, version, build }`。 */
   resolveAppidFromMajor?(majorPath: string): {
     appid: string;
@@ -319,6 +347,8 @@ export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
         vmRva: options.signer.vmRva,
         device: options.device,
         wireProfile: options.wireProfile,
+        // 老产物不认这个键（napi 只读自己声明的字段），省略时行为与升级前一致。
+        ...(options.verifyFile ? { verifyFile: options.verifyFile } : {}),
       });
   }
 

@@ -18,7 +18,7 @@ import { join } from 'node:path';
 import test from 'node:test';
 import type { BotConfig } from '@weqbot/bot';
 import { createLogger, TypedEventBus, WeqBotError } from '@weqbot/common';
-import type { BotEventMap, CredentialVault, StoredAccount } from '@weqbot/session';
+import type { AccountGroup, BotEventMap, CredentialVault, StoredAccount } from '@weqbot/session';
 import type { LoginProgressEvent, RawNativeBinding } from '@weqbot/wire';
 import { ConsoleRuntime } from '../src/webui/console';
 import { HttpError } from '../src/webui/http-util';
@@ -33,6 +33,7 @@ function account(overrides: Partial<StoredAccount> = {}): StoredAccount {
     uid: UID,
     a1: new Uint8Array([1, 2, 3]),
     guid: 'guid-guid-guid-guid-guid-guid-gu',
+    group: 'local',
     device: {
       os: 'win32',
       appId: 1600001604,
@@ -47,11 +48,15 @@ function account(overrides: Partial<StoredAccount> = {}): StoredAccount {
 
 function stubVault(stored: StoredAccount, deleted: string[] = []): CredentialVault {
   return {
-    list: async () => [],
-    get: async (uin: string) => (uin === stored.uin ? stored : undefined),
+    list: async (group?: AccountGroup) =>
+      group && group !== stored.group
+        ? []
+        : [{ uin: stored.uin, uid: stored.uid, group: stored.group }],
+    get: async (uin: string, group = 'self') =>
+      uin === stored.uin && group === stored.group ? stored : undefined,
     put: async () => {},
-    delete: async (uin: string) => {
-      deleted.push(uin);
+    delete: async (uin: string, group = 'self') => {
+      deleted.push(`${group}:${uin}`);
     },
   } as unknown as CredentialVault;
 }
@@ -75,6 +80,12 @@ function makeRuntime(options: {
   deleted?: string[];
   /** 假 Bot 在 `start()` 期间推的登录进度（模拟 native 的异常设备确认）。 */
   loginProgress?: LoginProgressEvent[];
+  /** 模拟 native 的 `updateLoginDbA1`；给了才在绑定上挂这个方法。 */
+  updateA1?: (args: { dbPath: string; uin: string; payload: string }) => {
+    updatedRows: number;
+    verified: boolean;
+    format: string;
+  };
 }) {
   const captured: Array<Parameters<typeof import('@weqbot/bot').createBot>[0]> = [];
   const decryptCalls = { count: 0 };
@@ -89,6 +100,14 @@ function makeRuntime(options: {
       decryptCalls.count += 1;
       return options.rows ?? [];
     },
+    ...(options.updateA1
+      ? {
+          updateLoginDbA1: (dbPath: string, uin: string, payload: string) => {
+            const result = options.updateA1!({ dbPath, uin, payload });
+            return { uin, dryRun: false, guid: 'a'.repeat(32), ...result };
+          },
+        }
+      : {}),
   } as unknown as RawNativeBinding;
   const runtime = new ConsoleRuntime({
     native: {} as never,
@@ -232,7 +251,11 @@ test('startAccount 遇到 A1_EXPIRED：删 vault、抛 409 A1_EXPIRED', async ()
     assert.equal(error.code, 'A1_EXPIRED');
     return true;
   });
-  assert.deepEqual(deleted, ['10002'], '失效的凭据必须从 vault 删掉，否则下次还拿它重试');
+  assert.deepEqual(
+    deleted,
+    ['local:10002'],
+    '失效的凭据必须从 vault 删掉（且只删这一组），否则下次还拿它重试',
+  );
 });
 
 test('startAccount 期间把登录进度转成 SSE 的 progress 字段', async () => {
@@ -291,20 +314,21 @@ test('startAccount 遇到非 WeqBotError：仍给一句人话，不暴露原始�
   });
 });
 
-test('startAccount(source="vault") 只读 vault，不碰 login.db', async () => {
+test('自主组只读 vault，不碰 login.db', async () => {
   const { runtime, captured, decryptCalls } = makeRuntime({
     paths: pathsWith({ loginDbs: ['D:\\Tencent Files\\nt_qq\\global\\nt_db\\login.db'] }),
+    stored: account({ group: 'self' }),
     rows: [{ uin: '10002', uid: UID, a1Payload: 'deadbeef', userName: '来自 login.db' }],
   });
 
-  await runtime.startAccount('10002', { source: 'vault' });
+  await runtime.startAccount('10002', { group: 'self' });
 
   assert.equal(captured.length, 1);
   assert.equal(captured[0]!.config.account.uin, '10002');
-  assert.equal(decryptCalls.count, 0, '用户点的是「已保存」那条，不该去解密 login.db');
+  assert.equal(decryptCalls.count, 0, '自主组用自持凭据，不该去解密 login.db');
 });
 
-test('startAccount(source="login-db") 用 login.db 的 a1，即使 vault 里也有', async () => {
+test('本机组用 login.db 的 a1，即使 vault 里也有', async () => {
   const { runtime, decryptCalls } = makeRuntime({
     paths: pathsWith({ loginDbs: ['D:\\Tencent Files\\nt_qq\\global\\nt_db\\login.db'] }),
     stored: account(),
@@ -319,19 +343,58 @@ test('startAccount(source="login-db") 用 login.db 的 a1，即使 vault 里也�
     ],
   });
 
-  // vault 里本来就有这个账号；source 明确指向 login.db 时必须走解密分支，
+  // vault 里本来就有这个账号的本机镜像；本机组必须重新解 login.db，
   // 否则用户刚在 QQ 上刷新的 a1 会被 vault 里的旧值顶掉。
-  await runtime.startAccount('10002', { source: 'login-db' });
+  await runtime.startAccount('10002', { group: 'local' });
 
   assert.ok(decryptCalls.count > 0, '必须真的去解 login.db');
 });
 
-test('startAccount(source="vault") 但 vault 里没有时明确报 NO_CREDENTIAL', async () => {
+test('自主组在 vault 里没有这个账号时明确报 NO_CREDENTIAL', async () => {
   const { runtime } = makeRuntime({ paths: pathsWith(), stored: account({ uin: '99999' }) });
 
-  await assert.rejects(runtime.startAccount('10002', { source: 'vault' }), (error: unknown) => {
+  await assert.rejects(runtime.startAccount('10002', { group: 'self' }), (error: unknown) => {
     assert.ok(error instanceof HttpError);
     assert.equal(error.code, 'NO_CREDENTIAL');
     return true;
   });
+});
+
+test('本机组上线后把轮换的 a1 写回 login.db', async () => {
+  const calls: Array<{ dbPath: string; uin: string; payload: string }> = [];
+  const loginDb = 'D:\\Tencent Files\\nt_qq\\global\\nt_db\\login.db';
+  const { runtime } = makeRuntime({
+    paths: pathsWith({ loginDbs: [loginDb] }),
+    // 本机组用 login.db 的 a1（deadbeef）登录；createBot 轮换后把新值写进
+    // vault，这里让 vault 里那份与入参不同，模拟「服务端换了 a1」。
+    stored: account({ group: 'local', a1: new Uint8Array([9, 9, 9]) }),
+    rows: [{ uin: '10002', uid: UID, a1Payload: 'deadbeef', guid: 'a'.repeat(32) }],
+    updateA1: (args) => {
+      calls.push(args);
+      return { updatedRows: 1, verified: true, format: 'dpapi' };
+    },
+  });
+
+  await runtime.startAccount('10002', { group: 'local' });
+
+  assert.equal(calls.length, 1, '轮换过就必须回写，否则 QQ 本体那边一直是旧 a1');
+  assert.equal(calls[0]!.dbPath, loginDb);
+  assert.equal(calls[0]!.uin, '10002');
+  assert.equal(calls[0]!.payload, '090909', '回写的是 vault 里的最新 a1，不是登录时用的旧值');
+});
+
+test('自主组不会把 a1 写回 login.db', async () => {
+  const calls: unknown[] = [];
+  const { runtime } = makeRuntime({
+    paths: pathsWith({ loginDbs: ['D:\\Tencent Files\\nt_qq\\global\\nt_db\\login.db'] }),
+    stored: account({ group: 'self', a1: new Uint8Array([9, 9, 9]) }),
+    updateA1: (args) => {
+      calls.push(args);
+      return { updatedRows: 1, verified: true, format: 'guid-aes' };
+    },
+  });
+
+  await runtime.startAccount('10002', { group: 'self' });
+
+  assert.deepEqual(calls, [], '自主账号有自持 guid，写进 login.db 只会污染本机账号');
 });

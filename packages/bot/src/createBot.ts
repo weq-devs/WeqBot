@@ -470,6 +470,8 @@ export function createBot(options: CreateBotOptions): Bot {
       mode: 2,
       signer: { wrapperPath },
       device,
+      // 探不到真实安装位置时整项省略，让 native 按平台给默认清单。
+      ...(config.session?.verifyFile ? { verifyFile: config.session.verifyFile } : {}),
     });
 
     if (!Number.isInteger(opened.sessionId) || opened.sessionId < 1) {
