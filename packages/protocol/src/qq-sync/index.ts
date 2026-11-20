@@ -2,6 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { decode, encode, message } from '../protobuf';
 import { decodePushEnvelope } from '../push/decode';
 export * from './frame';
+export * from './recall';
 
 export const MSG_PUSH_COMMAND = 'trpc.msg.olpush.OlPushService.MsgPush';
 const rawEnvelope = message([{ name: 'messages', tag: 1, type: 'bytes', repeated: true }]);
