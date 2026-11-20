@@ -593,8 +593,9 @@ export function createOneBotAdapter(options: CreateOneBotAdapterOptions): OneBot
         const seen = new WeakSet<object>();
         const deliver = (event: BotEvent): void => {
           if (typeof event !== 'object' || event === null) return;
-          if (seen.has(event)) return;
-          seen.add(event);
+          const identity = event.type === 'message' ? event.message : event;
+          if (seen.has(identity)) return;
+          seen.add(identity);
           void onBotEvent(event);
         };
         unsubscribers.push(

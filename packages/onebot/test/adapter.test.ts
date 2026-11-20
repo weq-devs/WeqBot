@@ -119,16 +119,19 @@ test('适配器：注册 action、响应调用、推送事件', async () => {
     }, 5);
     timer.unref?.();
   });
-  events.emit('message', {
+  const nativeMessage = {
     messageId: '88',
     seq: 1,
     time: 1_700_000_000,
-    scene: 'group',
+    scene: 'group' as const,
     peer: { id: '55555' },
     sender: { id: '20002', name: '群友' },
     self: { uin: '10001' },
     elements: [{ kind: 'text', textContent: 'hello' }],
-  });
+  };
+  // 独立上线时 createBot 同时派发两种事件，用同一条消息只生成一个 OneBot post。
+  events.emit('message', nativeMessage);
+  events.emit('event', { type: 'message', message: nativeMessage });
   const post = await received;
   assert.equal(post.message_type, 'group');
   assert.equal(post.raw_message, 'hello');
@@ -152,6 +155,7 @@ test('适配器：注册 action、响应调用、推送事件', async () => {
   const fromDatabase = await observed;
   assert.equal(fromDatabase.message_type, 'private');
   assert.equal(fromDatabase.raw_message, '本地数据库消息');
+  assert.equal(messages.filter(({ raw_message }) => raw_message === 'hello').length, 1);
   const cached = await callAction(socket, 'get_msg', { message_id: fromDatabase.message_id });
   assert.equal(cached.retcode, 0);
   assert.equal((cached.data as Record<string, unknown>).raw_message, '本地数据库消息');
