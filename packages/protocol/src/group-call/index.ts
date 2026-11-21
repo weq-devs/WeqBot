@@ -7,7 +7,7 @@
  * - `signaling.ts` —— `mav_appsvr` 信令（开房 / 邀请 / 移出成员 / 查询 / 多端同步）
  * - `gcs.ts`       —— `0x28` 控制面（嵌套 head）与会话密钥 k2 下发
  * - `relay.ts`     —— `0x02` 通道：成员状态、摄像头、麦克风、认证、保活、退出
- * - `media.ts`     —— `0x17` / `0x18` 媒体帧：Opus 音频与 H.264 分片重组
+ * - `media.ts`     —— `0x17` / `0x18` 媒体帧：SILK 音频与 H.264 分片重组
  */
 
 export * from './signaling';

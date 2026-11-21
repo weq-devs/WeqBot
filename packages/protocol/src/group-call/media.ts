@@ -8,35 +8,21 @@
  * ```text
  * body[0:7]    流标识（`18 57 06 aa XX XX 00`，每成员不同）
  * body[7]      0x01（c2s）/ 0x02（s2c）—— 方向
- * body[8]      0xa7（音频）/ 0x83（视频）
- * body[9:14]   视频为媒体标志与两个 16 位毫秒时钟，音频保留原有序号解析
- * body[14]     音频 0x79 / 视频 0x83
- * body[15]     音频 0xa7（c2s）/ 0x05（s2c）；视频 0xa7
+ * body[8]      媒体标记（旧档 0xa7，新档 0xfa）
+ * body[9:15]   音频为两个低 24 位毫秒时钟，视频为标志及两个低 16 位毫秒时钟
  * body[16]     **track 类型**：1 = 音频，2 = 视频，3 = 视频（另一路编码）
  * body[17]     音频 0x01；视频 0x07 / 0x01 / 0x00
  * body[18]     音频 **分片标记**（0x00 = 媒体数据，0x10 = 成员信息包，
  *              0x50 = 带 FEC）；视频 **分片序号 pkgIdx**
  * ```
  *
- * ## 音频载荷定位（2026-11-05 用 `nt_helper.decodeCallFrame` 逐包验证）
+ * ## SILK 音频
  *
- * `body[20]` 的 bit7 决定长度字段的位置：
- *
- * ```text
- * body[20] & 0x80 == 0  → 长度在 body[30]，载荷从 body[32] 开始
- * body[20] & 0x80 != 0  → 长度在 body[35]，载荷从 body[37] 开始
- * ```
- *
- * 长度三元组是 `L | (L-2) & 0xff | 00`，`L` 就是 Opus 载荷的字节数，载荷是紧跟在
- * 长度字段之后的 `L` 字节（起点 = 长度字段 + 2，首字节是 Opus TOC 0x00 = SILK
- * 窄带 10 ms）。两种形态合起来对三份抓包的解码率是 100%（159/159、135/135），
- * 解码出的都是真实语音（平均振幅 7000+）。
- *
- * > ⚠️ 早期版本把载荷起点固定成 `b[19]`，后来又试过 `b[33]`，都只能解出一部分包。
- * > 真正的分界是 `body[20]` 的 bit7，别再用固定偏移。
- * >
- * > 长度三元组同时是**成员信息包**的排除条件：那类包（`body[18] = 0x10`，
- * > 36 字节）的 `body[30] = 0x04`、`body[31] = 0x00`，不满足 `L-2` 校验，会被丢掉。
+ * 普通头的 16 位帧号和 32 位采样时钟从 body[23] 和 body[25] 读取。
+ * 扩展头（body[20] 的 bit7）在帧号前插入一个字节，采样时钟后另有 5 字节扩展。
+ * 两种头的长度字段分别在 body[30] 和 body[35]。长度三元组为
+ * `(SILK 长度 + 2) | SILK 长度 | 00`，随后是裸 SILK 和两个结束字节。
+ * 带外 FEC 包在首个音频帧后还有冗余数据。
  *
  * ## H.264 分片（track 2）
  *
@@ -58,13 +44,10 @@ const TRACK_OFFSET = 16;
 /** 音频长度字段的两种位置，由 `body[20]` 的 bit7 决定。 */
 const AUDIO_LEN_OFFSET_PLAIN = 30;
 const AUDIO_LEN_OFFSET_EXT = 35;
-/**
- * 载荷起点相对长度字段的偏移。
- *
- * 实测载荷就是紧跟在 `L | (L-2) | 00` 之后的那 `L` 个字节，其中第一个字节是
- * Opus TOC（0x00 = SILK 窄带 10 ms 单声道），所以起点是 `长度字段 + 2`。
- */
-const AUDIO_PAYLOAD_DELTA = 2;
+const AUDIO_LENGTH_HEADER = 3;
+const AUDIO_TRAILER_LENGTH = 2;
+const AUDIO_FRAME_OFFSET = 23;
+const AUDIO_EXTENSION_INTERVAL = 15;
 const VIDEO_FIRST_PAYLOAD_OFFSET = 35;
 const VIDEO_CONTINUATION_OFFSET = 32;
 const VIDEO_FRAME_OFFSET = 22;
@@ -76,7 +59,7 @@ const VIDEO_TOTAL_OFFSET = 19;
 
 /** 媒体包里的 track 类型（`body[16]`）。 */
 export const GroupTrack = {
-  /** 音频（Opus）。 */
+  /** 音频（SILK）。 */
   audio: 1,
   /** 视频（H.264）。 */
   video: 2,
@@ -107,7 +90,7 @@ export interface GroupMediaHeader {
   direction: number;
   /** `body[8]`：0xa7（音频）/ 0x83（视频）。 */
   codec: number;
-  /** 音频包序号。视频的这五个字节包含媒体标志和时间戳。 */
+  /** 媒体头里的 5 字节原始值。音频帧号由 parseGroupAudioFrame 读取。 */
   seq: number;
   /** `body[16]`：track 类型，见 {@link GroupTrack}。 */
   track: number;
@@ -131,39 +114,39 @@ export function parseGroupMediaHeader(body: Uint8Array): GroupMediaHeader | null
 
 /** 解析后的音频帧。 */
 export interface GroupAudioFrame {
-  /** 分片标记（`body[18]`），见 {@link GroupAudioFragmentFlag}。 */
+  /** 分片标记，见 {@link GroupAudioFragmentFlag}。 */
   fragmentFlag: number;
-  /** Opus 载荷（已按长度字段切好）。 */
+  frameIndex: number;
+  sampleTs: number;
+  /** 首个音频帧的裸 SILK 数据。 */
   payload: Uint8Array;
-  /** 长度字段里声明的载荷长度（= `payload.length`）。 */
   declaredLength: number;
-  /** 完整 body，调试用。 */
   raw: Uint8Array;
 }
 
-/**
- * 从音频 body 里切出 Opus 载荷。
- *
- * 长度字段位置由 `body[20]` 的 bit7 决定（见模块注释），载荷长度就是字段值本身。
- * 三元组校验不过时返回 `null` —— 这类包是成员信息包（`body[18] = 0x10`），
- * 不是音频。
- */
 export function parseGroupAudioFrame(body: Uint8Array): GroupAudioFrame | null {
-  const lenOffset = (body[20] ?? 0) & 0x80 ? AUDIO_LEN_OFFSET_EXT : AUDIO_LEN_OFFSET_PLAIN;
-  if (body.length < lenOffset + 3) return null;
-
-  const declaredLength = body[lenOffset]!;
-  if (declaredLength < 3) return null;
-  // 冗余校验：后一字节恒为 L-2，再后一字节恒为 0。
-  if (body[lenOffset + 1] !== ((declaredLength - 2) & 0xff)) return null;
-  if (body[lenOffset + 2] !== 0x00) return null;
-
-  const start = lenOffset + AUDIO_PAYLOAD_DELTA;
-  const end = start + declaredLength;
-  if (end > body.length) return null;
-
+  if (body[TRACK_OFFSET] !== GroupTrack.audio) return null;
+  const fragmentFlag = body[18];
+  if (fragmentFlag !== GroupAudioFragmentFlag.media && fragmentFlag !== GroupAudioFragmentFlag.fec)
+    return null;
+  const extended = Boolean((body[20] ?? 0) & 0x80);
+  const lengthOffset = extended ? AUDIO_LEN_OFFSET_EXT : AUDIO_LEN_OFFSET_PLAIN;
+  const declaredLength = body[lengthOffset] ?? 0;
+  const silkLength = declaredLength - AUDIO_TRAILER_LENGTH;
+  const start = lengthOffset + AUDIO_LENGTH_HEADER;
+  const end = start + silkLength;
+  if (
+    silkLength <= 0 ||
+    end + AUDIO_TRAILER_LENGTH > body.length ||
+    body[lengthOffset + 1] !== silkLength ||
+    body[lengthOffset + 2] !== 0
+  )
+    return null;
+  const frameOffset = AUDIO_FRAME_OFFSET + Number(extended);
   return {
-    fragmentFlag: body[18] ?? 0,
+    fragmentFlag,
+    frameIndex: u16be(body, frameOffset),
+    sampleTs: u32be(body, frameOffset + 2),
     payload: body.subarray(start, end),
     declaredLength,
     raw: body,
@@ -294,54 +277,49 @@ function h264NalTypes(data: Uint8Array): number {
 
 // ─────────────────────────── 组包 ───────────────────────────
 
-/**
- * 组一个音频上行包（`0x17`）。
- *
- * 只做「媒体数据」这一种形态（`body[18] = 0x00`）；带 FEC 的形态（`0x50`）留给
- * 后续补冗余时再扩。
- *
- * 字段取自 ③ 的真实上行包，其中：
- * - `frameIndex`（`body[24]`）每帧 +1
- * - `sampleTs`（`body[25:29]`）每 20 ms 帧 +320 采样
- *
- * 其余字节是三份抓包里恒定的占位，**换 QQ 版本后要重新核对**。
- */
+/** 组一个 SILK 音频上行包（`0x17`）。扩展头每 15 帧发送一次。 */
 export function buildGroupAudioFrame(params: {
   route: number;
   ownerUin: number;
   stream: Uint8Array;
-  seq: number;
+  sentAt: number;
+  capturedAt: number;
   frameIndex: number;
   sampleTs: number;
-  opus: Uint8Array;
+  silk: Uint8Array;
+  profile?: number;
 }): Uint8Array {
   assertStream(params.stream);
-  const len = params.opus.length;
-  if (len < 3 || len > 0xfe) throw new RangeError(`Opus 帧长度不合法：${len}`);
+  const len = params.silk.length;
+  if (len === 0 || len + AUDIO_TRAILER_LENGTH > 0xff) {
+    throw new RangeError(`SILK 帧长度不合法：${len}`);
+  }
 
-  const body = new Uint8Array(AUDIO_LEN_OFFSET_PLAIN + AUDIO_PAYLOAD_DELTA + len);
-  body.set(params.stream, 0);
-  body[7] = 0x01; // c2s
-  body[8] = 0xa7;
-  writeSeq5(body, 9, params.seq);
-  body[14] = 0x79;
-  body[15] = 0xa7;
-  body[16] = GroupTrack.audio;
-  body[17] = 0x01;
-  body[18] = GroupAudioFragmentFlag.media;
-  body[19] = 0x03;
-  body[20] = 0x3e; // bit7 = 0 → 长度字段在 30
-  body[21] = 0x01;
-  body[22] = 0x25;
-  body[23] = 0x00;
-  body[24] = params.frameIndex & 0xff;
-  writeU32be(body, 25, params.sampleTs >>> 0);
-  body[29] = 0x00;
-  body[AUDIO_LEN_OFFSET_PLAIN] = len;
-  body[AUDIO_LEN_OFFSET_PLAIN + 1] = (len - 2) & 0xff;
-  body[AUDIO_LEN_OFFSET_PLAIN + 2] = 0x00;
-  body.set(params.opus, AUDIO_LEN_OFFSET_PLAIN + AUDIO_PAYLOAD_DELTA);
-
+  const extended = (params.frameIndex - 1) % AUDIO_EXTENSION_INTERVAL === 0;
+  const lengthOffset = extended ? AUDIO_LEN_OFFSET_EXT : AUDIO_LEN_OFFSET_PLAIN;
+  const body = new Uint8Array(lengthOffset + AUDIO_LENGTH_HEADER + len + AUDIO_TRAILER_LENGTH);
+  body.set(params.stream);
+  const legacy = params.profile !== undefined && params.profile < 10065;
+  const marker = legacy ? 0xa7 : 0xfa;
+  body[7] = 1;
+  body[8] = body[15] = marker;
+  body[9] = (params.sentAt >>> 16) & 0xff;
+  body[10] = (params.sentAt >>> 8) & 0xff;
+  body[11] = params.sentAt & 0xff;
+  body[12] = params.capturedAt & 0xff;
+  body[13] = (params.capturedAt >>> 8) & 0xff;
+  body[14] = (params.capturedAt >>> 16) & 0xff;
+  body.set([GroupTrack.audio, 1, 0, 3, extended ? 0xbe : 0x3e, 1], 16);
+  if (extended) body[22] = 1;
+  const frameOffset = AUDIO_FRAME_OFFSET + Number(extended);
+  body[frameOffset - 1] = 0x25;
+  body[frameOffset] = (params.frameIndex >>> 8) & 0xff;
+  body[frameOffset + 1] = params.frameIndex & 0xff;
+  writeU32be(body, frameOffset + 2, params.sampleTs >>> 0);
+  if (extended) body.set([0x10, 0x01], 30);
+  body[lengthOffset] = len + AUDIO_TRAILER_LENGTH;
+  body[lengthOffset + 1] = len;
+  body.set(params.silk, lengthOffset + AUDIO_LENGTH_HEADER);
   return wrapMedia(params.route, params.ownerUin, body);
 }
 
@@ -434,11 +412,6 @@ export function buildGroupVideoFragments(params: {
 /** 读 5 字节大端序号。 */
 export function readSeq5(buf: Uint8Array, off: number): number {
   return u32be(buf, off) * 256 + buf[off + 4]!;
-}
-
-function writeSeq5(buf: Uint8Array, off: number, value: number): void {
-  buf[off] = Math.floor(value / 0x100000000) & 0xff;
-  writeU32be(buf, off + 1, value >>> 0);
 }
 
 /** 把媒体 body 包进 `0x02` 上行外层（`kind = 0x00`、`cmd = 0x17`）。 */
