@@ -94,11 +94,8 @@ export type {
 } from './group-admin-settings';
 
 export { GetAdminReceiveVerify, SetAdminReceiveVerify } from './receive-verify';
-export {
-  GetGroupSelectedTags,
-  SetGroupSelectedTags,
-  GROUP_SELECTED_TAG_LIMIT,
-} from './group-selected-tags';
+export { GROUP_SELECTED_TAG_LIMIT } from '../../group-tags';
+export { GetGroupSelectedTags, SetGroupSelectedTags } from './group-selected-tags';
 export type {
   GetAdminReceiveVerifyParams,
   SetAdminReceiveVerifyParams,

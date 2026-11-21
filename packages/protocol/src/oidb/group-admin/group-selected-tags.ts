@@ -1,9 +1,8 @@
+import { GROUP_SELECTED_TAG_LIMIT } from '../../group-tags';
 import { decode, message } from '../../protobuf';
 import type { OidbNative } from '../../transport';
 import { invokeOidb } from '../invoke';
 import { requireUint32 } from '../write-validation';
-
-export const GROUP_SELECTED_TAG_LIMIT = 20;
 
 const tagRecordFilter = message([
   { name: 'setterUid', tag: 1, type: 'bytes', force: true },
