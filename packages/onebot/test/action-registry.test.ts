@@ -13,6 +13,7 @@ import { ActionRegistry, isDeniedAction } from '../src/action-registry';
 import { ALL_ACTIONS, registerActions } from '../src/actions';
 import type { OneBotBackend } from '../src/backend';
 import type { ActionContext } from '../src/action-registry';
+import { segmentsToElements } from '../src/segments';
 
 function makeBackend(overrides: Partial<OneBotBackend> = {}): OneBotBackend {
   return {
@@ -103,6 +104,77 @@ test('send_group_msg 成功返回分配的 message_id', async () => {
   );
   assert.equal(response.status, 'ok');
   assert.deepEqual(response.data, { message_id: 42 });
+});
+
+test('引用使用原 QQ 序号和发送者，拒绝跨会话的 OneBot 消息 ID', async () => {
+  const sent: Awaited<ReturnType<typeof segmentsToElements>>[] = [];
+  const backend = makeBackend({
+    sendGroupMessage: async (_, segments) => {
+      sent.push(await segmentsToElements(segments));
+      return { sequence: 25 };
+    },
+    sendPrivateMessage: async (_, segments) => {
+      sent.push(await segmentsToElements(segments));
+      return { sequence: 822 };
+    },
+  });
+  const registry = new ActionRegistry();
+  registerActions(registry, backend);
+  const original = {
+    user_id: 20002,
+    message: [{ type: 'text', data: { text: 'original' } }],
+  };
+  const ctx = {
+    ...makeContext(backend),
+    resolveMessageMeta: (id: number) => {
+      if (id === 1) return { isGroup: true, targetId: 20001, sequence: 24, timestamp: 123 };
+      if (id === 3) {
+        return {
+          isGroup: false,
+          targetId: 20002,
+          sequence: 821,
+          clientSequence: 6851,
+          timestamp: 123,
+        };
+      }
+      return null;
+    },
+    resolveMessageEvent: () => original,
+  };
+  const group = await registry.call(
+    'send_group_msg',
+    {
+      group_id: 20001,
+      message: [
+        { type: 'reply', data: { id: '1' } },
+        { type: 'text', data: { text: 'ok' } },
+      ],
+    },
+    ctx,
+  );
+  const direct = await registry.call(
+    'send_private_msg',
+    { user_id: 20002, message: '[CQ:reply,id=3]ok' },
+    ctx,
+  );
+  const other = await registry.call(
+    'send_msg',
+    { group_id: 20003, message: '[CQ:reply,id=1]ok' },
+    ctx,
+  );
+  assert.equal(group.retcode, 0);
+  assert.equal(direct.retcode, 0);
+  assert.equal(other.retcode, 1400);
+  assert.deepEqual(
+    sent.map((elements) => elements[0]),
+    [24, 6851].map((origMsgSeq) => ({
+      kind: 'reply',
+      origMsgSeq,
+      origSenderUin: 20002,
+      origMsgTime: 123,
+      origElements: [{ kind: 'text', textContent: 'original' }],
+    })),
+  );
 });
 
 test('get_status 的 time 来自适配器启动时刻', async () => {
