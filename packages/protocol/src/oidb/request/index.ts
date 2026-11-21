@@ -7,6 +7,7 @@ export {
 export type { SendGroupJoinRequestParams } from './send-group-join-request';
 export {
   FetchGroupRequests,
+  ReportGroupNoticeRead,
   FetchFilteredGroupRequests,
   SetGroupRequest,
   GROUP_REQUEST_OPERATION_TYPE,

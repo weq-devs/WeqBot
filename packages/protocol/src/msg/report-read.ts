@@ -8,9 +8,13 @@ export type ReadReportParams =
   | { kind: 'c2c'; targetUid: string; sequence: number; timestamp: number }
   | { kind: 'official'; targetUid: string; sequence: 0; timestamp: number };
 
-/** 公众号零序号按消息时间推进，普通会话按 NT 序号推进。 */
-export function readReportWatermark(target: ReadReportParams): number {
-  return target.kind === 'official' ? target.timestamp : target.sequence;
+export type ReadReportTarget =
+  | ReadReportParams
+  | { kind: 'dataline'; targetUid: string; sequence: 0; timestamp: number };
+
+/** 零序号阅读按原消息时间推进，普通会话按 NT 序号推进。 */
+export function readReportWatermark(target: ReadReportTarget): number {
+  return target.sequence === 0 && target.kind !== 'group' ? target.timestamp : target.sequence;
 }
 
 export namespace ReportRead {
@@ -36,10 +40,10 @@ export namespace ReportRead {
     },
   ]);
 
-  export function serialize(p: ReadReportParams): Record<string, unknown> {
+  export function serialize(p: ReadReportTarget): Record<string, unknown> {
     if (
       !Number.isSafeInteger(p.sequence) ||
-      (p.kind === 'official' ? p.sequence !== 0 : p.sequence <= 0) ||
+      (p.kind === 'official' || p.kind === 'dataline' ? p.sequence !== 0 : p.sequence <= 0) ||
       p.sequence > 0xffffffff
     )
       throw new Error('已读上报序号必须是有效的 NT 消息序号。');
@@ -55,7 +59,12 @@ export namespace ReportRead {
     )
       throw new Error('私聊已读上报缺少有效 UID 或原消息时间。');
     return {
-      c2c: { targetUid: p.targetUid, timestamp: BigInt(p.timestamp), sequence: BigInt(p.sequence) },
+      c2c: {
+        targetUid: p.targetUid,
+        timestamp: BigInt(p.timestamp),
+        // 原版设备阅读请求没有 tag 4，公众号则显式发送零。
+        sequence: p.kind === 'dataline' ? undefined : BigInt(p.sequence),
+      },
     };
   }
 
@@ -63,10 +72,10 @@ export namespace ReportRead {
   export async function invoke(
     nt: TrpcNative,
     pid: number,
-    params: ReadReportParams,
+    params: ReadReportTarget,
   ): Promise<'acknowledged' | 'unconfirmed'> {
     const response = await sendPacket(nt, pid, cmd, encode(reqSchema, serialize(params)));
-    if (response.length === 0) return params.kind === 'official' ? 'unconfirmed' : 'acknowledged';
+    if (response.length === 0) return params.sequence === 0 ? 'unconfirmed' : 'acknowledged';
     try {
       const result = ReadedReport.deserialize(
         decode(ReadedReport.respSchema, response, { strict: true }),
@@ -76,7 +85,7 @@ export namespace ReportRead {
         params.kind === 'group'
           ? result.groups.find((item) => item.groupId === params.groupUin)
           : result.c2c.find((item) => item.uid === params.targetUid);
-      return row?.resultCode === 0 && row.readSeq >= params.sequence
+      return row?.resultCode === 0 && (params.kind === 'dataline' || row.readSeq >= params.sequence)
         ? 'acknowledged'
         : 'unconfirmed';
     } catch {

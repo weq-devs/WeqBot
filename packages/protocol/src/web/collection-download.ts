@@ -9,8 +9,8 @@
  *
  * 1. 头的字段与列表**不是一套**：`version` 是 collector 自己的头版本
  *    （`0x5f5e1642`）、`client` 是 `0x610`。拿列表的头去请求会被判「版本不支持」；
- * 2. 只有验证过的 QQ 版本才允许申请（{@link COLLECTION_DOWNLOAD_BUILDS}）：
- *    头版本对不上时服务端不一定报错，而是回一个**能下但内容不对**的地址；
+ * 2. QQ 构建变化可能导致服务端返回内容不匹配的地址。调用方下载后须按
+ *    收藏声明的大小和 MD5 确认原件；申请成功只表示得到了下载地址；
  * 3. 返回的 `key` 是字节（native 直接 hex 拼进 URL），不是 UTF-8 文本；
  *    地址与 cookie 都是一次性的，不要落盘、不要进日志。
  */
@@ -28,9 +28,6 @@ import {
   type CollectionFile,
   type CollectionTransport,
 } from './collection';
-
-/** 已验证过头版本的 QQ 构建（collector 头版本随客户端变）。 */
-export const COLLECTION_DOWNLOAD_BUILDS = new Set(['7.0.1-52892', '7.0.2-53644']);
 
 const DOWNLOAD_OPERATION_ID = 20_014;
 /** collector 自己的头版本；与列表的 `CLIENT_VERSION` 不同。 */
@@ -66,7 +63,7 @@ export interface CollectionDownloadParams {
   pskey: string;
   cid: string;
   file: CollectionFile;
-  /** 当前 QQ 的 `<version>-<build>`；不在白名单内直接拒绝。 */
+  /** 当前 QQ 的 `<version>-<build>`，由调用方从运行中的客户端核定。 */
   clientBuild: string;
   transport?: CollectionTransport | undefined;
   signal?: AbortSignal | undefined;
@@ -96,9 +93,8 @@ function attachmentUrl(host: string, keyHex: string, name: string): string {
 }
 
 function assertRequest(params: CollectionDownloadParams): void {
-  if (!COLLECTION_DOWNLOAD_BUILDS.has(params.clientBuild)) {
-    throw new Error('当前 QQ 版本的收藏附件下载尚未验证。');
-  }
+  if (!/^\d+(?:\.\d+)+-\d+$/.test(params.clientBuild))
+    throw new Error('无法识别当前 QQ 构建，不能申请收藏附件下载。');
   if (!/^[1-9]\d*$/.test(params.uin) || BigInt(params.uin) > 0xffffffffffffffffn) {
     throw new Error('collection uin must be a positive integer');
   }

@@ -179,7 +179,7 @@ export {
   pttTransCmd,
 } from './ptt-trans';
 export type { PttTransVoice, PttTransAck, PttTransPush } from './ptt-trans';
-export { ReportRead, readReportWatermark, type ReadReportParams } from './msg/report-read';
+export { ReportRead, readReportWatermark, type ReadReportParams, type ReadReportTarget } from './msg/report-read';
 export { SetFriendRemark, ClearFriendRemark } from './oidb/set-friend-remark';
 export type { SetFriendRemarkParams } from './oidb/set-friend-remark';
 export { SetGroupRemark } from './oidb/set-group-remark';
