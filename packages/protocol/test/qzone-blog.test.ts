@@ -18,11 +18,16 @@ test('列表保持历史范围，短页按实际条数前进，已知末页停�
     return new Response(`_Callback(${JSON.stringify({ code: 0, data: { totalNum: 2, list } })});`);
   });
   const first = await getQzoneBlogs(cred, owner, 0, 20);
+  assert.equal(first.total, 2);
   assert.equal(first.nextOffset, 1);
   assert.deepEqual(first.items[0]?.images, ['https://qpic.cn/test']);
   assert.equal(first.items[0]?.commentCount, null);
   await assert.rejects(getQzoneBlogs(cred, owner, 1, 20), /本页为空/);
-  assert.deepEqual(await getQzoneBlogs(cred, owner, 2, 20), { items: [], nextOffset: null });
+  assert.deepEqual(await getQzoneBlogs(cred, owner, 2, 20), {
+    items: [],
+    total: 2,
+    nextOffset: null,
+  });
 });
 
 test('登录错误走现有换票机制，缺失状态的回包不会变成空列表', async ({ mock }) => {

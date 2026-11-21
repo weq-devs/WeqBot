@@ -132,6 +132,7 @@ test('留言板保留寄语、回复和续页，审核字段只用于主人视�
     ],
   });
   const owner = parseQzoneGuestbook(raw, 0, true);
+  equal(owner.total, 2);
   equal(owner.greeting, '欢迎');
   equal(owner.items[0]?.text, '你好\n[em]e100[/em]');
   equal(owner.items[0]?.replies[0]?.text, '谢谢');

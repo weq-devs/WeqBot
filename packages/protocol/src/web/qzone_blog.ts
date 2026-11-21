@@ -86,7 +86,7 @@ function readPage<T>(
   if (!rows.length && offset < total) throw new Error('QQ 空间日志尚有内容，但本页为空');
   const items = rows.map(decode);
   const next = offset + rows.length;
-  return { items, nextOffset: next < total ? next : null };
+  return { items, total, nextOffset: next < total ? next : null };
 }
 
 export async function getQzoneBlogs(

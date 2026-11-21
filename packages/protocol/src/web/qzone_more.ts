@@ -194,6 +194,7 @@ export function parseQzoneGuestbook(text: string, offset: number, owner: boolean
   });
   return {
     greeting: boardContent(data.authorInfo?.htmlMsg, data.authorInfo?.msg),
+    total,
     audit:
       owner && typeof data.auditON === 'boolean'
         ? { enabled: data.auditON, count: unsigned(data.auditNum) }
