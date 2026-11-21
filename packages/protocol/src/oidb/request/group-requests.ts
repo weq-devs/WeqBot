@@ -135,7 +135,8 @@ export interface GroupRequestUser {
 export interface GroupRequest {
   /** 处理该请求的定位序号。 */
   sequence: number;
-  /** 0x10C0 的通知类型（7 = 入群申请）；处理前映射为 0x10C8 操作类型。 */
+  rawSequence?: bigint;
+  /** 0x10C0 的通知类型。入群申请见过 1 和 7，处理前映射为 0x10C8 操作类型。 */
   eventType: number;
   /** 1 = 待处理，2 / 3 = 已同意 / 已拒绝。 */
   state: number;
@@ -156,6 +157,8 @@ export interface GroupRequestPage {
   requests: GroupRequest[];
   /** 下一页游标；0 表示没有下一页。 */
   cookie: number;
+  latestSequence?: bigint;
+  readSequence?: bigint;
 }
 
 export interface FetchGroupRequestsParams {
@@ -182,6 +185,7 @@ function parseRequests(body: Record<string, unknown>, filtered: boolean): GroupR
     const transInfo = raw.operateTransInfo;
     return {
       sequence: toInt(raw.sequence),
+      rawSequence: typeof raw.sequence === 'bigint' ? raw.sequence : undefined,
       eventType: toInt(raw.eventType),
       state: toInt(raw.state),
       groupId: toInt(group.groupUin),
@@ -216,9 +220,11 @@ export namespace FetchGroupRequests {
     cookie: p.cookie ?? 0,
   });
 
-  export const deserialize = (body: Record<string, unknown>): GroupRequestPage => ({
-    requests: parseRequests(body, false),
+  export const deserialize = (body: Record<string, unknown>, p: Params = {}): GroupRequestPage => ({
+    requests: parseRequests(body, p.filtered === true),
     cookie: toInt(body.cookie),
+    ...(typeof body.newLatestSeq === 'bigint' ? { latestSequence: body.newLatestSeq } : {}),
+    ...(typeof body.field5 === 'bigint' ? { readSequence: body.field5 } : {}),
   });
 
   export const invoke = (nt: OidbNative, pid: number, params: Params): Promise<GroupRequestPage> =>
@@ -240,13 +246,29 @@ export namespace FetchFilteredGroupRequests {
   export type Params = Omit<FetchGroupRequestsParams, 'filtered'>;
 
   export const serialize = FetchGroupRequests.serialize;
-  export const deserialize = (body: Record<string, unknown>): GroupRequestPage => ({
-    requests: parseRequests(body, true),
-    cookie: toInt(body.cookie),
-  });
+  export const deserialize = (body: Record<string, unknown>, p: Params = {}): GroupRequestPage =>
+    FetchGroupRequests.deserialize(body, { ...p, filtered: true });
 
   export const invoke = (nt: OidbNative, pid: number, params: Params): Promise<GroupRequestPage> =>
     invokeOidb(nt, pid, FetchFilteredGroupRequests as OidbSpec<Params, GroupRequestPage>, params);
+}
+
+/** macOS 普通群通知按原始序号标为已读，保留申请及处理状态。 */
+export namespace ReportGroupNoticeRead {
+  export const command = 0x113b;
+  export const subCommand = 1;
+  export const reqSchema = message([{ name: 'sequence', tag: 1, type: 'uint64' }]);
+  export const respSchema = message([]);
+
+  export const serialize = (sequence: bigint) => {
+    if (sequence <= 0n || sequence > 0xffffffffffffffffn) throw new RangeError('无效的群通知序号');
+    return { sequence };
+  };
+
+  export const deserialize = (): void => {};
+
+  export const invoke = (nt: OidbNative, pid: number, sequence: bigint): Promise<void> =>
+    invokeOidb(nt, pid, ReportGroupNoticeRead as OidbSpec<bigint, void>, sequence);
 }
 
 // ───────────────────────── 同意 / 拒绝 — 0x10C8_1/2 ─────────────────────────
