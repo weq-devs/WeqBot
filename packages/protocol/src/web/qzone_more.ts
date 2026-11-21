@@ -148,8 +148,6 @@ export async function getQzoneVisitors(
 type GuestbookData = {
   total?: unknown;
   authorInfo?: { msg?: string; htmlMsg?: string };
-  auditON?: unknown;
-  auditNum?: unknown;
   commentList?: {
     id: string | number;
     uin: string | number;
@@ -165,7 +163,7 @@ function boardContent(html: string | undefined, plain = '') {
   return html ? qzoneMarkupText(parseFragment(html)).trim() || plain : plain;
 }
 
-export function parseQzoneGuestbook(text: string, offset: number, owner: boolean) {
+export function parseQzoneGuestbook(text: string, offset: number) {
   const data = readQzoneData(parseQzoneCallback<QzoneReadResponse<GuestbookData>>(text), '留言板');
   const total = unsigned(data.total);
   if (
@@ -195,10 +193,6 @@ export function parseQzoneGuestbook(text: string, offset: number, owner: boolean
   return {
     greeting: boardContent(data.authorInfo?.htmlMsg, data.authorInfo?.msg),
     total,
-    audit:
-      owner && typeof data.auditON === 'boolean'
-        ? { enabled: data.auditON, count: unsigned(data.auditNum) }
-        : null,
     items,
     next: offset + rows.length < total ? offset + rows.length : null,
   };
@@ -227,7 +221,7 @@ export async function getQzoneGuestbook(
     },
     signal,
   );
-  return parseQzoneGuestbook(raw, offset, cred.uin === hostUin);
+  return parseQzoneGuestbook(raw, offset);
 }
 
 type VideoData = {

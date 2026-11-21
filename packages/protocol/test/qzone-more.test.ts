@@ -115,7 +115,7 @@ test('空间访客区分零记录、权限拒绝和参数失败，使用实际�
   );
 });
 
-test('留言板保留寄语、回复和续页，审核字段只用于主人视角', () => {
+test('留言板保留寄语、回复和续页，忽略上游附带的审核字段', () => {
   const raw = callback({
     total: 2,
     authorInfo: { htmlMsg: '<p>欢迎</p>' },
@@ -131,15 +131,14 @@ test('留言板保留寄语、回复和续页，审核字段只用于主人视�
       },
     ],
   });
-  const owner = parseQzoneGuestbook(raw, 0, true);
-  equal(owner.total, 2);
-  equal(owner.greeting, '欢迎');
-  equal(owner.items[0]?.text, '你好\n[em]e100[/em]');
-  equal(owner.items[0]?.replies[0]?.text, '谢谢');
-  equal(owner.next, 1);
-  deepEqual(owner.audit, { enabled: true, count: 0 });
-  equal(parseQzoneGuestbook(raw, 1, false).audit, null);
-  equal(parseQzoneGuestbook(raw, 1, false).next, null);
+  const page = parseQzoneGuestbook(raw, 0);
+  equal(page.total, 2);
+  equal(page.greeting, '欢迎');
+  equal(page.items[0]?.text, '你好\n[em]e100[/em]');
+  equal(page.items[0]?.replies[0]?.text, '谢谢');
+  equal(page.next, 1);
+  equal(Object.hasOwn(page, 'audit'), false);
+  equal(parseQzoneGuestbook(raw, 1).next, null);
 });
 
 test('独立视频按 vid 去重，拒绝无进展游标，播放地址与封面分开', () => {
