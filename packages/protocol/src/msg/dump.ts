@@ -27,6 +27,7 @@ class RawReader {
     let byte: number;
     do {
       if (this.pos >= this.data.length) throw new Error('varint 越界');
+      if (shift >= 70n) throw new Error('varint 过长');
       byte = this.data[this.pos++]!;
       result |= BigInt(byte & 0x7f) << shift;
       shift += 7n;
@@ -388,4 +389,39 @@ export function extractPath(bytes: Uint8Array, steps: PathStep[]): Uint8Array | 
     data = found;
   }
   return data;
+}
+
+/** 按原始字段过滤 repeated bytes；保留未修改字段的编码与未知字段。 */
+export function filterProtoBytes(
+  bytes: Uint8Array,
+  tag: number,
+  keep: (value: Uint8Array) => boolean,
+): Uint8Array {
+  const reader = new RawReader(bytes);
+  const parts: Uint8Array[] = [];
+  while (!reader.eof) {
+    const start = reader.pos;
+    const field = reader.tag();
+    let retain = true;
+    switch (field.wire) {
+      case 0:
+        reader.varint();
+        break;
+      case 1:
+        reader.take(8);
+        break;
+      case 2: {
+        const value = reader.lenDelim();
+        if (field.field === tag) retain = keep(value);
+        break;
+      }
+      case 5:
+        reader.take(4);
+        break;
+      default:
+        throw new Error('Unsupported protobuf wire type');
+    }
+    if (retain) parts.push(bytes.subarray(start, reader.pos));
+  }
+  return Buffer.concat(parts);
 }
