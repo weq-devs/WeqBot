@@ -31,12 +31,14 @@ interface RawQzoneProfileResponse {
   data?: {
     spacename?: unknown;
     desc?: unknown;
+    marriage?: unknown;
   };
 }
 
 export interface QzoneProfile {
   name: string;
   description: string;
+  relationship?: string;
 }
 
 export interface QzoneProfilePatch {
@@ -70,7 +72,16 @@ export async function getQzoneProfile(
   if (typeof response.data?.spacename !== 'string' || typeof response.data.desc !== 'string') {
     throw new Error('空间资料响应缺少名称或说明');
   }
-  return { name: response.data.spacename, description: response.data.desc };
+  const marriage = response.data.marriage;
+  const relationship =
+    typeof marriage === 'number' && Number.isInteger(marriage)
+      ? ['', '单身', '已婚', '保密', '恋爱中', '已订婚', '分居', '离异'][marriage]
+      : undefined;
+  return {
+    name: response.data.spacename,
+    description: response.data.desc,
+    ...(relationship ? { relationship } : {}),
+  };
 }
 
 /**
