@@ -84,6 +84,7 @@ const DETAIL_RESP = message([
     tag: 1,
     type: message([
       { name: 'uin', tag: 1, type: 'uint64' },
+      { name: 'result', tag: 2, type: 'uint32' },
       { name: 'results', tag: 3, type: DETAIL_RESULTS },
     ]),
   },
@@ -142,15 +143,14 @@ export namespace FetchGroupDetail {
 
   export const deserialize = (body: Record<string, unknown>, params?: Params): GroupDetailInfo => {
     const info = body.groupInfo as Record<string, unknown> | undefined;
+    const result = toInt(info?.result);
+    if (result !== 0) throw new Error(`0x88D_0 群资料读取失败（${result}）`);
     const results = info?.results as Record<string, unknown> | undefined;
     if (!results) throw new Error('0x88D_0 回包缺少 groupInfo.results');
-    const groupId = toInt(results.uin);
-    if (
-      (params && groupId !== params.groupId) ||
-      (groupId !== toInt(info?.uin) && toInt(info?.uin) !== 0)
-    ) {
+    // 外层是请求使用的公开群号，详情 tag 21 是内部 group UIN。
+    const groupId = toInt(info?.uin);
+    if (!groupId || (params && groupId !== params.groupId))
       throw new Error('0x88D_0 回包的群号不一致');
-    }
     return {
       groupId,
       name: typeof results.name === 'string' ? results.name : '',
