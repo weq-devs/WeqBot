@@ -110,7 +110,7 @@ export namespace FetchGroupDetail {
   export const reqSchema = DETAIL_REQ;
   export const respSchema = DETAIL_RESP;
 
-  export type Params = { groupId: number };
+  export type Params = { groupId: number; includeAnswer?: boolean };
 
   export const serialize = (p: Params): Record<string, unknown> => ({
     field1: 537099973,
@@ -129,7 +129,7 @@ export namespace FetchGroupDetail {
         lastSequence: true,
         lastMessageTime: true,
         question: '',
-        answer: '',
+        ...(p.includeAnswer !== false ? { answer: '' } : {}),
         maxAdminCount: '',
         shutUpAllTimestamp: true,
         privilegeFlag: true,

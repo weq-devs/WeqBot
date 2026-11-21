@@ -61,13 +61,13 @@ export namespace GetGroupJoinInfo {
     },
     { name: 'error', tag: 2, type: 'string' },
   ]);
+  type Params = { groupId: number; includeExtensions?: boolean; includeQuestion?: boolean };
+
   export const serialize = ({
     groupId,
     includeExtensions = false,
-  }: {
-    groupId: number;
-    includeExtensions?: boolean;
-  }): Record<string, unknown> => {
+    includeQuestion = true,
+  }: Params): Record<string, unknown> => {
     const groupCode = requireUint32(groupId, 'groupId');
     if (groupCode === 0) throw new Error('群号必须为正整数');
     return {
@@ -82,7 +82,7 @@ export namespace GetGroupJoinInfo {
             categoryId: 0,
             name: '',
             categoryName: '',
-            question: '',
+            ...(includeQuestion ? { question: '' } : {}),
             ...(includeExtensions
               ? {
                   grade: 0,
@@ -98,7 +98,7 @@ export namespace GetGroupJoinInfo {
       ],
     };
   };
-  export function deserialize(body: Record<string, unknown>): GroupJoinInfo[] {
+  export function deserialize(body: Record<string, unknown>, params?: Params): GroupJoinInfo[] {
     if (!Array.isArray(body.groups) || body.groups.length === 0)
       throw new Error('服务端未返回群资料');
     return body.groups.map((row: Record<string, unknown>) => {
@@ -110,7 +110,11 @@ export namespace GetGroupJoinInfo {
       if (groupId === 0) throw new Error('群号必须为正整数');
       const option = typeof info.option === 'number' ? info.option : null;
       const question =
-        typeof info.question === 'string' && info.question.trim() ? info.question : null;
+        params?.includeQuestion !== false &&
+        typeof info.question === 'string' &&
+        info.question.trim()
+          ? info.question
+          : null;
       return {
         groupId,
         name: typeof info.name === 'string' ? info.name : '',
@@ -135,7 +139,7 @@ export namespace GetGroupJoinInfo {
   export async function invoke(
     nt: OidbNative,
     pid: number,
-    params: { groupId: number; includeExtensions?: boolean },
+    params: Params,
   ): Promise<GroupJoinInfo> {
     if (params.groupId <= 0) throw new Error('群号必须为正整数');
     const rows = await invokeOidb(nt, pid, GetGroupJoinInfo, params);
