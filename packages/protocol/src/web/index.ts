@@ -21,6 +21,7 @@ export * from './qzone-pagination';
 
 export * from './qzone';
 export * from './qzone_album';
+export * from './qzone_blog';
 export * from './qzone_comments';
 export * from './qzone_detail';
 export * from './qzone_forwards';

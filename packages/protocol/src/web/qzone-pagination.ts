@@ -129,6 +129,8 @@ export async function withQzonePaginationTimeout<T>(
 }
 
 const PAGE_PATHS = new Set([
+  '/cgi-bin/blognew/get_abs',
+  '/cgi-bin/blognew/get_comment_list',
   '/cgi-bin/emotion_cgi_msglist_v6',
   '/cgi-bin/emotion_cgi_getcmtreply_v6',
   '/cgi-bin/emotion_cgi_ic_getcomments',
