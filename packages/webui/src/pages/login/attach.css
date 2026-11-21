@@ -21,18 +21,6 @@
   font-weight: 500;
 }
 
-.attach-count {
-  min-width: 18px;
-  padding: 0 5px;
-  border-radius: var(--radius-full);
-  background: var(--bg-sunken);
-  color: var(--text-muted);
-  font-family: var(--font-mono);
-  font-size: var(--text-xs);
-  line-height: 18px;
-  text-align: center;
-}
-
 /* 「需要提权」是提示而不是错误：警告色 + 图标 + 文字，只占一小块。 */
 .attach-badge {
   display: inline-flex;
@@ -70,14 +58,6 @@
   cursor: default;
 }
 
-.attach-list {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
 .attach-warn {
   display: inline-flex;
   align-items: flex-start;
@@ -96,13 +76,6 @@
   padding: 26px 20px 18px;
   color: var(--text-muted);
   text-align: center;
-}
-
-.attach-note {
-  margin: 10px 6px 2px;
-  color: var(--text-faint);
-  font-size: var(--text-xs);
-  line-height: 1.55;
 }
 
 /* ─────────────────────────── 提权框内容 ─────────────────────────── */

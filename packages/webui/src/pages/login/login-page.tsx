@@ -1,24 +1,6 @@
-/**
- * 账号登录页：本机账号 / 自主账号 / 有头模式 / 扫码 + 上线进度。
- *
- * 环境检查已挪到「设置」页：登录只需要账号列表，安装路径和 wrapper 属于排障信息。
- *
- * **两个账号组分成两个 tab**，因为它们连设备身份都不同（服务端看来是两合设备）：
- *
- * - **本机**：`login.db` 里 QQ 本体写的 a1，uid / guid 复用本机的；上线后轮换的
- *   a1 会写回 `login.db`；
- * - **自主**：扫码产生的凭据，guid 是首次扫码时随机生成并持久化的那个。
- *
- * 同一 uin 可能在两组里各有一条 —— 这正是要分开的原因（拿错 guid 就会被服务端
- * 当成换设备）。有头模式不落凭据，仍用本机 guid。
- *
- * 三条路径都在服务端（`ConsoleRuntime.startAccount` / `startQrLogin` / `attachAccount`）；
- * 页面只展示状态。扫码进度走 SSE（`console` 事件里的 `qr`），不轮询二维码 ——
- * 那会每 500ms 拉一次 100KB 的 base64 图片。
- */
-
 import {
   AlertTriangle,
+  ArrowLeft,
   Check,
   CircleUserRound,
   KeyRound,
@@ -31,11 +13,12 @@ import {
   Smartphone,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { useCallback, useEffect, useEffectEvent, useRef, useState } from 'react';
+import { useEffect, useEffectEvent, useRef, useState } from 'react';
 import { api, ApiError } from '../../api';
 import type {
   AccountGroup,
   ConsolePhase,
+  ConsoleStateEvent,
   LoginAccount,
   LoginProgressEvent,
   QrSnapshot,
@@ -50,8 +33,13 @@ import type { LoginHint } from '../../app';
 import { AttachPanel } from './attach-panel';
 import './login.css';
 
-/** 四个 tab：两个账号组 + 有头接入 + 扫码。 */
-type Tab = 'local' | 'self' | 'attach' | 'qr';
+const ACCOUNT_TABS = [
+  ['self', 'WeqBot 自主维护', CircleUserRound],
+  ['local', '借用 QQ 缓存凭据', KeyRound],
+  ['attach', '借用在线实例', Plug],
+] as const;
+
+type Tab = (typeof ACCOUNT_TABS)[number][0];
 
 export function LoginPage({
   phase,
@@ -64,21 +52,18 @@ export function LoginPage({
   onHintConsumed?(): void;
   onLocked(): void;
 }) {
-  const [tab, setTab] = useState<Tab>('local');
+  const [tab, setTab] = useState<Tab>('self');
+  const [qrAttempt, setQrAttempt] = useState<number | null>(hint ? 0 : null);
+  const qrOpen = qrAttempt !== null;
   const toast = useToast();
-  /**
-   * 账号列表每 4 秒重拉一次：`qqOnline` 是实时状态（用户可能在扫码期间打开 /
-   * 退出了 QQ），轮询才能让它自己变 —— 不需要用户手动「重新检测」。
-   *
-   * 服务端只做一次 `existsSync` + 一次文件锁探针，4 秒的代价可以忽略。
-   */
-  const loadAccounts = useCallback(() => api.login.accounts(), []);
+  // 轮询账号列表以更新本机 QQ 的在线状态。
   const {
     data: accounts,
     error: accountsError,
     reload: reloadAccounts,
-  } = usePolling(loadAccounts, 4000);
+  } = usePolling(api.login.accounts, 4000);
   const [qr, setQr] = useState<QrSnapshot>();
+  const qrRequest = useRef(Promise.resolve());
   const [starting, setStarting] = useState<string>();
   /**
    * 上线进度（当前正在上线的账号的实时说明）。
@@ -111,60 +96,63 @@ export function LoginPage({
   // 登录成功后登录页会被卸掉：这条常驻提示不能留在控制台上。
   useEffect(() => () => toast.dismissKey('login-health'), [toast]);
 
-  /**
-   * 进度事件：**无论停在哪个 tab 都要听**。
-   *
-   * 异常设备确认会在「本机账号」/「自主账号」tab 里发生 —— 只订阅 `qr` tab 的话，
-   * 从账号列表点上线时页面收不到任何进度，用户看到的就是转圈。
-   */
-  useEffect(() => {
-    return api.events.subscribe({
-      onConsole(event) {
-        if (event.progress) setProgress(event.progress);
-        if (event.qr && tab === 'qr') setQr(event.qr);
-        // 上线结束（成功或失败）都要收起进度：失败时后端会另发 failure。
-        if (event.phase === 'online' || event.phase === 'offline') {
-          setStarting(undefined);
-          setProgress(undefined);
-        }
-      },
-    });
-  }, [tab]);
+  function selectTab(next: Tab) {
+    if (next === tab) return;
+    setQrAttempt(null);
+    setTab(next);
+  }
 
-  const startQr = useEffectEvent(async () => {
-    setQr(undefined);
-    try {
-      const snapshot = await api.login.startQr();
-      setQr(snapshot);
-    } catch (cause) {
-      toast.push({
-        key: 'login-qr',
-        tone: 'error',
-        title: '获取二维码失败',
-        detail: describe(cause),
-      });
+  const onConsole = useEffectEvent((event: ConsoleStateEvent) => {
+    if (event.progress) setProgress(event.progress);
+    if (qrOpen && event.qr) setQr(event.qr);
+    if (event.phase === 'online' || event.phase === 'offline') {
+      setStarting(undefined);
+      setProgress(undefined);
     }
   });
+  useEffect(() => api.events.subscribe({ onConsole: (event) => onConsole(event) }), []);
 
-  // 每次切到扫码页都重新起一次：上一次的二维码可能已经过期，留着只会让人扫到死码。
   useEffect(() => {
-    if (tab !== 'qr') return;
-    void startQr();
-    return () => {
-      void api.login.cancelQr().catch(() => undefined);
-    };
-  }, [tab]);
+    if (qrAttempt === null) {
+      setQr(undefined);
+      return;
+    }
 
-  // 服务端推来的「a1 失效」：切到扫码页 + 提示，并重拉列表（失效那条已被清掉）。
+    let active = true;
+    let requested = false;
+    setQr(undefined);
+    // 先完成上一次取消请求，避免快速切换时取消了新打开的二维码。
+    qrRequest.current = qrRequest.current.then(async () => {
+      if (!active) return;
+      requested = true;
+      try {
+        const snapshot = await api.login.startQr();
+        if (active) setQr((latest) => latest ?? snapshot);
+      } catch (cause) {
+        if (active) {
+          setQr({ state: 'invalid', expiresAt: 0, error: describe(cause) });
+        }
+      }
+    });
+    return () => {
+      active = false;
+      qrRequest.current = qrRequest.current.then(async () => {
+        if (requested) await api.login.cancelQr().catch(() => undefined);
+      });
+    };
+  }, [qrAttempt]);
+
+  // 失效的凭据已被服务端清除，进入自主维护组的扫码面板并重拉账号。
   useEffect(() => {
     if (!hint) return;
-    setTab('qr');
+    setTab('self');
+    setQrAttempt((attempt) => attempt ?? 0);
     toast.push({ key: 'login', tone: 'error', title: '需要重新扫码登录', detail: hint.notice });
     reloadAccounts();
     onHintConsumed?.();
   }, [hint, reloadAccounts, onHintConsumed, toast]);
 
-  const login = useEffectEvent(async (uin: string, group: AccountGroup) => {
+  async function login(uin: string, group: AccountGroup) {
     setProgress(undefined);
     setStarting(`${group}:${uin}`);
     try {
@@ -179,19 +167,17 @@ export function LoginPage({
         });
       }
     } catch (cause) {
-      // a1 失效：服务端已删掉 vault 里那份，只剩扫码还能继续。
       if (cause instanceof ApiError && cause.code === 'A1_EXPIRED') {
-        setTab('qr');
+        setTab('self');
+        setQrAttempt((attempt) => attempt ?? 0);
         reloadAccounts();
       }
       toast.push({ key: 'login', tone: 'error', title: '登录失败', detail: describe(cause) });
       setStarting(undefined);
       setProgress(undefined);
     }
-  });
+  }
 
-  const qrState = qr?.state;
-  const qrExpired = qrState === 'expired' || qrState === 'invalid' || qrState === 'canceled';
   const online = phase === 'online';
 
   return (
@@ -207,11 +193,6 @@ export function LoginPage({
           <Logo size={40} />
         </motion.div>
         <motion.h1 variants={enterRise}>登录 QQ 账号</motion.h1>
-        <motion.p variants={enterRise}>
-          「本机账号」复用本机 QQ 的 uid 与设备身份，「自主账号」是扫码产生的独立设备身份；
-          两者严格分开，不会串用 guid。也可以接上正在运行的 QQ（有头模式）。
-          同一时刻只有一个账号在线；本机 QQ 的在线状态每 4 秒自动检查一次。
-        </motion.p>
       </header>
 
       <AnimatePresence mode="wait">
@@ -225,7 +206,6 @@ export function LoginPage({
           >
             <Check size={20} className="login-online-icon" aria-hidden="true" />
             <strong>账号已上线</strong>
-            <p>控制台正在加载。</p>
           </motion.div>
         ) : (
           <motion.div
@@ -235,22 +215,42 @@ export function LoginPage({
             animate={{ opacity: 1, y: 0 }}
             transition={{ duration: 0.32 }}
           >
-            <div className="login-tabs" role="tablist" aria-label="登录方式">
-              {(
-                [
-                  ['local', '本机账号', CircleUserRound],
-                  ['self', '自主账号', KeyRound],
-                  ['attach', '有头模式', Plug],
-                  ['qr', '扫码登录', QrCode],
-                ] as const
-              ).map(([key, label, Icon]) => (
+            <div className="login-tabs" role="tablist" aria-label="账号类型">
+              {ACCOUNT_TABS.map(([key, label, Icon], index) => (
                 <button
                   key={key}
+                  id={`login-tab-${key}`}
                   type="button"
                   role="tab"
+                  aria-controls={`login-panel-${key}`}
                   aria-selected={tab === key}
+                  tabIndex={tab === key ? 0 : -1}
                   className="login-tab"
-                  onClick={() => setTab(key)}
+                  onClick={() => selectTab(key)}
+                  onKeyDown={(event) => {
+                    const last = ACCOUNT_TABS.length - 1;
+                    let nextIndex: number;
+                    switch (event.key) {
+                      case 'ArrowLeft':
+                        nextIndex = index === 0 ? last : index - 1;
+                        break;
+                      case 'ArrowRight':
+                        nextIndex = index === last ? 0 : index + 1;
+                        break;
+                      case 'Home':
+                        nextIndex = 0;
+                        break;
+                      case 'End':
+                        nextIndex = last;
+                        break;
+                      default:
+                        return;
+                    }
+                    event.preventDefault();
+                    const [next] = ACCOUNT_TABS[nextIndex]!;
+                    selectTab(next);
+                    document.getElementById(`login-tab-${next}`)?.focus();
+                  }}
                 >
                   {tab === key && (
                     <motion.span
@@ -260,58 +260,66 @@ export function LoginPage({
                     />
                   )}
                   <Icon size={15} aria-hidden="true" />
-                  {label}
+                  <span>{label}</span>
                 </button>
               ))}
             </div>
 
-            <AnimatePresence mode="wait">
-              {tab === 'qr' ? (
-                <motion.div
-                  key="qr"
-                  className="login-panel login-qr"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.16 }}
-                >
-                  <QrPanel qr={qr} expired={qrExpired} onRefresh={() => void startQr()} />
-                </motion.div>
-              ) : tab === 'attach' ? (
-                <motion.div
-                  key="attach"
-                  className="login-panel"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.16 }}
-                >
-                  <AttachPanel />
-                </motion.div>
-              ) : (
-                <motion.div
-                  key={tab}
-                  className="login-panel"
-                  initial={{ opacity: 0 }}
-                  animate={{ opacity: 1 }}
-                  exit={{ opacity: 0 }}
-                  transition={{ duration: 0.16 }}
-                >
-                  {accounts === undefined ? (
-                    <AccountsSkeleton />
-                  ) : (
-                    <AccountList
-                      accounts={accounts.filter((item) => item.group === tab)}
-                      tab={tab}
-                      starting={starting}
-                      progress={progress}
-                      onLogin={login}
-                      onRescan={reloadAccounts}
-                    />
-                  )}
-                </motion.div>
-              )}
-            </AnimatePresence>
+            {ACCOUNT_TABS.map(([key]) => (
+              <div
+                key={key}
+                id={`login-panel-${key}`}
+                role="tabpanel"
+                aria-labelledby={`login-tab-${key}`}
+                className="login-panel"
+                hidden={tab !== key}
+              >
+                {tab === key && (
+                  <motion.div
+                    initial={{ opacity: 0 }}
+                    animate={{ opacity: 1 }}
+                    transition={{ duration: 0.16 }}
+                  >
+                    {key === 'self' && (
+                      <div className="login-panel-head">
+                        <h2>{qrOpen ? '扫码登录' : '已保存账号'}</h2>
+                        <Button
+                          variant="secondary"
+                          disabled={starting !== undefined}
+                          onClick={() => setQrAttempt(qrOpen ? null : 0)}
+                        >
+                          {qrOpen ? (
+                            <ArrowLeft size={15} aria-hidden="true" />
+                          ) : (
+                            <QrCode size={15} aria-hidden="true" />
+                          )}
+                          {qrOpen ? '返回账号' : '扫码登录'}
+                        </Button>
+                      </div>
+                    )}
+                    {key === 'attach' ? (
+                      <AttachPanel />
+                    ) : key === 'self' && qrOpen ? (
+                      <QrPanel
+                        qr={qr}
+                        onRefresh={() => setQrAttempt((attempt) => (attempt ?? 0) + 1)}
+                      />
+                    ) : accounts === undefined ? (
+                      <AccountsSkeleton />
+                    ) : (
+                      <AccountList
+                        accounts={accounts.filter((item) => item.group === key)}
+                        group={key}
+                        starting={starting}
+                        progress={progress}
+                        onLogin={login}
+                        onRescan={reloadAccounts}
+                      />
+                    )}
+                  </motion.div>
+                )}
+              </div>
+            ))}
 
             <AnimatePresence>
               {progress && starting && (
@@ -349,15 +357,7 @@ export function LoginPage({
 
 // ─────────────────────────── 扫码面板 ───────────────────────────
 
-function QrPanel({
-  qr,
-  expired,
-  onRefresh,
-}: {
-  qr: QrSnapshot | undefined;
-  expired: boolean;
-  onRefresh(): void;
-}) {
+function QrPanel({ qr, onRefresh }: { qr: QrSnapshot | undefined; onRefresh(): void }) {
   const [remaining, setRemaining] = useState(45);
   useEffect(() => {
     if (!qr?.expiresAt) return;
@@ -369,19 +369,20 @@ function QrPanel({
     return () => clearInterval(timer);
   }, [qr?.expiresAt]);
 
+  const expired = qr?.state === 'expired' || qr?.state === 'invalid' || qr?.state === 'canceled';
   const stateLabel =
     qr?.state === 'waiting-confirm'
       ? '已扫描，请在手机上确认'
       : qr?.state === 'confirmed'
         ? '已确认，正在上线'
-        : qr?.state === 'expired'
-          ? '二维码已过期'
-          : qr?.state === 'invalid' || qr?.state === 'canceled'
-            ? '登录未完成'
-            : '用手机 QQ 扫描二维码';
+        : expired
+          ? (qr.error ?? (qr.state === 'expired' ? '二维码已过期' : '扫码未完成'))
+          : qr?.image
+            ? '用手机 QQ 扫码'
+            : '正在获取二维码…';
 
   return (
-    <>
+    <div className="login-qr">
       <div className="login-qr-frame" data-dim={expired || undefined}>
         {qr?.image ? (
           <img
@@ -390,12 +391,12 @@ function QrPanel({
             width={196}
             height={196}
           />
-        ) : (
+        ) : !expired ? (
           <div className="login-qr-placeholder">
-            <LoaderCircle size={24} className="spin" aria-label="正在获取二维码" />
+            <LoaderCircle size={24} className="spin" aria-hidden="true" />
           </div>
-        )}
-        {!expired && qr?.state !== 'confirmed' && (
+        ) : null}
+        {!expired && qr?.image && qr.state !== 'confirmed' && (
           <motion.span
             className="login-qr-scanline"
             aria-hidden="true"
@@ -416,48 +417,52 @@ function QrPanel({
           </button>
         )}
       </div>
-      <p className="login-qr-state">
+      <p className="login-qr-state" role="status">
         {qr?.state === 'waiting-confirm' && <ScanLine size={15} aria-hidden="true" />}
         {stateLabel}
       </p>
-      <p className="login-qr-hint">
-        {expired
-          ? (qr?.error ?? '二维码已失效')
-          : `剩余 ${remaining} 秒 · 也可以用「本机账号」或「自主账号」登录`}
-      </p>
-    </>
+      {!expired && qr?.image && qr.state !== 'confirmed' && (
+        <p className="login-qr-hint">剩余 {remaining} 秒</p>
+      )}
+    </div>
   );
 }
 
 // ─────────────────────────── 账号列表 ───────────────────────────
 
 /**
- * 一个来源的账号列表。
- *
- * 两个来源分成两个 tab 之后，`key` 仍然按 `source:uin` 拼 —— 同一 uin 在两个 tab
- * 里各有一条，不能只按 uin 做 key（切 tab 时 React 会复用错节点）。
- *
- * `qqOnline` 是**本机 QQ 本体**的在线状态（不是 bot）：为真时行内给出警告
- * 徽标 —— 点下去会接管账号，登录前先结束那个 QQ 进程。
+ * 同一 uin 可能有两种凭据，登录时必须传入对应的组。
+ * `qqOnline` 表示本机 QQ 正在用该账号，登录会结束对应的 QQ 进程。
  */
 function AccountList({
   accounts,
-  tab,
+  group,
   starting,
   progress,
   onLogin,
   onRescan,
 }: {
   accounts: LoginAccount[];
-  tab: 'local' | 'self';
+  group: AccountGroup;
   /** `${group}:${uin}`，与 `login()` 里设置的保持一致。 */
   starting?: string;
-  /** 正在上线那条的进度说明（异常设备确认时是「请在手机上确认」）。 */
   progress?: LoginProgressEvent;
   onLogin(uin: string, group: AccountGroup): void;
   onRescan(): void;
 }) {
-  if (accounts.length === 0) return <EmptyAccounts tab={tab} onRescan={onRescan} />;
+  if (accounts.length === 0) {
+    return (
+      <div className="login-empty">
+        <p>{group === 'self' ? '暂无已保存账号' : '暂无可用的 QQ 缓存凭据'}</p>
+        {group === 'local' && (
+          <Button variant="secondary" onClick={onRescan}>
+            <RefreshCw size={15} aria-hidden="true" />
+            重新检测
+          </Button>
+        )}
+      </div>
+    );
+  }
 
   return (
     <ul className="login-accounts">
@@ -490,21 +495,13 @@ function AccountList({
               <span className="login-account-text">
                 <strong>{account.nickname || account.uin}</strong>
                 <span>
-                  {starting === key && progress
-                    ? progress.message
-                    : `uin ${account.uin}${
-                        account.lastLoginAt
-                          ? ` · 上次登录 ${formatRelative(account.lastLoginAt)}`
-                          : ''
-                      }`}
+                  {account.uin}
+                  {account.lastLoginAt && ` · 上次登录 ${formatRelative(account.lastLoginAt)}`}
                 </span>
                 {account.qqOnline && (
-                  <span
-                    className="login-qq-online"
-                    title="QQ 本体正在使用这个账号；登录 WeqBot 会先结束那个 QQ 进程，避免同一账号双端在线"
-                  >
+                  <span className="login-qq-online">
                     <AlertTriangle size={11} aria-hidden="true" />
-                    QQ 本体在线 · 登录会先结束它
+                    QQ 在线 · 登录将关闭本机 QQ
                   </span>
                 )}
               </span>
@@ -527,8 +524,6 @@ function AccountList({
   );
 }
 
-// ─────────────────────────── 空态与骨架 ───────────────────────────
-
 function AccountsSkeleton() {
   return (
     <ul className="login-accounts" aria-busy="true" aria-label="正在读取账号">
@@ -536,24 +531,6 @@ function AccountsSkeleton() {
         <li key={index} className="login-account skeleton-row" />
       ))}
     </ul>
-  );
-}
-
-function EmptyAccounts({ tab, onRescan }: { tab: 'local' | 'self'; onRescan(): void }) {
-  return (
-    <div className="login-empty">
-      <AlertTriangle size={20} aria-hidden="true" />
-      <strong>{tab === 'local' ? '没有可用的本机 QQ 登录记录' : '还没有自主账号'}</strong>
-      <p>
-        {tab === 'local'
-          ? '这台机器上的 login.db 读不出来，或者记录里没有可用的 a1。也可以用手机扫码登录（那样会建一个自主账号，设备身份与本机 QQ 无关）。'
-          : '扫码登录成功后会存一份自主凭据：guid 在首次扫码时生成，之后一直复用它。a1 失效时只删这一份，不影响本机账号。'}
-      </p>
-      <Button variant="secondary" onClick={onRescan}>
-        <RefreshCw size={15} aria-hidden="true" />
-        重新检测
-      </Button>
-    </div>
   );
 }
 
@@ -568,7 +545,7 @@ function describe(cause: unknown): string {
     }
     // a1 失效：后端已经删掉 vault 里那份，这里要说清楚「为什么列表少了一条」。
     if (cause.code === 'A1_EXPIRED') {
-      return '保存的 a1 已失效，这一组的凭据已清除 —— 请用扫码登录，或换另一组账号。';
+      return '凭据已失效并清除，请重新扫码登录。';
     }
     // 消息可能缺失（老后端 / 非 JSON 响应），此时 `ApiError` 的 message 退化成了
     // code。裸 code（`INTERNAL` / `BAD_JSON`）对用户没有任何意义，换成人话。

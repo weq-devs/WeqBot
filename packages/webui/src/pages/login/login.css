@@ -24,13 +24,6 @@
   letter-spacing: -0.02em;
 }
 
-.login-brand p {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--text-md);
-  line-height: 1.6;
-}
-
 .login-card {
   width: min(460px, calc(100vw - 32px));
   padding: 8px;
@@ -44,7 +37,8 @@
 /* ───────────────────────────── 标签 ───────────────────────────── */
 
 .login-tabs {
-  display: flex;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
   gap: 2px;
   padding: 3px;
   border-radius: var(--radius-md);
@@ -56,17 +50,19 @@
   /* 自成一个层叠上下文：选中药丸用 z-index:-1 落到内容之下，裸文本节点也能正常显示。 */
   isolation: isolate;
   display: flex;
-  flex: 1;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  height: 32px;
+  min-height: 40px;
+  padding: 6px;
   border: 0;
   border-radius: var(--radius-sm);
   background: transparent;
   color: var(--text-muted);
   font-size: var(--text-sm);
-  font-weight: 500;
+  font-weight: 550;
+  line-height: 1.3;
+  text-wrap: balance;
   cursor: pointer;
   transition: color var(--duration-base) var(--ease-out);
 }
@@ -80,6 +76,14 @@
   z-index: 1;
 }
 
+.login-tab > svg {
+  flex: none;
+}
+
+.login-tab:where([aria-selected="true"]) > svg {
+  color: var(--accent-text);
+}
+
 .login-tab-pill {
   position: absolute;
   inset: 0;
@@ -91,6 +95,31 @@
 
 .login-panel {
   padding: 12px 6px 6px;
+}
+
+.login-panel-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.login-panel-head h2 {
+  margin: 0;
+  padding-left: 2px;
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 600;
+}
+
+@media (max-width: 440px) {
+  .login-tab {
+    flex-direction: column;
+    gap: 5px;
+    min-height: 56px;
+    font-size: var(--text-xs);
+  }
 }
 
 /* ───────────────────────────── 账号列表 ───────────────────────────── */
@@ -161,6 +190,7 @@
 
 .login-account-action {
   display: grid;
+  flex: none;
   place-items: center;
   width: 28px;
   height: 28px;
@@ -192,22 +222,15 @@
 .login-empty {
   display: grid;
   justify-items: center;
-  gap: 8px;
-  padding: 28px 20px;
+  gap: 12px;
+  padding: 24px 12px;
   color: var(--text-muted);
   text-align: center;
 }
 
-.login-empty strong {
-  color: var(--text);
-  font-size: var(--text-md);
-}
-
 .login-empty p {
-  max-width: 30em;
   margin: 0;
   font-size: var(--text-sm);
-  line-height: 1.6;
 }
 
 /* ───────────────────────────── 扫码 ───────────────────────────── */
@@ -287,6 +310,7 @@
   margin: 0;
   color: var(--text-secondary);
   font-size: var(--text-sm);
+  text-align: center;
 }
 
 .login-qr-hint {
@@ -359,7 +383,6 @@
   color: var(--status-warning-text);
   font-size: var(--text-xs);
   line-height: 1.5;
-  white-space: nowrap;
 }
 
 .login-account-text .login-qq-online > svg {
@@ -382,12 +405,6 @@
 
 .login-online strong {
   font-size: var(--text-lg);
-}
-
-.login-online p {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: var(--text-sm);
 }
 
 .login-lock {

@@ -5,12 +5,6 @@
  * QQ 进程的内存里读（必要时提权），QQ 继续在线，WeqBot 只是搭同一条 SSO 通道
  * 发协议包。所以列表是「进程」而不是「账号」—— 一个 QQ 多开就有多条。
  *
- * 两个必须让用户知道的事实：
- *
- * 1. 同一账号会在两端同时在线（QQ 与 OneBot 各收一份推送），消息可能出现在两处；
- * 2. 接入需要一次管理员授权（Linux / macOS），这是内核 ptrace 门禁决定的，
- *    不是 WeqBot 想要更多权限。
- *
  * 实例列表每 4 秒轮询一次：用户很可能开着 QQ 再回来点「有头」，或者在接入前
  * 退了 QQ —— 静态列表会让这两种情况都表现为「点了没反应」。
  */
@@ -71,76 +65,66 @@ export function AttachPanel() {
   const instances = data?.instances ?? [];
   const needsElevation =
     elevation?.mechanism === 'sudo' && !elevation.cached && !elevation.elevated;
-  const refresh = reload;
 
   return (
     <>
-      <div className="attach-head">
-        <span className="attach-title">正在运行的 QQ</span>
-        {instances.length > 0 && <span className="attach-count">{instances.length}</span>}
-        {needsElevation && (
-          <span
-            className="attach-badge"
-            title={elevation?.hint ?? '读取 QQ 内存需要一次管理员授权'}
-          >
-            <ShieldAlert size={11} aria-hidden="true" />
-            需要提权
-          </span>
-        )}
-        <button
-          type="button"
-          className="attach-refresh"
-          aria-label="重新检测运行中的 QQ"
-          onClick={refresh}
-        >
-          <RefreshCw size={14} aria-hidden="true" />
-        </button>
-      </div>
-
-      {error && data === undefined ? (
+      {data === undefined ? (
         <div className="attach-empty">
-          <AlertTriangle size={20} aria-hidden="true" />
-          <strong>连不上控制台</strong>
-          <p>{describe(error)}</p>
-          <Button variant="secondary" onClick={refresh}>
-            <RefreshCw size={15} aria-hidden="true" />
-            重试
-          </Button>
+          {error ? (
+            <>
+              <strong>无法读取在线实例</strong>
+              <p>{describe(error)}</p>
+              <Button variant="secondary" onClick={reload}>
+                重试
+              </Button>
+            </>
+          ) : (
+            <LoaderCircle size={20} className="spin" role="status" aria-label="正在检测在线实例" />
+          )}
         </div>
       ) : instances.length === 0 ? (
         <div className="attach-empty">
-          <Plug size={20} aria-hidden="true" />
-          <strong>没有正在运行的 QQ</strong>
-          <p>
-            有头模式要接着 QQ 已经登好的会话，所以得先在本机登录 QQ。想不用打开 QQ
-            就上线，用「本机账号」「自主账号」或「扫码登录」。
-          </p>
-          <Button variant="secondary" onClick={refresh}>
+          <p>暂无运行中的 QQ</p>
+          <Button variant="secondary" onClick={reload}>
             <RefreshCw size={15} aria-hidden="true" />
             重新检测
           </Button>
         </div>
       ) : (
-        <ul className="attach-list">
-          {instances.map((instance) => (
-            <AttachRow
-              key={instance.pid}
-              instance={instance}
-              busy={busy === instance.uin}
-              disabled={busy !== undefined || !instance.attachable}
-              onAttach={() => {
-                if (!instance.uin) return;
-                void attach(instance.uin, instance.pid);
-              }}
-            />
-          ))}
-        </ul>
+        <>
+          <div className="attach-head">
+            <span className="attach-title">运行中的 QQ</span>
+            {needsElevation && (
+              <span className="attach-badge">
+                <ShieldAlert size={11} aria-hidden="true" />
+                需管理员授权
+              </span>
+            )}
+            <button
+              type="button"
+              className="attach-refresh"
+              aria-label="重新检测运行中的 QQ"
+              onClick={reload}
+            >
+              <RefreshCw size={14} aria-hidden="true" />
+            </button>
+          </div>
+          <ul className="login-accounts">
+            {instances.map((instance) => (
+              <AttachRow
+                key={instance.pid}
+                instance={instance}
+                busy={busy !== undefined && busy === instance.uin}
+                disabled={busy !== undefined || !instance.attachable}
+                onAttach={() => {
+                  if (!instance.uin) return;
+                  void attach(instance.uin, instance.pid);
+                }}
+              />
+            ))}
+          </ul>
+        </>
       )}
-
-      <p className="attach-note">
-        有头模式不会结束
-        QQ，也不会改动它的登录状态。同一账号在两端同时在线时，消息会在两处各出现一次。
-      </p>
 
       <ElevateDialog
         open={pending !== null}
