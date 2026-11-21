@@ -60,6 +60,15 @@ function filesetId(raw: JsonObject): string {
   return value;
 }
 
+function parsePageCursor(raw: JsonObject): Uint8Array | undefined {
+  const cursor = optionalString(raw, 'cursor');
+  if (cursor === undefined) return undefined;
+  if (!cursor || cursor.length > 4096) throw new ParamError('cursor 必须是返回的 Base64 游标');
+  const bytes = Buffer.from(cursor, 'base64');
+  if (bytes.toString('base64') !== cursor) throw new ParamError('cursor 必须是返回的 Base64 游标');
+  return bytes;
+}
+
 export const FLASH_TRANSFER_ACTIONS = [
   defineAction(
     {
@@ -107,6 +116,36 @@ export const FLASH_TRANSFER_ACTIONS = [
         (await ctx.backend.flashTransfer!.listFilesets()).map(flashFileOut),
     },
     { available: (backend) => typeof backend.flashTransfer?.listFilesets === 'function' },
+  ),
+  defineAction(
+    {
+      name: 'list_filesets_page',
+      summary: '分页列出当前账号的闪传文件集',
+      description: '首屏省略 cursor；续页原样传回 next_cursor。is_end 为 true 时停止。',
+      inputSchema: {
+        type: 'object',
+        properties: {
+          cursor: { type: 'string', description: '上一页返回的 Base64 游标', maxLength: 4096 },
+          limit: { type: 'integer', minimum: 1, maximum: 100, default: 10 },
+        },
+      },
+      parse: (raw) => {
+        const cursor = parsePageCursor(raw);
+        const limit = optionalPositiveInt(raw, 'limit');
+        if (limit !== undefined && limit > 100) throw new ParamError('limit 不能超过 100');
+        return { ...(cursor ? { cursor } : {}), ...(limit === undefined ? {} : { limit }) };
+      },
+      run: async (params, ctx) => {
+        const page = await ctx.backend.flashTransfer!.listFilesetsPage!(params);
+        return {
+          items: page.items.map(flashFileOut),
+          total: page.total,
+          is_end: page.nextCursor === null,
+          next_cursor: page.nextCursor ? Buffer.from(page.nextCursor).toString('base64') : null,
+        };
+      },
+    },
+    { available: (backend) => typeof backend.flashTransfer?.listFilesetsPage === 'function' },
   ),
   defineAction(
     {

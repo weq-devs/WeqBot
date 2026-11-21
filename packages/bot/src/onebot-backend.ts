@@ -146,6 +146,7 @@ import {
   KickGroupMember,
   LeaveGroup,
   ListFilesets,
+  ListFilesetsPage,
   ListGroupFiles,
   ModifyCustomFace,
   MoveGroupFile,
@@ -1941,15 +1942,11 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       },
       async listFilesets() {
         const entries = await ListFilesets.invoke(nt, sessionId, {});
-        return entries.map((entry) => ({
-          filesetId: entry.filesetUuid,
-          fileName: entry.fileName,
-          origName: entry.origName,
-          fileSize: entry.fileSize,
-          shareUrl: entry.uploadUrl,
-          fileId: entry.fileId,
-          downloadUrl: '',
-        }));
+        return entries.map(flashFilesetItem);
+      },
+      async listFilesetsPage(params) {
+        const { entries, ...page } = await ListFilesetsPage.invoke(nt, sessionId, params);
+        return { ...page, items: entries.map(flashFilesetItem) };
       },
       async getShareLink(filesetId) {
         const entries = await GetFilesetDetail.invoke(nt, sessionId, { filesetUuid: filesetId });
@@ -2873,6 +2870,18 @@ function createQzoneBackend(options: {
 const QFILE_SHARE_ORIGIN = 'https://qfile.qq.com';
 
 /** 分享码 / 官方分享链接 → 受控的 qfile 分享页 URL。 */
+function flashFilesetItem(entry: ReturnType<typeof ListFilesets.deserialize>[number]) {
+  return {
+    filesetId: entry.filesetUuid,
+    fileName: entry.fileName,
+    origName: entry.origName,
+    fileSize: entry.fileSize,
+    shareUrl: entry.uploadUrl,
+    fileId: entry.fileId,
+    downloadUrl: '',
+  };
+}
+
 function flashShareUrl(input: string): string {
   const value = input.trim();
   if (!value) throw new Error('get_fileset_id: 分享码不能为空');

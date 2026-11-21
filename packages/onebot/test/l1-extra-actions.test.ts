@@ -62,6 +62,7 @@ test('没有 flashTransfer 能力时闪传 action 全部跳过', async () => {
     'get_fileset_info',
     'get_flash_file_list',
     'list_filesets',
+    'list_filesets_page',
     'get_share_link',
     'delete_flash_file',
     'rename_flash_file',
@@ -72,6 +73,34 @@ test('没有 flashTransfer 能力时闪传 action 全部跳过', async () => {
   }
   const response = await registry.call('list_filesets', {}, makeContext(makeBackend()));
   assert.equal(response.retcode, 1404);
+});
+
+test('闪传分页保持旧列表返回形状，并传递原始游标字节', async () => {
+  const backend = makeBackend({
+    flashTransfer: {
+      ...flashStub,
+      listFilesetsPage: async ({ cursor, limit }) => {
+        assert.equal(limit, 1);
+        if (cursor) assert.deepEqual([...cursor], [0, 255, 128]);
+        return { items: [], total: 0, nextCursor: cursor ? null : Uint8Array.of(0, 255, 128) };
+      },
+    },
+  });
+  const registry = new ActionRegistry();
+  registerActions(registry, backend);
+  const context = makeContext(backend);
+  const call = (action: string, params = {}) => registry.call(action, params, context);
+  assert.deepEqual((await call('list_filesets')).data, []);
+  const first = await call('list_filesets_page', { limit: 1 });
+  assert.deepEqual(first.data, { items: [], total: 0, is_end: false, next_cursor: 'AP+A' });
+  assert.deepEqual((await call('list_filesets_page', { limit: 1, cursor: 'AP+A' })).data, {
+    items: [],
+    total: 0,
+    is_end: true,
+    next_cursor: null,
+  });
+  assert.notEqual((await call('list_filesets_page', { cursor: 'AP+A!' })).retcode, 0);
+  assert.notEqual((await call('list_filesets_page', { limit: 101 })).retcode, 0);
 });
 
 test('create_flash_task 接受路径 / {file,name} / 数组，返回兼容双 id', async () => {
