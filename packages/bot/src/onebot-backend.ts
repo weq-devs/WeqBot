@@ -79,6 +79,7 @@ import {
   TransGroupFile,
   decodeGroupHistoryVisibility,
   decodeGroupMemberPermissions,
+  decodeMemberInviteAllowed,
   decodeMemberInvitePolicy,
   setGroupAvatar,
   FetchDownloadRkeys,
@@ -1716,7 +1717,8 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
         const detail = await FetchGroupDetail.invoke(nt, sessionId, { groupId });
         await SetGroupInvitePolicy.invoke(nt, sessionId, {
           groupId,
-          currentPrivilegeFlag: detail.privilegeFlag,
+          currentPrivilegeFlag: detail.settingFields?.privilegeFlag,
+          memberInviteAllowed: decodeMemberInviteAllowed(detail.settingFields?.groupFlagExt),
           policy,
         });
       },
@@ -1756,7 +1758,10 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
           group_answer: detail.answer,
           robot_member_switch: robot.robotMemberSwitch,
           robot_member_examine: robot.robotMemberExamine,
-          member_invite_policy: decodeMemberInvitePolicy(detail.privilegeFlag),
+          member_invite_policy:
+            decodeMemberInviteAllowed(detail.settingFields?.groupFlagExt) === false
+              ? 'disabled'
+              : decodeMemberInvitePolicy(detail.privilegeFlag),
           allow_member_upload_album: permissions.allowMemberUploadAlbum,
           allow_member_temporary_session: permissions.allowMemberTemporarySession,
           allow_member_create_group: permissions.allowMemberCreateGroup,

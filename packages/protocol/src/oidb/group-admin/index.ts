@@ -77,6 +77,7 @@ export {
   GROUP_HISTORY_VISIBILITY_MASK,
   GROUP_MEMBER_PERMISSION_MASKS,
   mergeMemberInvitePrivilegeFlag,
+  decodeMemberInviteAllowed,
   decodeMemberInvitePolicy,
   decodeGroupHistoryVisibility,
   mergeGroupMemberPermission,
