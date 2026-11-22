@@ -8,43 +8,27 @@
  * ```text
  * body[0:7]    流标识（`18 57 06 aa XX XX 00`，每成员不同）
  * body[7]      0x01（c2s）/ 0x02（s2c）—— 方向
- * body[8]      0xa7（音频）/ 0x83（视频）
- * body[9:14]   包序号（5B，逐包递增）
- * body[14]     音频 0x79 / 视频 0x83
- * body[15]     音频 0xa7（c2s）/ 0x05（s2c）；视频 0xa7
+ * body[8]      媒体标记（旧档 0xa7，新档 0xfa）
+ * body[9:15]   音频为两个低 24 位毫秒时钟，视频为标志及两个低 16 位毫秒时钟
  * body[16]     **track 类型**：1 = 音频，2 = 视频，3 = 视频（另一路编码）
  * body[17]     音频 0x01；视频 0x07 / 0x01 / 0x00
  * body[18]     音频 **分片标记**（0x00 = 媒体数据，0x10 = 成员信息包，
  *              0x50 = 带 FEC）；视频 **分片序号 pkgIdx**
  * ```
  *
- * ## 音频载荷定位（2026-11-05 用 `nt_helper.decodeCallFrame` 逐包验证）
+ * ## SILK 音频
  *
- * `body[20]` 的 bit7 决定长度字段的位置：
+ * 普通头的 16 位帧号和 32 位采样时钟从 body[23] 和 body[25] 读取。
+ * 扩展头（body[20] 的 bit7）在帧号前插入一个字节，采样时钟后另有 5 字节扩展。
+ * 两种头的长度字段分别在 body[30] 和 body[35]。长度三元组为
+ * `(SILK 长度 + 2) | SILK 长度 | 00`，随后是裸 SILK 和两个结束字节。
+ * 带外 FEC 包在首个音频帧后还有冗余数据。
  *
- * ```text
- * body[20] & 0x80 == 0  → 长度在 body[30]，载荷从 body[32] 开始
- * body[20] & 0x80 != 0  → 长度在 body[35]，载荷从 body[37] 开始
- * ```
+ * ## H.264 分片（track 2）
  *
- * 长度三元组是 `L | (L-2) & 0xff | 00`，`L` 就是 Opus 载荷的字节数，载荷是紧跟在
- * 长度字段之后的 `L` 字节（起点 = 长度字段 + 2，首字节是 Opus TOC 0x00 = SILK
- * 窄带 10 ms）。两种形态合起来对三份抓包的解码率是 100%（159/159、135/135），
- * 解码出的都是真实语音（平均振幅 7000+）。
- *
- * > ⚠️ 早期版本把载荷起点固定成 `b[19]`，后来又试过 `b[33]`，都只能解出一部分包。
- * > 真正的分界是 `body[20]` 的 bit7，别再用固定偏移。
- * >
- * > 长度三元组同时是**成员信息包**的排除条件：那类包（`body[18] = 0x10`，
- * > 36 字节）的 `body[30] = 0x04`、`body[31] = 0x00`，不满足 `L-2` 校验，会被丢掉。
- *
- * ## 视频分片（2026-11-05 三份抓包 100% 对齐）
- *
- * - `body[18]` = pkgIdx，载荷固定从 `body[35]` 开始（`body[33:35]` 恒 `00 00`）
- * - `body[22]` **不是**分片总数（实测 3 片的帧里它是 0x0e）；`body[19]` 也不可靠
- *   （FEC 冗余片会让它小于实际片数）。**完整性只能靠 pkgIdx 从 0 递增判定**
- * - 每帧首片（`pkgIdx = 0`）以 `00 00 00 01` 起始码开头，续片是裸续字节
- * - 重组后是标准 Annex B H.264：`SPS 67 64 00 1f`（High 3.1）+ `PPS 68 ee 3c 80`
+ * `body[18]` 是片号，`body[19]` 是数据片数，`body[20]` 是冗余片数。
+ * `body[22]` 是帧号，`body[30:32]` 是小端片计数。Annex B 首片从 35 取，续片从 32 取。
+ * 冗余片位于数据片之后。接收端在数据片齐全时可以直接输出 H.264。
  *
  * ## 没有 P2P
  *
@@ -60,15 +44,14 @@ const TRACK_OFFSET = 16;
 /** 音频长度字段的两种位置，由 `body[20]` 的 bit7 决定。 */
 const AUDIO_LEN_OFFSET_PLAIN = 30;
 const AUDIO_LEN_OFFSET_EXT = 35;
-/**
- * 载荷起点相对长度字段的偏移。
- *
- * 实测载荷就是紧跟在 `L | (L-2) | 00` 之后的那 `L` 个字节，其中第一个字节是
- * Opus TOC（0x00 = SILK 窄带 10 ms 单声道），所以起点是 `长度字段 + 2`。
- */
-const AUDIO_PAYLOAD_DELTA = 2;
-/** 视频分片载荷起点。 */
-const VIDEO_PAYLOAD_OFFSET = 35;
+const AUDIO_LENGTH_HEADER = 3;
+const AUDIO_TRAILER_LENGTH = 2;
+const AUDIO_FRAME_OFFSET = 23;
+const AUDIO_EXTENSION_INTERVAL = 15;
+const VIDEO_FIRST_PAYLOAD_OFFSET = 35;
+const VIDEO_CONTINUATION_OFFSET = 32;
+const VIDEO_FRAME_OFFSET = 22;
+const VIDEO_FEC_OFFSET = 20;
 /** 视频分片头里 pkgIdx 的位置。 */
 const VIDEO_IDX_OFFSET = 18;
 /** 视频分片头里总分片数的位置（`body[19]`）。 */
@@ -76,11 +59,11 @@ const VIDEO_TOTAL_OFFSET = 19;
 
 /** 媒体包里的 track 类型（`body[16]`）。 */
 export const GroupTrack = {
-  /** 音频（Opus）。 */
+  /** 音频（SILK）。 */
   audio: 1,
   /** 视频（H.264）。 */
   video: 2,
-  /** 视频的另一路编码（③ 里自己上行出现过，载荷同样是 H.264 Annex B）。 */
+  /** 另一路上行视频，载荷格式待确认。 */
   videoAlt: 3,
 } as const;
 
@@ -107,7 +90,7 @@ export interface GroupMediaHeader {
   direction: number;
   /** `body[8]`：0xa7（音频）/ 0x83（视频）。 */
   codec: number;
-  /** `body[9:14]` 的包序号（5B 大端）。 */
+  /** 媒体头里的 5 字节原始值。音频帧号由 parseGroupAudioFrame 读取。 */
   seq: number;
   /** `body[16]`：track 类型，见 {@link GroupTrack}。 */
   track: number;
@@ -131,276 +114,297 @@ export function parseGroupMediaHeader(body: Uint8Array): GroupMediaHeader | null
 
 /** 解析后的音频帧。 */
 export interface GroupAudioFrame {
-  /** 分片标记（`body[18]`），见 {@link GroupAudioFragmentFlag}。 */
+  /** 分片标记，见 {@link GroupAudioFragmentFlag}。 */
   fragmentFlag: number;
-  /** Opus 载荷（已按长度字段切好）。 */
+  frameIndex: number;
+  sampleTs: number;
+  /** 首个音频帧的裸 SILK 数据。 */
   payload: Uint8Array;
-  /** 长度字段里声明的载荷长度（= `payload.length`）。 */
   declaredLength: number;
-  /** 完整 body，调试用。 */
   raw: Uint8Array;
 }
 
-/**
- * 从音频 body 里切出 Opus 载荷。
- *
- * 长度字段位置由 `body[20]` 的 bit7 决定（见模块注释），载荷长度就是字段值本身。
- * 三元组校验不过时返回 `null` —— 这类包是成员信息包（`body[18] = 0x10`），
- * 不是音频。
- */
 export function parseGroupAudioFrame(body: Uint8Array): GroupAudioFrame | null {
-  const lenOffset = (body[20] ?? 0) & 0x80 ? AUDIO_LEN_OFFSET_EXT : AUDIO_LEN_OFFSET_PLAIN;
-  if (body.length < lenOffset + 3) return null;
-
-  const declaredLength = body[lenOffset]!;
-  if (declaredLength < 3) return null;
-  // 冗余校验：后一字节恒为 L-2，再后一字节恒为 0。
-  if (body[lenOffset + 1] !== ((declaredLength - 2) & 0xff)) return null;
-  if (body[lenOffset + 2] !== 0x00) return null;
-
-  const start = lenOffset + AUDIO_PAYLOAD_DELTA;
-  const end = start + declaredLength;
-  if (end > body.length) return null;
-
+  if (body[TRACK_OFFSET] !== GroupTrack.audio) return null;
+  const fragmentFlag = body[18];
+  if (fragmentFlag !== GroupAudioFragmentFlag.media && fragmentFlag !== GroupAudioFragmentFlag.fec)
+    return null;
+  const extended = Boolean((body[20] ?? 0) & 0x80);
+  const lengthOffset = extended ? AUDIO_LEN_OFFSET_EXT : AUDIO_LEN_OFFSET_PLAIN;
+  const declaredLength = body[lengthOffset] ?? 0;
+  const silkLength = declaredLength - AUDIO_TRAILER_LENGTH;
+  const start = lengthOffset + AUDIO_LENGTH_HEADER;
+  const end = start + silkLength;
+  if (
+    silkLength <= 0 ||
+    end + AUDIO_TRAILER_LENGTH > body.length ||
+    body[lengthOffset + 1] !== silkLength ||
+    body[lengthOffset + 2] !== 0
+  )
+    return null;
+  const frameOffset = AUDIO_FRAME_OFFSET + Number(extended);
   return {
-    fragmentFlag: body[18] ?? 0,
+    fragmentFlag,
+    frameIndex: u16be(body, frameOffset),
+    sampleTs: u32be(body, frameOffset + 2),
     payload: body.subarray(start, end),
     declaredLength,
     raw: body,
   };
 }
 
-/** 单个视频分片。 */
+/** 一个 track 2 数据片。 */
 export interface GroupVideoFragment {
-  /** 本片在帧内的序号（`body[18]`）。 */
+  stream: Uint8Array;
+  frameIndex: number;
+  firstPacketIndex: number;
   pkgIdx: number;
-  /** 本帧总分片数（`body[19]`）。0 表示对端没填。 */
+  /** 原始数据片数。 */
   totalPkg: number;
-  /** 分片载荷（已去掉分片头）。 */
+  fecPackets: number;
   payload: Uint8Array;
-  /** 完整 body，调试用。 */
   raw: Uint8Array;
 }
 
-/**
- * 从视频 body 里切出分片载荷。
- *
- * 载荷固定从 `body[35]` 开始。
- */
 export function parseGroupVideoFragment(body: Uint8Array): GroupVideoFragment | null {
-  if (body.length <= VIDEO_PAYLOAD_OFFSET) return null;
+  if (body[TRACK_OFFSET] !== GroupTrack.video || body.length <= VIDEO_CONTINUATION_OFFSET)
+    return null;
+  const pkgIdx = body[VIDEO_IDX_OFFSET]!;
+  const totalPkg = body[VIDEO_TOTAL_OFFSET]!;
+  const start = pkgIdx === 0 ? VIDEO_FIRST_PAYLOAD_OFFSET : VIDEO_CONTINUATION_OFFSET;
+  if (pkgIdx >= totalPkg || body.length <= start) return null;
+  const payload = body.subarray(start);
+  if (pkgIdx === 0 && !H264_START_CODE.every((byte, i) => byte === payload[i])) return null;
   return {
-    pkgIdx: body[VIDEO_IDX_OFFSET] ?? 0,
-    totalPkg: body[VIDEO_TOTAL_OFFSET] ?? 0,
-    payload: body.subarray(VIDEO_PAYLOAD_OFFSET),
+    stream: body.subarray(0, 7),
+    frameIndex: body[VIDEO_FRAME_OFFSET]!,
+    firstPacketIndex: ((body[30]! | (body[31]! << 8)) - pkgIdx) & 0xffff,
+    pkgIdx,
+    totalPkg,
+    fecPackets: body[VIDEO_FEC_OFFSET]!,
+    payload,
     raw: body,
   };
 }
 
-// ─────────────────────────── 视频重组 ───────────────────────────
-
-/** 重组后的一帧 H.264（Annex B）。 */
 export interface GroupVideoFrame {
-  /** Annex B 裸流（首片带 `00 00 00 01` 起始码）。 */
   data: Uint8Array;
-  /** 是否关键帧（含 IDR / SPS NAL）。 */
   keyframe: boolean;
-  /** 本帧实际收到的分片数。 */
   fragments: number;
-  /** 该帧所属的成员 uin（`0x02` 包头的 `[13:17]`）。 */
   ownerUin: number;
 }
 
-/**
- * 按成员把视频分片重组成完整帧。
- *
- * 群聊是 N 路流，**每个成员各自一套分片序列**，所以按 `ownerUin` 分开维护。
- * `pkgIdx = 0` 开启新帧，其余分片按序追加；遇到序号跳变就丢弃当前帧（宁可丢一帧，
- * 也不要把两帧的字节拼在一起）。
- *
- * ⚠️ 抓包里的 `body[22]` 不是分片总数（3 片的帧里它是 0x0e），`body[19]` 也不可靠
- * （FEC 冗余片会让它偏小），所以这里**不按总数等齐**，而是首片一到就先交出去。
- * 代价是丢片时会交出被截断的帧 —— 对 H.264 来说截断帧会被解码器丢弃，不影响
- * 后续帧，比「等齐再交」更抗丢包。
- */
-export class GroupVideoAssembler {
-  /** 每个成员正在攒的那一帧：已收到的分片 + 本帧总分片数。 */
-  private readonly pending = new Map<number, { chunks: Uint8Array[]; total: number }>();
+interface PendingVideoFrame {
+  total: number;
+  chunks: Map<number, Uint8Array>;
+  emitted: boolean;
+}
 
-  /**
-   * 喂一个分片。
-   *
-   * **收齐 `totalPkg` 才返回整帧** —— 早先的实现每片都 emit 一版半截数据，
-   * 下游拿到的「帧」缺尾巴，解出来是花的（实机验证：对端音频正常、视频花屏）。
-   * 分片数不对或序号跳变时丢弃整帧，等下一个首片。
-   *
-   * @returns 完整帧；还在攒片时返回 `null`。
-   */
+interface GroupVideoStream {
+  frames: Map<string, PendingVideoFrame>;
+  parameterSets: number;
+}
+
+/** 按成员和流维护解码起点，按帧号与首片计数处理乱序和重复。 */
+export class GroupVideoAssembler {
+  private readonly pending = new Map<number, Map<string, GroupVideoStream>>();
+
   push(ownerUin: number, fragment: GroupVideoFragment): GroupVideoFrame | null {
-    const { pkgIdx, payload, totalPkg } = fragment;
-    if (pkgIdx === 0) {
-      // 新帧开始：上一帧没凑齐就丢掉。
-      this.pending.set(ownerUin, { chunks: [payload], total: totalPkg });
-      return this.maybeEmit(ownerUin);
+    const { stream, frameIndex, firstPacketIndex, pkgIdx, payload, totalPkg } = fragment;
+    const streamId = stream.join(',');
+    let streams = this.pending.get(ownerUin);
+    if (!streams) {
+      streams = new Map();
+      this.pending.set(ownerUin, streams);
     }
-    const state = this.pending.get(ownerUin);
-    // 没有首片、或序号跳变：丢弃，等下一帧的 pkgIdx=0。
-    if (!state || pkgIdx !== state.chunks.length) {
-      this.pending.delete(ownerUin);
-      return null;
+    let video = streams.get(streamId);
+    if (!video) {
+      if (streams.size >= 4) streams.delete(streams.keys().next().value!);
+      video = { frames: new Map(), parameterSets: 0 };
+      streams.set(streamId, video);
     }
-    state.chunks.push(payload);
-    return this.maybeEmit(ownerUin);
+
+    const frameId = `${frameIndex}:${firstPacketIndex}`;
+    let frame = video.frames.get(frameId);
+    if (!frame) {
+      if (video.frames.size >= 4) video.frames.delete(video.frames.keys().next().value!);
+      frame = { total: totalPkg, chunks: new Map(), emitted: false };
+      video.frames.set(frameId, frame);
+    }
+    if (frame.emitted || frame.total !== totalPkg || pkgIdx >= totalPkg) return null;
+    frame.chunks.set(pkgIdx, payload);
+    if (frame.chunks.size !== totalPkg) return null;
+
+    const chunks = Array.from({ length: totalPkg }, (_, index) => frame.chunks.get(index)!);
+    const data = concat(chunks);
+    frame.emitted = true;
+    frame.chunks.clear();
+
+    const types = h264NalTypes(data);
+    video.parameterSets |= types & H264_PARAMETER_SETS;
+    // 参数集可能分两帧送达，提前转交给解码器。
+    if (!(types & H264_PARAMETER_SETS) && video.parameterSets !== H264_PARAMETER_SETS) return null;
+    return {
+      data,
+      keyframe: (types & ((1 << 5) | (1 << 7))) !== 0,
+      fragments: totalPkg,
+      ownerUin,
+    };
   }
 
-  /** 清掉某个成员（或全部）的待重组状态，例如成员离开时。 */
   reset(ownerUin?: number): void {
     if (ownerUin === undefined) this.pending.clear();
     else this.pending.delete(ownerUin);
   }
-
-  private maybeEmit(ownerUin: number): GroupVideoFrame | null {
-    const state = this.pending.get(ownerUin);
-    if (!state) return null;
-    // totalPkg 为 0（抓包里个别包没填）时按 1 处理，避免永远攒不齐。
-    const total = state.total > 0 ? state.total : 1;
-    if (state.chunks.length < total) return null;
-    this.pending.delete(ownerUin);
-    const data = concat(state.chunks);
-    return {
-      data,
-      keyframe: hasIdrNal(data),
-      fragments: state.chunks.length,
-      ownerUin,
-    };
-  }
 }
 
-/**
- * 扫一遍 Annex B 流，看有没有 IDR（NAL type 5）或 SPS（7）。
- *
- * 首片一定带起始码，所以只要顺着起始码走就能逐个 NAL 判类型。
- */
+const H264_PARAMETER_SETS = (1 << 7) | (1 << 8);
+
+/** Annex B 已带 IDR 或 SPS。 */
 export function hasIdrNal(data: Uint8Array): boolean {
-  for (let i = 0; i + 4 < data.length; i++) {
-    if (data[i] === 0x00 && data[i + 1] === 0x00 && data[i + 2] === 0x00 && data[i + 3] === 0x01) {
-      const nalType = data[i + 4]! & 0x1f;
-      if (nalType === 5 || nalType === 7) return true;
-      i += 3; // 循环还会 +1，合起来跳过起始码
-    }
+  return (h264NalTypes(data) & ((1 << 5) | (1 << 7))) !== 0;
+}
+
+function h264NalTypes(data: Uint8Array): number {
+  let types = 0;
+  for (let i = 0; i + 3 < data.length; i++) {
+    if (data[i] !== 0 || data[i + 1] !== 0 || data[i + 2] !== 1) continue;
+    types |= 1 << (data[i + 3]! & 0x1f);
+    i += 2;
   }
-  return false;
+  return types;
 }
 
 // ─────────────────────────── 组包 ───────────────────────────
 
-/**
- * 组一个音频上行包（`0x17`）。
- *
- * 只做「媒体数据」这一种形态（`body[18] = 0x00`）；带 FEC 的形态（`0x50`）留给
- * 后续补冗余时再扩。
- *
- * 字段取自 ③ 的真实上行包，其中：
- * - `frameIndex`（`body[24]`）每帧 +1
- * - `sampleTs`（`body[25:29]`）每 20 ms 帧 +320 采样
- *
- * 其余字节是三份抓包里恒定的占位，**换 QQ 版本后要重新核对**。
- */
+/** 组一个 SILK 音频上行包（`0x17`）。扩展头每 15 帧发送一次。 */
 export function buildGroupAudioFrame(params: {
   route: number;
   ownerUin: number;
   stream: Uint8Array;
-  seq: number;
+  sentAt: number;
+  capturedAt: number;
   frameIndex: number;
   sampleTs: number;
-  opus: Uint8Array;
+  silk: Uint8Array;
+  profile?: number;
 }): Uint8Array {
   assertStream(params.stream);
-  const len = params.opus.length;
-  if (len < 3 || len > 0xfe) throw new RangeError(`Opus 帧长度不合法：${len}`);
+  const len = params.silk.length;
+  if (len === 0 || len + AUDIO_TRAILER_LENGTH > 0xff) {
+    throw new RangeError(`SILK 帧长度不合法：${len}`);
+  }
 
-  const body = new Uint8Array(AUDIO_LEN_OFFSET_PLAIN + AUDIO_PAYLOAD_DELTA + len);
-  body.set(params.stream, 0);
-  body[7] = 0x01; // c2s
-  body[8] = 0xa7;
-  writeSeq5(body, 9, params.seq);
-  body[14] = 0x79;
-  body[15] = 0xa7;
-  body[16] = GroupTrack.audio;
-  body[17] = 0x01;
-  body[18] = GroupAudioFragmentFlag.media;
-  body[19] = 0x03;
-  body[20] = 0x3e; // bit7 = 0 → 长度字段在 30
-  body[21] = 0x01;
-  body[22] = 0x25;
-  body[23] = 0x00;
-  body[24] = params.frameIndex & 0xff;
-  writeU32be(body, 25, params.sampleTs >>> 0);
-  body[29] = 0x00;
-  body[AUDIO_LEN_OFFSET_PLAIN] = len;
-  body[AUDIO_LEN_OFFSET_PLAIN + 1] = (len - 2) & 0xff;
-  body[AUDIO_LEN_OFFSET_PLAIN + 2] = 0x00;
-  body.set(params.opus, AUDIO_LEN_OFFSET_PLAIN + AUDIO_PAYLOAD_DELTA);
-
+  const extended = (params.frameIndex - 1) % AUDIO_EXTENSION_INTERVAL === 0;
+  const lengthOffset = extended ? AUDIO_LEN_OFFSET_EXT : AUDIO_LEN_OFFSET_PLAIN;
+  const body = new Uint8Array(lengthOffset + AUDIO_LENGTH_HEADER + len + AUDIO_TRAILER_LENGTH);
+  body.set(params.stream);
+  const legacy = params.profile !== undefined && params.profile < 10065;
+  const marker = legacy ? 0xa7 : 0xfa;
+  body[7] = 1;
+  body[8] = body[15] = marker;
+  body[9] = (params.sentAt >>> 16) & 0xff;
+  body[10] = (params.sentAt >>> 8) & 0xff;
+  body[11] = params.sentAt & 0xff;
+  body[12] = params.capturedAt & 0xff;
+  body[13] = (params.capturedAt >>> 8) & 0xff;
+  body[14] = (params.capturedAt >>> 16) & 0xff;
+  body.set([GroupTrack.audio, 1, 0, 3, extended ? 0xbe : 0x3e, 1], 16);
+  if (extended) body[22] = 1;
+  const frameOffset = AUDIO_FRAME_OFFSET + Number(extended);
+  body[frameOffset - 1] = 0x25;
+  body[frameOffset] = (params.frameIndex >>> 8) & 0xff;
+  body[frameOffset + 1] = params.frameIndex & 0xff;
+  writeU32be(body, frameOffset + 2, params.sampleTs >>> 0);
+  if (extended) body.set([0x10, 0x01], 30);
+  body[lengthOffset] = len + AUDIO_TRAILER_LENGTH;
+  body[lengthOffset + 1] = len;
+  body.set(params.silk, lengthOffset + AUDIO_LENGTH_HEADER);
   return wrapMedia(params.route, params.ownerUin, body);
 }
 
 /**
- * 把一个 H.264 帧切成若干个视频分片（`0x17`）。
- *
- * 分片上限默认 1000 字节：抓包里单包载荷最大约 1100，留一点余量避免超过 MTU 太多。
+ * 群视频发送使用两个低 16 位毫秒时钟。分片按 wire 长度对齐，校验片从续片载荷
+ * 偏移开始异或，包含首片附带的三个字节。
  */
 export function buildGroupVideoFragments(params: {
   route: number;
   ownerUin: number;
   stream: Uint8Array;
+  /** 供直接调用者提供时钟。会话会显式传发送与采集时间。 */
   seq: number;
-  /** Annex B 裸流。 */
+  sentAt?: number;
+  capturedAt?: number;
   data: Uint8Array;
-  /** 每片载荷上限。 */
   maxPayload?: number;
-  /** 本帧是否关键帧（决定 `body[17]` 首片是 0x00 还是 0x07）。 */
+  frameIndex?: number;
+  packetIndex?: number;
   keyframe?: boolean;
+  /** 与本场 QQ 信令能力档匹配的媒体头。 */
+  profile?: number;
+  /** 低分辨率的第二路 H.264 使用短头。 */
+  secondary?: boolean;
+  /** 与关键帧同一组的流标记。 */
+  groupIndex?: number;
 }): Uint8Array[] {
   assertStream(params.stream);
-  const maxPayload = params.maxPayload ?? 1000;
-  if (maxPayload < 16) throw new RangeError('分片上限太小');
+  const maxPayload = params.maxPayload ?? 960;
+  if (!Number.isInteger(maxPayload) || maxPayload < 16) throw new RangeError('分片上限太小');
+  if (params.data.length === 0) return [];
 
-  const total = Math.ceil(params.data.length / maxPayload);
-  if (total > 0xff) throw new RangeError(`分片数超过 255：${total}`);
+  const continuationOffset = params.secondary ? 24 : VIDEO_CONTINUATION_OFFSET;
+  const total = Math.ceil((params.data.length + 3) / maxPayload);
+  const parityCount = total > 1 ? 1 : 0;
+  if (total + parityCount > 0xff) throw new RangeError(`分片数超过 255：${total + parityCount}`);
 
-  const out: Uint8Array[] = [];
-  for (let idx = 0; idx < total; idx++) {
-    const start = idx * maxPayload;
-    const chunk = params.data.subarray(start, Math.min(params.data.length, start + maxPayload));
-    const body = new Uint8Array(VIDEO_PAYLOAD_OFFSET + chunk.length);
-    // 字段布局按 698 个真实上行视频包统计得出（见文件头注释）。
-    body.set(params.stream, 0);
-    body[7] = 0x01; // c2s
-    body[8] = 0xa7; // codec 标记
-    body[9] = 0x83; // 视频标记
-    // 序号是 4 字节（[10:14]），不是 5 字节。
-    writeU32be(body, 10, (params.seq + idx) >>> 0);
-    body[14] = 0x83;
-    body[15] = 0xa7;
-    body[16] = GroupTrack.video;
-    // [17]：关键帧首片 0x00，其余 0x07（实测 698 包里只有关键帧首片是 0）。
-    body[17] = idx === 0 && params.keyframe ? 0x00 : 0x07;
-    body[18] = idx;
-    body[19] = total; // 本帧总分片数
-    body[20] = 0x00;
-    body[21] = 0x0c;
-    body[22] = idx; // pkgIdx（与 [18] 同值）
-    body[23] = 0x01;
-    body[24] = 0x04;
-    body[25] = 0x04;
-    body[26] = 0x02;
-    body[28] = 0x04;
-    body[29] = 0x08;
-    body.set(chunk, VIDEO_PAYLOAD_OFFSET);
-    out.push(wrapMedia(params.route, params.ownerUin, body));
+  const shardSize = Math.ceil((params.data.length + 3) / total);
+  const shards: Uint8Array[] = [];
+  const frameIndex = params.frameIndex ?? 0;
+  const payload = new Uint8Array(total * shardSize);
+  const extensionIndex = params.keyframe ? 0 : (frameIndex - 1) & 0xffff;
+  payload.set([extensionIndex & 0xff, extensionIndex >>> 8, 0x03]);
+  payload.set(params.data, 3);
+  const parity = new Uint8Array(shardSize);
+  for (let index = 0; index < total; index++) {
+    const shard = payload.subarray(index * shardSize, (index + 1) * shardSize);
+    shards.push(shard);
+    if (parityCount) {
+      for (let byte = 0; byte < shardSize; byte++) parity[byte] = parity[byte]! ^ shard[byte]!;
+    }
   }
-  return out;
+  if (parityCount) shards.push(parity);
+
+  const legacy = params.profile !== undefined && params.profile < 10065;
+  const marker = legacy ? 0xa7 : 0xfa;
+  const codec = legacy ? 0x83 : 0x80;
+  const sendTick = params.sentAt ?? params.seq;
+  const frameTick = params.capturedAt ?? sendTick;
+  return shards.map((shard, index) => {
+    const body = new Uint8Array(continuationOffset + shard.length);
+    body.set(params.stream);
+    body[7] = 0x01;
+    body[8] = body[15] = marker;
+    body[9] = body[14] = codec;
+    body[10] = (sendTick >>> 8) & 0xff;
+    body[11] = sendTick & 0xff;
+    body[12] = frameTick & 0xff;
+    body[13] = (frameTick >>> 8) & 0xff;
+    body[16] = params.secondary ? GroupTrack.videoAlt : GroupTrack.video;
+    body[17] = params.keyframe ? 0 : params.secondary ? 2 : 7;
+    body[18] = index;
+    body[19] = total;
+    body[20] = parityCount;
+    body[22] = params.secondary && params.keyframe ? 0 : frameIndex & 0xff;
+    body[23] = (params.groupIndex ?? 1) & 0xff;
+    if (!params.secondary) {
+      body.set([0x0c, body[22]!, body[23]!, 4, 4, 2, 0, 4, 8], 21);
+      const packetIndex = (params.packetIndex ?? params.seq) + index;
+      body[30] = packetIndex & 0xff;
+      body[31] = (packetIndex >>> 8) & 0xff;
+    }
+    body.set(shard, continuationOffset);
+    return wrapMedia((params.route + index) & 0xffffff, params.ownerUin, body);
+  });
 }
 
 // ─────────────────────────── 小工具 ───────────────────────────
@@ -410,12 +414,7 @@ export function readSeq5(buf: Uint8Array, off: number): number {
   return u32be(buf, off) * 256 + buf[off + 4]!;
 }
 
-function writeSeq5(buf: Uint8Array, off: number, value: number): void {
-  buf[off] = Math.floor(value / 0x100000000) & 0xff;
-  writeU32be(buf, off + 1, value >>> 0);
-}
-
-/** 把媒体 body 包进 `0x02` 外层（`kind = 0x04`、`cmd = 0x17`）。 */
+/** 把媒体 body 包进 `0x02` 上行外层（`kind = 0x00`、`cmd = 0x17`）。 */
 function wrapMedia(route: number, ownerUin: number, body: Uint8Array): Uint8Array {
   const total = 17 + body.length + 1;
   if (total > 0xffff) throw new RangeError(`群通话媒体包超过 65535 字节：${total}`);

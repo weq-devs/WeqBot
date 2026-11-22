@@ -7,7 +7,7 @@
  *
  * 0x89A_0 的 settings 是同一个消息域，字段按用途分：
  *   - 搜索开关 tag 35/36；
- *   - 成员权限 / 邀请策略 tag 23/24/29（appPrivilegeFlag 是 deny 位）；
+ *   - 成员权限和邀请审核 tag 23/24，允许成员邀请单独写 tag 29；
  *   - 新成员历史 tag 42/43。
  * 每次只带本次要改的字段，未带的字段不下发。
  *
@@ -18,6 +18,11 @@ import { message } from '../../protobuf';
 import { invokeOidb, type OidbSpec } from '../invoke';
 import { toInt } from '../shared';
 import type { OidbNative } from '../../transport';
+import {
+  GROUP_ROBOT_SETTING_FIELDS,
+  type GroupExtRobotOption,
+  readGroupRobotFields,
+} from './group-ext';
 import { requireGroupId } from './shared';
 
 // ───────────────────────── 单群详情 — 0x88D_0 ─────────────────────────
@@ -25,6 +30,7 @@ import { requireGroupId } from './shared';
 const DETAIL_FLAGS = message([
   { name: 'ownerUid', tag: 1, type: 'bool' },
   { name: 'createTime', tag: 2, type: 'bool' },
+  { name: 'groupFlagExt', tag: 4, type: 'bool' },
   { name: 'maxMemberCount', tag: 5, type: 'bool' },
   { name: 'memberCount', tag: 6, type: 'bool' },
   { name: 'addType', tag: 7, type: 'bool' },
@@ -42,6 +48,7 @@ const DETAIL_FLAGS = message([
   { name: 'groupFlagExt4', tag: 101, type: 'bool' },
   { name: 'noFingerOpen', tag: 82, type: 'bool' },
   { name: 'noCodeFingerOpen', tag: 83, type: 'bool' },
+  { name: 'robotSettings', tag: 109, type: GROUP_ROBOT_SETTING_FIELDS },
 ]);
 
 const DETAIL_REQ = message([
@@ -59,6 +66,7 @@ const DETAIL_REQ = message([
 const DETAIL_RESULTS = message([
   { name: 'ownerUid', tag: 1, type: 'string' },
   { name: 'createTime', tag: 2, type: 'uint64' },
+  { name: 'groupFlagExt', tag: 4, type: 'uint32' },
   { name: 'maxMemberCount', tag: 5, type: 'uint64' },
   { name: 'memberCount', tag: 6, type: 'uint64' },
   { name: 'addType', tag: 7, type: 'uint32' },
@@ -76,6 +84,7 @@ const DETAIL_RESULTS = message([
   { name: 'groupFlagExt4', tag: 101, type: 'uint32' },
   { name: 'noFingerOpen', tag: 82, type: 'uint32' },
   { name: 'noCodeFingerOpen', tag: 83, type: 'uint32' },
+  { name: 'robotSettings', tag: 109, type: GROUP_ROBOT_SETTING_FIELDS },
 ]);
 
 const DETAIL_RESP = message([
@@ -84,6 +93,7 @@ const DETAIL_RESP = message([
     tag: 1,
     type: message([
       { name: 'uin', tag: 1, type: 'uint64' },
+      { name: 'result', tag: 2, type: 'uint32' },
       { name: 'results', tag: 3, type: DETAIL_RESULTS },
     ]),
   },
@@ -99,8 +109,12 @@ export interface GroupDetailInfo {
   groupFlagExt4: number;
   noFingerOpen: number;
   noCodeFingerOpen: number;
+  robotSettings?: GroupExtRobotOption['settingFields'];
   settingFields?: Partial<
-    Record<'privilegeFlag' | 'groupFlagExt4' | 'noFingerOpen' | 'noCodeFingerOpen', number>
+    Record<
+      'privilegeFlag' | 'groupFlagExt' | 'groupFlagExt4' | 'noFingerOpen' | 'noCodeFingerOpen',
+      number
+    >
   >;
 }
 
@@ -110,7 +124,7 @@ export namespace FetchGroupDetail {
   export const reqSchema = DETAIL_REQ;
   export const respSchema = DETAIL_RESP;
 
-  export type Params = { groupId: number };
+  export type Params = { groupId: number; includeRobotSettings?: boolean; includeAnswer?: boolean };
 
   export const serialize = (p: Params): Record<string, unknown> => ({
     field1: 537099973,
@@ -119,6 +133,7 @@ export namespace FetchGroupDetail {
       flags: {
         ownerUid: true,
         createTime: true,
+        groupFlagExt: true,
         maxMemberCount: true,
         memberCount: true,
         addType: true,
@@ -129,28 +144,30 @@ export namespace FetchGroupDetail {
         lastSequence: true,
         lastMessageTime: true,
         question: '',
-        answer: '',
+        ...(p.includeAnswer !== false ? { answer: '' } : {}),
         maxAdminCount: '',
         shutUpAllTimestamp: true,
         privilegeFlag: true,
         groupFlagExt4: true,
         noFingerOpen: true,
         noCodeFingerOpen: true,
+        ...(p.includeRobotSettings
+          ? { robotSettings: { inviteRobotMemberSwitch: 1, inviteRobotMemberExamine: 1 } }
+          : {}),
       },
     },
   });
 
   export const deserialize = (body: Record<string, unknown>, params?: Params): GroupDetailInfo => {
     const info = body.groupInfo as Record<string, unknown> | undefined;
+    const result = toInt(info?.result);
+    if (result !== 0) throw new Error(`0x88D_0 群资料读取失败（${result}）`);
     const results = info?.results as Record<string, unknown> | undefined;
     if (!results) throw new Error('0x88D_0 回包缺少 groupInfo.results');
-    const groupId = toInt(results.uin);
-    if (
-      (params && groupId !== params.groupId) ||
-      (groupId !== toInt(info?.uin) && toInt(info?.uin) !== 0)
-    ) {
+    // 外层是请求使用的公开群号，详情 tag 21 是内部 group UIN。
+    const groupId = toInt(info?.uin);
+    if (!groupId || (params && groupId !== params.groupId))
       throw new Error('0x88D_0 回包的群号不一致');
-    }
     return {
       groupId,
       name: typeof results.name === 'string' ? results.name : '',
@@ -161,8 +178,9 @@ export namespace FetchGroupDetail {
       groupFlagExt4: toInt(results.groupFlagExt4),
       noFingerOpen: toInt(results.noFingerOpen),
       noCodeFingerOpen: toInt(results.noCodeFingerOpen),
+      robotSettings: readGroupRobotFields(results.robotSettings),
       settingFields: Object.fromEntries(
-        ['privilegeFlag', 'groupFlagExt4', 'noFingerOpen', 'noCodeFingerOpen']
+        ['privilegeFlag', 'groupFlagExt', 'groupFlagExt4', 'noFingerOpen', 'noCodeFingerOpen']
           .filter((key) => results[key] !== undefined)
           .map((key) => [key, toInt(results[key])]),
       ),
@@ -252,37 +270,44 @@ export type GroupMemberInvitePolicy =
 
 export const MEMBER_INVITE_PRIVILEGE_MASK = 0x06100000;
 
-const POLICY_PRIVILEGE_BITS: Record<GroupMemberInvitePolicy, number> = {
-  disabled: 0x04000000,
+const POLICY_PRIVILEGE_BITS = {
   require_approval: 0,
   no_approval: 0x00100000,
-  no_approval_under_100: 0x02000000,
-};
+  no_approval_under_100: 0x04000000,
+} as const;
+
+const MEMBER_INVITE_DISABLED_BIT = 0x80;
+
+export function decodeMemberInviteAllowed(groupFlagExt: number | undefined): boolean | undefined {
+  return groupFlagExt === undefined ? undefined : (groupFlagExt & MEMBER_INVITE_DISABLED_BIT) === 0;
+}
 
 export function mergeMemberInvitePrivilegeFlag(
   currentPrivilegeFlag: number,
   policy: GroupMemberInvitePolicy,
 ): number {
   assertUint32(currentPrivilegeFlag, 'currentPrivilegeFlag');
+  if (policy === 'disabled') return currentPrivilegeFlag;
   const current = BigInt(currentPrivilegeFlag);
   const mask = BigInt(MEMBER_INVITE_PRIVILEGE_MASK);
   return Number((current & ~mask) | (BigInt(POLICY_PRIVILEGE_BITS[policy]) & mask));
 }
 
-export function decodeMemberInvitePolicy(privilegeFlag: number): GroupMemberInvitePolicy {
+export function decodeMemberInvitePolicy(
+  privilegeFlag: number,
+): Exclude<GroupMemberInvitePolicy, 'disabled'> {
   assertUint32(privilegeFlag, 'privilegeFlag');
   const bits = privilegeFlag & MEMBER_INVITE_PRIVILEGE_MASK;
-  if ((bits & 0x04000000) !== 0) return 'disabled';
-  if ((bits & 0x02000000) !== 0) return 'no_approval_under_100';
-  if ((bits & 0x00100000) !== 0) return 'no_approval';
-  return 'require_approval';
+  if ((bits & POLICY_PRIVILEGE_BITS.no_approval) !== 0) return 'no_approval';
+  return bits === 0 ? 'require_approval' : 'no_approval_under_100';
 }
 
 export interface SetGroupInvitePolicyParams {
   groupId: number;
-  /** 当前 appPrivilegeFlag，必须先通过 0x88D_0 读出。 */
-  currentPrivilegeFlag: number;
+  currentPrivilegeFlag?: number;
+  memberInviteAllowed?: boolean;
   policy: GroupMemberInvitePolicy;
+  beforeSend?: () => void;
 }
 
 export namespace SetGroupInvitePolicy {
@@ -293,17 +318,53 @@ export namespace SetGroupInvitePolicy {
 
   export type Params = SetGroupInvitePolicyParams;
 
-  export const serialize = (p: Params): Record<string, unknown> =>
-    writeSettings(p.groupId, {
-      appPrivilegeFlag: mergeMemberInvitePrivilegeFlag(p.currentPrivilegeFlag, p.policy),
-      appPrivilegeMask: MEMBER_INVITE_PRIVILEGE_MASK,
-      allowMemberInvite: p.policy === 'disabled' ? 0 : 1,
-    });
-
-  export const deserialize = (_body: Record<string, unknown>): void => {};
-
-  export const invoke = (nt: OidbNative, pid: number, params: Params): Promise<void> =>
-    invokeOidb(nt, pid, SetGroupInvitePolicy as OidbSpec<Params, void>, params);
+  export async function invoke(nt: OidbNative, pid: number, p: Params): Promise<void> {
+    const send = (settings: Record<string, number>) => {
+      p.beforeSend?.();
+      return invokeOidb(
+        nt,
+        pid,
+        {
+          command,
+          subCommand,
+          reqSchema,
+          respSchema,
+          serialize: (value) => writeSettings(p.groupId, value),
+          deserialize: () => {},
+        },
+        settings,
+      );
+    };
+    if (p.policy === 'disabled') {
+      if (p.memberInviteAllowed !== false) await send({ allowMemberInvite: 0 });
+      return;
+    }
+    // 已禁止邀请的群重新启用时，QQ 会使用「需要审核」作为默认档位。
+    if (p.policy === 'require_approval' && p.memberInviteAllowed === false) {
+      await send({ allowMemberInvite: 1 });
+      return;
+    }
+    // QQ 分别提交审核规则和邀请开关。先写规则，避免以旧规则开放邀请。
+    if (
+      p.currentPrivilegeFlag === undefined ||
+      decodeMemberInvitePolicy(p.currentPrivilegeFlag) !== p.policy
+    ) {
+      try {
+        await send({
+          appPrivilegeFlag: POLICY_PRIVILEGE_BITS[p.policy],
+          appPrivilegeMask: MEMBER_INVITE_PRIVILEGE_MASK,
+        });
+      } catch (error) {
+        if (error instanceof Error && /OIDB error 1006\b/.test(error.message)) {
+          throw new Error('QQ 拒绝修改邀请审核方式（1006），请在 QQ 群设置中修改', {
+            cause: error,
+          });
+        }
+        throw error;
+      }
+    }
+    if (p.memberInviteAllowed !== true) await send({ allowMemberInvite: 1 });
+  }
 }
 
 export const GROUP_HISTORY_VISIBILITY_MASK = 0x4;

@@ -342,17 +342,17 @@ test('收藏附件下载：只接受完整头部字段之后的零填充', async
   }
 });
 
-test('收藏附件下载：未验证版本 / 服务端错误 / 非 QQ 域都拒收', async () => {
+test('收藏附件下载：无效构建标识 / 服务端错误 / 非 QQ 域都拒收', async () => {
   await assert.rejects(
     applyCollectionFileDownload({
       uin: '10001',
       pskey: 'PSKEY',
       cid: 'c1',
-      clientBuild: '9.9.9-1',
+      clientBuild: 'unknown',
       file: FILE,
       transport: async () => downloadResponse({}),
     }),
-    /尚未验证/,
+    /无法识别当前 QQ 构建/,
   );
 
   await assert.rejects(

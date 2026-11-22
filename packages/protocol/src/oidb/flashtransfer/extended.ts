@@ -10,7 +10,7 @@
  * 签名：三条都不在 WeQ 的 SIGN_RULES 里（SnowLuma 也未记录），**三端待实测**。
  */
 
-import { message } from '../../protobuf';
+import { decode, message } from '../../protobuf';
 import { invokeOidb, type OidbSpec } from '../invoke';
 import { toInt } from '../shared';
 import type { OidbNative } from '../../transport';
@@ -31,12 +31,15 @@ const FLASH_FILE_ENTRY = message([
 
 const LIST_FILESETS_REQ = message([
   { name: 'field1', tag: 1, type: 'uint32' },
-  { name: 'field2', tag: 2, type: 'string' },
+  { name: 'paginationInfo', tag: 2, type: 'bytes' },
   { name: 'field3', tag: 3, type: 'uint32' },
 ]);
 
 const LIST_FILESETS_RESP = message([
   { name: 'entries', tag: 1, type: FLASH_FILE_ENTRY, repeated: true },
+  { name: 'total', tag: 2, type: 'uint32' },
+  { name: 'isEnd', tag: 3, type: 'bool' },
+  { name: 'paginationInfo', tag: 4, type: 'bytes' },
 ]);
 
 const DELETE_FILE_REQ = message([
@@ -83,7 +86,7 @@ export namespace ListFilesets {
   export const respSchema = LIST_FILESETS_RESP;
 
   export function serialize(params: ListFilesetsParams = {}): Record<string, unknown> {
-    return { field1: params.field1 ?? 3, field2: '', field3: params.field3 ?? 10 };
+    return { field1: params.field1 ?? 3, field3: params.field3 ?? 10 };
   }
 
   export function deserialize(body: Record<string, unknown>): FlashFileEntry[] {
@@ -115,6 +118,53 @@ export namespace ListFilesets {
       ListFilesets as OidbSpec<ListFilesetsParams, FlashFileEntry[]>,
       params,
     );
+  }
+}
+
+export interface ListFilesetsPageParams {
+  cursor?: Uint8Array;
+  limit?: number;
+}
+
+export interface FilesetsPage {
+  entries: FlashFileEntry[];
+  total: number | null;
+  nextCursor: Uint8Array | null;
+}
+
+export namespace ListFilesetsPage {
+  export const command = ListFilesets.command;
+  export const subCommand = ListFilesets.subCommand;
+  export const uinForm = true;
+  export const reqSchema = LIST_FILESETS_REQ;
+  export const respSchema = LIST_FILESETS_RESP;
+  export const decodeResponseBody = (bytes: Uint8Array) =>
+    decode(respSchema, bytes, { strict: true });
+
+  export function serialize({ cursor, limit }: ListFilesetsPageParams): Record<string, unknown> {
+    return { ...ListFilesets.serialize({ field3: limit ?? 10 }), paginationInfo: cursor };
+  }
+
+  export function deserialize(
+    body: Record<string, unknown>,
+    { cursor }: ListFilesetsPageParams,
+  ): FilesetsPage {
+    const entries = ListFilesets.deserialize(body);
+    const total = body.total === undefined ? null : toInt(body.total);
+    if (body.isEnd === true) return { entries, total, nextCursor: null };
+
+    const next = body.paginationInfo;
+    if (!(next instanceof Uint8Array) || next.length === 0) {
+      throw new Error('闪传列表回包未确认末页，也没有续页游标');
+    }
+    if (cursor?.length === next.length && cursor.every((byte, i) => byte === next[i])) {
+      throw new Error('闪传列表返回了相同的续页游标');
+    }
+    return { entries, total, nextCursor: next };
+  }
+
+  export function invoke(nt: OidbNative, pid: number, params: ListFilesetsPageParams = {}) {
+    return invokeOidb(nt, pid, ListFilesetsPage, params);
   }
 }
 

@@ -129,6 +129,13 @@ export async function withQzonePaginationTimeout<T>(
 }
 
 const PAGE_PATHS = new Set([
+  '/cgi-bin/blognew/get_abs',
+  '/cgi-bin/friendshow/cgi_get_visitor_simple',
+  '/cgi-bin/new/get_msgb',
+  '/cgi-bin/video_get_data',
+  '/cgi-bin/qzshare/cgi_qzsharegetmylistbytype',
+  '/cgi-bin/qzshare/cgi_qzshareget_comment',
+  '/cgi-bin/blognew/get_comment_list',
   '/cgi-bin/emotion_cgi_msglist_v6',
   '/cgi-bin/emotion_cgi_getcmtreply_v6',
   '/cgi-bin/emotion_cgi_ic_getcomments',
@@ -155,8 +162,13 @@ export function isQzonePageRequest(url: string): boolean {
   }
   if (!['user.qzone.qq.com', 'h5.qzone.qq.com', 'rc.qzone.qq.com'].includes(parsed.hostname))
     return false;
-  const target = parsed.pathname.match(/^\/proxy\/domain\/([^/]+)(\/.*)$/);
+  const target = parsed.pathname.match(/^\/(?:proxy\/domain|p\/h5\/pc\/api)\/([^/]+)(\/.*)$/);
   if (!target || !/^(?:[a-z0-9-]+\.)*(?:qzone\.qq\.com|taotao\.qq\.com)$/.test(target[1]!))
+    return false;
+  if (
+    target[2] === '/cgi-bin/friendshow/cgi_get_visitor_simple' &&
+    !parsed.searchParams.has('page')
+  )
     return false;
   return PAGE_PATHS.has(target[2]!);
 }

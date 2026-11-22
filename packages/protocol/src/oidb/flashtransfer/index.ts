@@ -52,11 +52,14 @@ export type { FlashFileTypeCode } from './file-type';
 export {
   DeleteFlashFile,
   ListFilesets,
+  ListFilesetsPage,
   RenameFlashFile,
 } from './extended';
 export type {
   DeleteFlashFileParams,
+  FilesetsPage,
   FlashFileEntry,
+  ListFilesetsPageParams,
   ListFilesetsParams,
   RenameFlashFileParams,
 } from './extended';

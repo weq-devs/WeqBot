@@ -11,10 +11,12 @@
     "./push": "./src/push/index.ts",
     "./protobuf": "./src/protobuf.ts",
     "./contacts": "./src/oidb/contacts/index.ts",
+    "./group-tags": "./src/group-tags.ts",
     "./web": "./src/web/index.ts",
     "./profile-display": "./src/profile-display.ts",
     "./profile-regions": "./src/profile-regions.ts",
-    "./profile-values": "./src/profile-values.ts"
+    "./profile-values": "./src/profile-values.ts",
+    "./qq-sync": "./src/qq-sync/index.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit"

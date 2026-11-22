@@ -1,5 +1,5 @@
 /**
- * 空间资料（名称 / 说明）与说说删除。
+ * 空间资料、个人档与说说删除。
  *
  * 搬运自 SnowLuma `packages/protocol/src/web/qzone.ts`（2026-11-14，用户已授权
  * 抄 wire 形状与业务逻辑），只把 cookie 参数换成本包的 {@link WebCredential}、
@@ -28,15 +28,28 @@ interface RawQzoneProfileResponse {
   code?: number;
   subcode?: number;
   message?: string;
-  data?: {
-    spacename?: unknown;
-    desc?: unknown;
-  };
+  data?: Record<string, unknown>;
 }
 
 export interface QzoneProfile {
   name: string;
   description: string;
+  relationship?: string;
+  personal: {
+    nickname?: string;
+    signature?: string;
+    gender?: string;
+    age?: number;
+    birthday?: string;
+    constellation?: string;
+    region?: string;
+    hometown?: string;
+    bloodType?: string;
+    occupation?: string;
+    company?: string;
+    companyRegion?: string;
+    companyAddress?: string;
+  };
 }
 
 export interface QzoneProfilePatch {
@@ -44,7 +57,99 @@ export interface QzoneProfilePatch {
   description?: string;
 }
 
-/** 读空间名称与说明（默认自己）。 */
+function profileText(value: unknown): string | undefined {
+  return typeof value === 'string' ? value.trim() || undefined : undefined;
+}
+
+function profileNumber(value: unknown): number | undefined {
+  const parsed = typeof value === 'string' && /^-?\d+$/.test(value) ? Number(value) : value;
+  return typeof parsed === 'number' && Number.isSafeInteger(parsed) ? parsed : undefined;
+}
+
+function profileBirthday(data: Record<string, unknown>, own: boolean) {
+  if (profileNumber(data.birthday_type) !== 0 || typeof data.birthday !== 'string')
+    return undefined;
+  const date = /^(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])$/.exec(data.birthday);
+  if (!date) return undefined;
+  const month = Number(date[1]);
+  const day = Number(date[2]);
+  const lunar = profileNumber(data.islunar) === 1;
+  if (!lunar || !own) {
+    return `${month}月${day}日${lunar ? '（农历）' : ''}`;
+  }
+  // 个人档对自己返回对应的公历日期，对访客直接返回农历月日。
+  const year = profileNumber(data.birthyear);
+  if (year === undefined || year < 1000 || year > 9999) return undefined;
+  const birthday = new Date(Date.UTC(year, month - 1, day));
+  if (birthday.getUTCDate() !== day) return undefined;
+  const parts = new Intl.DateTimeFormat('zh-CN-u-ca-chinese', {
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'UTC',
+  }).formatToParts(birthday);
+  const lunarMonth = parts.find((part) => part.type === 'month')?.value;
+  const lunarDay = parts.find((part) => part.type === 'day')?.value;
+  return lunarMonth && lunarDay ? `${lunarMonth}${lunarDay}日（农历）` : undefined;
+}
+
+const constellations = [
+  '白羊座',
+  '金牛座',
+  '双子座',
+  '巨蟹座',
+  '狮子座',
+  '处女座',
+  '天秤座',
+  '天蝎座',
+  '射手座',
+  '摩羯座',
+  '水瓶座',
+  '双鱼座',
+];
+
+export function parseQzoneProfile(text: string, own: boolean): QzoneProfile {
+  const response = parseQzoneJson<RawQzoneProfileResponse>(text);
+  if (response.code !== 0 || (response.subcode !== undefined && response.subcode !== 0)) {
+    throw codeError('空间资料', response.code ?? 0, response.subcode, response.message);
+  }
+  const data = response.data;
+  if (typeof data?.spacename !== 'string' || typeof data.desc !== 'string') {
+    throw new Error('空间资料响应缺少名称或说明');
+  }
+  const num = (key: string) => profileNumber(data[key]);
+  const address = (...keys: string[]) =>
+    keys
+      .map((key) => profileText(data[key]))
+      .filter(Boolean)
+      .join(' ') || undefined;
+  const age = num('age');
+  const relationship = ['', '单身', '已婚', '保密', '恋爱中', '已订婚', '分居', '离异'][
+    num('marriage') ?? -1
+  ];
+  return {
+    name: data.spacename,
+    description: data.desc,
+    ...(relationship ? { relationship } : {}),
+    personal: {
+      nickname: profileText(data.nickname),
+      signature: profileText(data.signature),
+      gender: num('sex_type') === 0 ? [undefined, '男', '女'][num('sex') ?? -1] : undefined,
+      age: num('age_type') === 0 && age !== undefined && age >= 0 ? age : undefined,
+      birthday: profileBirthday(data, own),
+      constellation:
+        num('constellation_type') === 0 ? constellations[num('constellation') ?? -1] : undefined,
+      region: num('address_type') === 0 ? address('country', 'province', 'city') : undefined,
+      hometown: num('home_type') === 0 ? address('hco', 'hp', 'hc') : undefined,
+      bloodType: ['其他', 'A', 'B', 'O', 'AB', '其他'][num('bloodtype') ?? -1],
+      occupation: profileText(data.career),
+      company: profileText(data.company),
+      companyRegion: address('cco', 'cp', 'cc'),
+      companyAddress: profileText(data.cb),
+    },
+  };
+}
+
+/** 读空间名称、说明与个人档（默认自己）。 */
 export async function getQzoneProfile(
   cred: WebCredential,
   selfUin: string,
@@ -63,14 +168,7 @@ export async function getQzoneProfile(
     cookie: cookieHeader(cred),
     headers: { Referer: `https://user.qzone.qq.com/${selfUin}` },
   });
-  const response = parseQzoneJson<RawQzoneProfileResponse>(text);
-  if (response.code !== 0 || (response.subcode !== undefined && response.subcode !== 0)) {
-    throw codeError('空间资料', response.code ?? 0, response.subcode, response.message);
-  }
-  if (typeof response.data?.spacename !== 'string' || typeof response.data.desc !== 'string') {
-    throw new Error('空间资料响应缺少名称或说明');
-  }
-  return { name: response.data.spacename, description: response.data.desc };
+  return parseQzoneProfile(text, targetUin === selfUin);
 }
 
 /**

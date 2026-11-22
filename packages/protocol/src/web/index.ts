@@ -21,11 +21,18 @@ export * from './qzone-pagination';
 
 export * from './qzone';
 export * from './qzone_album';
+export * from './qzone_blog';
 export * from './qzone_comments';
 export * from './qzone_detail';
 export * from './qzone_forwards';
 export * from './qzone_friend_permissions';
 export * from './qzone_interaction';
+export {
+  getQzoneGuestbook,
+  getQzoneVideos,
+  getQzoneVisitors,
+} from './qzone_more';
+export * from './qzone_share';
 export * from './qzone_people';
 export * from './qzone_public';
 export * from './qzone_profile';

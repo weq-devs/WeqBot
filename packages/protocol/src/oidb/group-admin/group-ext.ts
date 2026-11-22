@@ -17,25 +17,20 @@ import { toInt } from '../shared';
 import { requireGroupId } from './shared';
 import type { OidbNative } from '../../transport';
 
-const GROUP_EXT_BODY = message([
-  { name: 'inviteRobotMemberSwitch', tag: 29, type: 'uint32' },
-  { name: 'inviteRobotMemberExamine', tag: 30, type: 'uint32' },
-]);
-
-const GET_GROUP_EXT_FILTER = message([
-  { name: 'inviteRobotMemberSwitch', tag: 29, type: 'uint32' },
-  { name: 'inviteRobotMemberExamine', tag: 30, type: 'uint32' },
+export const GROUP_ROBOT_SETTING_FIELDS = message([
+  { name: 'inviteRobotMemberSwitch', tag: 29, type: 'uint32', force: true },
+  { name: 'inviteRobotMemberExamine', tag: 30, type: 'uint32', force: true },
 ]);
 
 const GET_GROUP_EXT_REQ = message([
   { name: 'groupCodes', tag: 1, type: 'uint64', repeated: true },
-  { name: 'filter', tag: 2, type: GET_GROUP_EXT_FILTER },
+  { name: 'filter', tag: 2, type: GROUP_ROBOT_SETTING_FIELDS },
 ]);
 
 const GET_GROUP_EXT_ITEM = message([
   { name: 'groupCode', tag: 1, type: 'uint64' },
-  { name: 'resultCode', tag: 2, type: 'uint32' },
-  { name: 'ext', tag: 3, type: GROUP_EXT_BODY },
+  { name: 'resultCode', tag: 2, type: 'int32' },
+  { name: 'ext', tag: 3, type: GROUP_ROBOT_SETTING_FIELDS },
 ]);
 
 const GET_GROUP_EXT_RESP = message([
@@ -44,7 +39,7 @@ const GET_GROUP_EXT_RESP = message([
 
 const GROUP_EXT_INFO = message([
   { name: 'groupCode', tag: 1, type: 'uint32' },
-  { name: 'ext', tag: 2, type: GROUP_EXT_BODY },
+  { name: 'ext', tag: 2, type: GROUP_ROBOT_SETTING_FIELDS },
 ]);
 
 const MODIFY_GROUP_EXT_REQ = message([
@@ -61,6 +56,19 @@ export interface GroupExtRobotOption {
   robotMemberSwitch: number;
   robotMemberExamine: number;
   settingFields?: Partial<Record<'robotMemberSwitch' | 'robotMemberExamine', number>>;
+}
+
+export function readGroupRobotFields(value: unknown): GroupExtRobotOption['settingFields'] {
+  if (!value || typeof value !== 'object') return undefined;
+  const ext = value as Record<string, unknown>;
+  return {
+    ...(typeof ext.inviteRobotMemberSwitch === 'number'
+      ? { robotMemberSwitch: ext.inviteRobotMemberSwitch }
+      : {}),
+    ...(typeof ext.inviteRobotMemberExamine === 'number'
+      ? { robotMemberExamine: ext.inviteRobotMemberExamine }
+      : {}),
+  };
 }
 
 export interface FetchGroupExtInfoParams {
@@ -95,18 +103,11 @@ export namespace FetchGroupExtInfo {
     const resultCode = toInt(item.resultCode);
     if (resultCode !== 0) throw new Error(`读不到群机器人入群选项: result=${resultCode}`);
 
-    const ext = (item.ext as Record<string, unknown> | undefined) ?? {};
+    const settingFields = readGroupRobotFields(item.ext);
     return {
-      robotMemberSwitch: toInt(ext.inviteRobotMemberSwitch),
-      robotMemberExamine: toInt(ext.inviteRobotMemberExamine),
-      settingFields: {
-        ...(ext.inviteRobotMemberSwitch === undefined
-          ? {}
-          : { robotMemberSwitch: toInt(ext.inviteRobotMemberSwitch) }),
-        ...(ext.inviteRobotMemberExamine === undefined
-          ? {}
-          : { robotMemberExamine: toInt(ext.inviteRobotMemberExamine) }),
-      },
+      robotMemberSwitch: settingFields?.robotMemberSwitch ?? 0,
+      robotMemberExamine: settingFields?.robotMemberExamine ?? 0,
+      settingFields,
     };
   }
 

@@ -1,0 +1,1 @@
+export const GROUP_SELECTED_TAG_LIMIT = 20;

@@ -735,8 +735,88 @@ export async function getQzoneMsgDetail(
 // 好友动态 cgi 每条 feed 返回一段预渲染 HTML 加少量结构化字段。我们透出稳定的
 // 结构化字段,HTML 原样带出(深度 HTML→段 解析超出范围,需要的调用方自己解)。
 //
-// Pagination continues with data.main.externparam from the previous page;
-// basetime and pagenum must also be mirrored in the top-level request.
+// v8/ic/tab_friend_feed.js carries the CGI's data.main state, not just externparam.
+
+const FEED_POSITION_FIELDS = [
+  'begintime',
+  'pagenum',
+  'dayspac',
+  'aisortEndTime',
+  'aisortOffset',
+  'aisortBeginTime',
+  'getAisort',
+  'externparam',
+  'uinlist',
+  'daylist',
+] as const;
+const FEED_CURSOR_FIELDS = [...FEED_POSITION_FIELDS, 'icServerTime'] as const;
+type FeedState = Partial<Record<(typeof FEED_CURSOR_FIELDS)[number], string>>;
+const FEED_DEFAULTS = {
+  begintime: '0',
+  pagenum: '1',
+  dayspac: '5',
+  aisortEndTime: '0',
+  aisortOffset: '0',
+  aisortBeginTime: '0',
+  getAisort: '0',
+};
+
+function feedStateValue(key: (typeof FEED_CURSOR_FIELDS)[number], value: unknown) {
+  if (typeof value !== 'string' && typeof value !== 'number') return undefined;
+  const text = String(value);
+  if (key === 'externparam' || key === 'uinlist' || key === 'daylist')
+    return text.length <= 16384 ? text : undefined;
+  return /^\d{1,20}$/.test(text) && (key !== 'pagenum' || Number(text) > 0) ? text : undefined;
+}
+
+function feedExternalState(externparam: string): FeedState {
+  const params = new URLSearchParams(externparam);
+  return {
+    externparam,
+    begintime: feedStateValue('begintime', params.get('basetime')),
+    pagenum: feedStateValue('pagenum', params.get('pagenum')),
+  };
+}
+
+function readFeedCursor(cursor: string): FeedState {
+  const params = new URLSearchParams(cursor);
+  const state: FeedState = {};
+  if (params.get('weqFeed') === '1') {
+    for (const key of FEED_CURSOR_FIELDS) {
+      const value = feedStateValue(key, params.get(key));
+      if (value !== undefined) state[key] = value;
+    }
+  } else {
+    // Older consumers pass the raw externparam back unchanged.
+    const legacy = feedExternalState(cursor);
+    if (legacy.begintime && legacy.pagenum) return legacy;
+  }
+  if (FEED_POSITION_FIELDS.some((key) => state[key] !== undefined)) return state;
+  throw new Error('好友动态分页信息无效，请刷新后重试。');
+}
+
+function nextFeedCursor(main: NonNullable<RawFeedsRet['data']>['main'], previous: FeedState) {
+  if (!main) return undefined;
+  const external = feedStateValue('externparam', main.externparam);
+  const fallback = external ? feedExternalState(external) : {};
+  const next = { ...previous };
+  for (const key of FEED_CURSOR_FIELDS) {
+    const incoming = main[key === 'getAisort' ? 'aisortNextTime' : key];
+    const value = feedStateValue(key, incoming);
+    if (value !== undefined && (value !== '' || key === 'uinlist')) next[key] = value;
+    else if (fallback[key] !== undefined) next[key] = fallback[key];
+  }
+  // A changing server clock alone does not move the feed position.
+  if (!FEED_POSITION_FIELDS.some((key) => (next[key] ?? '') !== (previous[key] ?? '')))
+    return undefined;
+  const cursor = new URLSearchParams({ weqFeed: '1' });
+  for (const key of FEED_CURSOR_FIELDS) {
+    const value = next[key];
+    if (value !== undefined) cursor.set(key, value);
+  }
+  const encoded = cursor.toString();
+  return encoded.length <= 16384 ? encoded : undefined;
+}
 
 export interface RawFeedItem {
   uin?: number | string;
@@ -758,7 +838,10 @@ interface RawFeedsRet {
   data?: {
     data?: RawFeedItem[] | null;
     hasmore?: number | string;
-    main?: { externparam?: string; hasMoreFeeds?: boolean | number | string };
+    main?: Partial<Record<(typeof FEED_CURSOR_FIELDS)[number] | 'aisortNextTime', unknown>> & {
+      hasMoreFeeds?: boolean | number | string;
+      error?: string;
+    };
   };
 }
 
@@ -788,7 +871,7 @@ export interface QzoneFeedsResult {
 }
 
 /** 纯转换:原始 feeds 响应 → 归一化好友动态列表。 */
-export function mapFeeds(data: RawFeedsRet): QzoneFeedsResult {
+export function mapFeeds(data: RawFeedsRet, previous: FeedState = FEED_DEFAULTS): QzoneFeedsResult {
   // 该 cgi 会在数组尾部塞 `undefined`/null 空洞 —— 过滤掉。
   const list = (data.data?.data ?? []).filter((f): f is RawFeedItem => !!f);
   const more = data.data?.main?.hasMoreFeeds;
@@ -796,7 +879,7 @@ export function mapFeeds(data: RawFeedsRet): QzoneFeedsResult {
     more === undefined
       ? Number(data.data?.hasmore ?? 0) !== 0
       : more === true || more === 1 || more === '1' || more === 'true';
-  const nextCursor = data.data?.main?.externparam;
+  const nextCursor = hasMore ? nextFeedCursor(data.data?.main, previous) : undefined;
   return {
     feeds: list.map((f) => ({
       uin: Number(f.uin ?? f.opuin ?? 0),
@@ -812,9 +895,7 @@ export function mapFeeds(data: RawFeedsRet): QzoneFeedsResult {
         : {}),
     })),
     hasMore,
-    ...(hasMore && typeof nextCursor === 'string' && nextCursor && nextCursor.length <= 16384
-      ? { nextCursor }
-      : {}),
+    ...(nextCursor ? { nextCursor } : {}),
   };
 }
 
@@ -836,11 +917,11 @@ export async function getQzoneFeeds(
   scope: 0 | 7 = 0,
 ): Promise<QzoneFeedsResult> {
   const gtk = computeBkn(cred.pskey || cred.skey);
-  const continuation = new URLSearchParams(cursor ?? '');
-  const beginTime = cursor ? continuation.get('basetime') : '0';
-  const page = cursor ? continuation.get('pagenum') : String(pageNum);
-  if (cursor && (!beginTime || !/^\d+$/.test(beginTime) || !page || !/^\d+$/.test(page)))
-    throw new Error('好友动态分页信息无效，请刷新后重试。');
+  const pagination: FeedState = {
+    ...FEED_DEFAULTS,
+    pagenum: String(pageNum),
+    ...(cursor ? readFeedCursor(cursor) : {}),
+  };
 
   const url = `https://h5.qzone.qq.com/proxy/domain/ic2.qzone.qq.com/cgi-bin/feeds/feeds3_html_more?${new URLSearchParams(
     {
@@ -850,16 +931,10 @@ export async function getQzoneFeeds(
       filter: 'all',
       flag: '1',
       applist: 'all',
-      pagenum: page!,
+      ...pagination,
       count: String(count),
       refresh: cursor ? '0' : '1',
-      dayspac: '5',
       sidomain: 'qzonestyle.gtimg.cn',
-      ...(cursor ? { externparam: cursor } : {}),
-      aisortEndTime: '0',
-      aisortOffset: '0',
-      aisortBeginTime: '0',
-      begintime: beginTime!,
       g_tk: String(gtk),
       callback: '_preloadCallback',
       format: 'jsonp',
@@ -882,11 +957,11 @@ export async function getQzoneFeeds(
   if (typeof data.code === 'number' && data.code !== 0) {
     throw qzoneCodeError('qzone feeds', data.code, data.message);
   }
-  if (!Array.isArray(data.data?.data)) {
+  if (!Array.isArray(data.data?.data) || data.data.main?.error === 'more') {
     throw new Error('暂时无法读取好友动态，请稍后重试。');
   }
 
-  return mapFeeds(data);
+  return mapFeeds(data, pagination);
 }
 
 // ───────────────────────── 写操作：点赞 / 取消 / 评论 ─────────────────────────

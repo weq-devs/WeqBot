@@ -77,6 +77,7 @@ export {
   GROUP_HISTORY_VISIBILITY_MASK,
   GROUP_MEMBER_PERMISSION_MASKS,
   mergeMemberInvitePrivilegeFlag,
+  decodeMemberInviteAllowed,
   decodeMemberInvitePolicy,
   decodeGroupHistoryVisibility,
   mergeGroupMemberPermission,
@@ -93,6 +94,8 @@ export type {
 } from './group-admin-settings';
 
 export { GetAdminReceiveVerify, SetAdminReceiveVerify } from './receive-verify';
+export { GROUP_SELECTED_TAG_LIMIT } from '../../group-tags';
+export { GetGroupSelectedTags, SetGroupSelectedTags } from './group-selected-tags';
 export type {
   GetAdminReceiveVerifyParams,
   SetAdminReceiveVerifyParams,

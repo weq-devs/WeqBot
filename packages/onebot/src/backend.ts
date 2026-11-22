@@ -707,6 +707,11 @@ export interface FlashTransferBackend {
   ): Promise<{ filesetId: string; shareUrl: string }>;
   getFilesetInfo(filesetId: string): Promise<FlashFileItem[]>;
   listFilesets(): Promise<FlashFileItem[]>;
+  listFilesetsPage?(params: { cursor?: Uint8Array; limit?: number }): Promise<{
+    items: FlashFileItem[];
+    total: number | null;
+    nextCursor: Uint8Array | null;
+  }>;
   getShareLink(filesetId: string): Promise<string>;
   deleteFile(filesetId: string): Promise<void>;
   renameFile(filesetId: string, newName: string): Promise<void>;

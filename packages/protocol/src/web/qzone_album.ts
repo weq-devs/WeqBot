@@ -277,6 +277,7 @@ interface RawPhoto {
     url3?: string;
     video_url?: string;
     video_id?: string | number;
+    vid?: string;
     video_time?: string | number;
   };
   width?: number | string;
@@ -453,6 +454,7 @@ export async function getQzoneAlbumDetail(
     desc: photo.desc ?? '',
     imageUrl: photo.raw || photo.url || photo.pre || '',
     videoUrl: vi?.download_url || vi?.url3 || '',
+    videoId: vi?.vid ?? '',
     width: Number.isSafeInteger(photo.width) && photo.width! > 0 ? photo.width! : null,
     height: Number.isSafeInteger(photo.height) && photo.height! > 0 ? photo.height! : null,
   };

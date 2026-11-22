@@ -79,6 +79,7 @@ import {
   TransGroupFile,
   decodeGroupHistoryVisibility,
   decodeGroupMemberPermissions,
+  decodeMemberInviteAllowed,
   decodeMemberInvitePolicy,
   setGroupAvatar,
   FetchDownloadRkeys,
@@ -146,6 +147,7 @@ import {
   KickGroupMember,
   LeaveGroup,
   ListFilesets,
+  ListFilesetsPage,
   ListGroupFiles,
   ModifyCustomFace,
   MoveGroupFile,
@@ -1715,7 +1717,8 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
         const detail = await FetchGroupDetail.invoke(nt, sessionId, { groupId });
         await SetGroupInvitePolicy.invoke(nt, sessionId, {
           groupId,
-          currentPrivilegeFlag: detail.privilegeFlag,
+          currentPrivilegeFlag: detail.settingFields?.privilegeFlag,
+          memberInviteAllowed: decodeMemberInviteAllowed(detail.settingFields?.groupFlagExt),
           policy,
         });
       },
@@ -1755,7 +1758,10 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
           group_answer: detail.answer,
           robot_member_switch: robot.robotMemberSwitch,
           robot_member_examine: robot.robotMemberExamine,
-          member_invite_policy: decodeMemberInvitePolicy(detail.privilegeFlag),
+          member_invite_policy:
+            decodeMemberInviteAllowed(detail.settingFields?.groupFlagExt) === false
+              ? 'disabled'
+              : decodeMemberInvitePolicy(detail.privilegeFlag),
           allow_member_upload_album: permissions.allowMemberUploadAlbum,
           allow_member_temporary_session: permissions.allowMemberTemporarySession,
           allow_member_create_group: permissions.allowMemberCreateGroup,
@@ -1941,15 +1947,11 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       },
       async listFilesets() {
         const entries = await ListFilesets.invoke(nt, sessionId, {});
-        return entries.map((entry) => ({
-          filesetId: entry.filesetUuid,
-          fileName: entry.fileName,
-          origName: entry.origName,
-          fileSize: entry.fileSize,
-          shareUrl: entry.uploadUrl,
-          fileId: entry.fileId,
-          downloadUrl: '',
-        }));
+        return entries.map(flashFilesetItem);
+      },
+      async listFilesetsPage(params) {
+        const { entries, ...page } = await ListFilesetsPage.invoke(nt, sessionId, params);
+        return { ...page, items: entries.map(flashFilesetItem) };
       },
       async getShareLink(filesetId) {
         const entries = await GetFilesetDetail.invoke(nt, sessionId, { filesetUuid: filesetId });
@@ -2873,6 +2875,18 @@ function createQzoneBackend(options: {
 const QFILE_SHARE_ORIGIN = 'https://qfile.qq.com';
 
 /** 分享码 / 官方分享链接 → 受控的 qfile 分享页 URL。 */
+function flashFilesetItem(entry: ReturnType<typeof ListFilesets.deserialize>[number]) {
+  return {
+    filesetId: entry.filesetUuid,
+    fileName: entry.fileName,
+    origName: entry.origName,
+    fileSize: entry.fileSize,
+    shareUrl: entry.uploadUrl,
+    fileId: entry.fileId,
+    downloadUrl: '',
+  };
+}
+
 function flashShareUrl(input: string): string {
   const value = input.trim();
   if (!value) throw new Error('get_fileset_id: 分享码不能为空');

@@ -906,6 +906,13 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     inputSchema: input({ fileset_id: str('闪传文件集 id') }, ['fileset_id']),
   },
   list_filesets: { inputSchema: EMPTY_INPUT },
+  list_filesets_page: {
+    description: '首屏省略 cursor。续页原样传回 next_cursor，is_end 为 true 时停止。',
+    inputSchema: input({
+      cursor: str('上一页返回的 Base64 游标', { minLength: 1, maxLength: 4096 }),
+      limit: int('每页条数', { minimum: 1, maximum: 100, default: 10 }),
+    }),
+  },
   get_share_link: {
     inputSchema: input({ fileset_id: str('闪传文件集 id') }, ['fileset_id']),
   },
