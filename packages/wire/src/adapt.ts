@@ -205,10 +205,12 @@ export interface RawNativeBinding {
     guid?: string | null;
   }>;
   /**
-   * 把 a1 加密后写回 `login.db` 的 `[1004]`（nt_helper 的 `updateLoginDbA1`）。
+   * 把 a1 加密后写回 `login.db` 的 `[1004]`，同时刷新登录时间 `[1008]`
+   * （nt_helper 的 `updateLoginDbA1`）。
    *
    * 三端自己选加密方式（Linux / macOS 用设备 guid 派生，Windows 用 DPAPI），
-   * 只改 a1，不碰 `[1008]` / `[1013]` 等时间字段，提交前会回读自检。
+   * 只改 `[1004]` / `[1008]`，不碰 `[1013]` 等其它时间字段，提交前会回读自检。
+   * `lastLoginAt` 是写进 `[1008]` 的 Unix 秒；不传就用当前时间。
    * **同步**函数；QQ 本体持有该库的写锁时会失败，所以写之前必须先让它退出。
    *
    * 缺这个方法的老原生组件上，本机组只能「读 a1」不能「回写」，调用方要降级
@@ -220,6 +222,7 @@ export interface RawNativeBinding {
     a1Payload: string,
     algo: { pageHmacAlgorithm: string; kdfHmacAlgorithm: string },
     dryRun?: boolean | null,
+    lastLoginAt?: number | null,
   ): {
     uin: string;
     updatedRows: number;
