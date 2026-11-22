@@ -3,6 +3,14 @@ import { WEB_READ_RETRY, webRequestText } from './http';
 import { mapMsgList, parseQzoneCallback } from './qzone';
 import type { QzoneNativeDetail } from '../qzone/feed-media-detail';
 
+export class QzonePostNotFoundError extends Error {
+  override name = 'QzonePostNotFoundError';
+
+  constructor() {
+    super('该条内容已被删除');
+  }
+}
+
 function hasMore(value: unknown): boolean | null {
   if (value === true || value === 1 || value === '1') return true;
   if (value === false || value === 0 || value === '0') return false;
@@ -12,6 +20,8 @@ function hasMore(value: unknown): boolean | null {
 function accepted(text: string, hostUin: string, tid: string): Record<string, unknown> {
   const data = parseQzoneCallback<Record<string, unknown>>(text);
   if (data.code !== 0) {
+    if (data.code === -10029 && data.subcode === -8 && data.message === '该条内容已被删除')
+      throw new QzonePostNotFoundError();
     if (data.code === -3000 || data.code === -10000)
       throw new WebAuthError('说说补全登录态失效。', data.code);
     throw new Error('暂时无法补全这条说说。');
