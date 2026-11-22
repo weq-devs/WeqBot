@@ -146,6 +146,7 @@ test('独立视频按 vid 去重，拒绝无进展游标，播放地址与封面
     vid: 'fixture-vid',
     url: '//photovideo.photo.qq.com/play',
     pre: '//a.qpic.cn/cover',
+    shuoshuoid: '1127000001000000ABCDEF01',
   };
   const page = parseQzoneVideos(
     callback({
@@ -158,6 +159,12 @@ test('独立视频按 vid 去重，拒绝无进展游标，播放地址与封面
   equal(page.items.length, 1);
   equal(page.items[0]?.videoId, 'fixture-vid');
   equal(page.items[0]?.videoUrl, 'https://photovideo.photo.qq.com/play');
+  equal(page.items[0]?.sourcePostId, '1127000001000000abcdef01');
+  const missingSource = parseQzoneVideos(
+    callback({ Videos: [{ ...row, shuoshuoid: 1600000000 }], isLast: true }),
+    0,
+  );
+  equal(missingSource.items[0]?.sourcePostId, null);
   equal(page.next, 20);
   throws(
     () => parseQzoneVideos(callback({ Videos: [row], isLast: 'false', nextPageStart: 20 }), 20),

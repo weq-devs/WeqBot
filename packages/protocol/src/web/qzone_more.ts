@@ -229,6 +229,7 @@ type VideoData = {
     vid?: string;
     title?: string;
     desc?: string;
+    shuoshuoid?: unknown;
     url?: string;
     pre?: string;
     duration?: unknown;
@@ -256,6 +257,7 @@ export function parseQzoneVideos(text: string, start: number) {
       uploadedAt: number | null;
       title: string;
       description: string;
+      sourcePostId: string | null;
     }
   >();
   for (const row of data.Videos ?? []) {
@@ -272,6 +274,10 @@ export function parseQzoneVideos(text: string, start: number) {
       uploadedAt: unsigned(row.uploadTime),
       title: row.title || '',
       description: row.desc || '',
+      sourcePostId:
+        typeof row.shuoshuoid === 'string' && /^[a-f\d]{24}$/i.test(row.shuoshuoid)
+          ? row.shuoshuoid.toLowerCase()
+          : null,
     });
   }
   return { items: [...items.values()], next };
