@@ -34,6 +34,41 @@ function messageSegments(raw: JsonObject): Segments {
   return segments;
 }
 
+function resolveReplies(
+  segments: Segments,
+  ctx: ActionContext,
+  isGroup: boolean,
+  targetId: number,
+): Segments {
+  return segments.map((segment) => {
+    if (segment.type !== 'reply' || segment.data.id === undefined) return segment;
+    const rawId = segment.data.id;
+    const id = typeof rawId === 'string' && /^\d+$/.test(rawId) ? Number(rawId) : rawId;
+    if (typeof id !== 'number' || !Number.isSafeInteger(id) || id <= 0) {
+      throw new ParamError('reply.id 必须是正整数');
+    }
+    const target = ctx.resolveMessageMeta(id);
+    if (!target || target.isGroup !== isGroup || target.targetId !== targetId) {
+      throw new ParamError('reply.id 不属于当前会话或已失效');
+    }
+
+    // 私聊引用要的是原发送方的 client sequence，不能使用 NT 历史分页序号。
+    const seq = isGroup ? target.sequence : target.clientSequence;
+    if (!seq || seq <= 0) throw new ParamError('被引用消息没有可用的原始序号');
+    const original = ctx.resolveMessageEvent(id);
+    const quote = Array.isArray(original?.message)
+      ? parseMessageSegments(original.message)
+          .filter((part) => part.type === 'text' && typeof part.data.text === 'string')
+          .map((part) => part.data.text)
+          .join('')
+      : '';
+    return {
+      type: 'reply',
+      data: { seq, sender: original?.user_id, time: target.timestamp, text: quote },
+    };
+  });
+}
+
 /** 发送结果 → OneBot `{ message_id }`。 */
 function intern(
   ctx: ActionContext,
@@ -71,7 +106,10 @@ export const sendGroupMsg: ActionDefinition<SendGroupParams, SendOutcome> = {
     segments: messageSegments(raw),
   }),
   run: async ({ groupId, segments }, ctx) => {
-    const result = await ctx.backend.sendGroupMessage(groupId, segments);
+    const result = await ctx.backend.sendGroupMessage(
+      groupId,
+      resolveReplies(segments, ctx, true, groupId),
+    );
     return intern(ctx, { isGroup: true, targetId: groupId, ...result });
   },
 };
@@ -94,7 +132,11 @@ export const sendPrivateMsg: ActionDefinition<SendPrivateParams, SendOutcome> = 
     };
   },
   run: async ({ userId, tempGroupId, segments }, ctx) => {
-    const result = await ctx.backend.sendPrivateMessage(userId, segments, tempGroupId);
+    const result = await ctx.backend.sendPrivateMessage(
+      userId,
+      resolveReplies(segments, ctx, false, userId),
+      tempGroupId,
+    );
     return intern(ctx, { isGroup: false, targetId: userId, ...result });
   },
 };
@@ -128,10 +170,19 @@ export const sendMsg: ActionDefinition<SendMsgParams, SendOutcome> = {
   },
   run: async ({ groupId, userId, isGroup, segments, fontId }, ctx) => {
     if (isGroup) {
-      const result = await ctx.backend.sendGroupMessage(groupId!, segments, fontId);
+      const result = await ctx.backend.sendGroupMessage(
+        groupId!,
+        resolveReplies(segments, ctx, true, groupId!),
+        fontId,
+      );
       return intern(ctx, { isGroup: true, targetId: groupId!, ...result });
     }
-    const result = await ctx.backend.sendPrivateMessage(userId!, segments, undefined, fontId);
+    const result = await ctx.backend.sendPrivateMessage(
+      userId!,
+      resolveReplies(segments, ctx, false, userId!),
+      undefined,
+      fontId,
+    );
     return intern(ctx, { isGroup: false, targetId: userId!, ...result });
   },
 };

@@ -238,7 +238,16 @@ export const ELEMENT_CODECS: Record<string, ElementCodec> = {
     fromSegment: (data) => {
       const seq = intOr(data.id ?? data.seq, 0);
       if (seq <= 0) return null;
-      return { kind: 'reply', origMsgSeq: seq };
+      const sender = intOr(data.sender, 0);
+      const time = intOr(data.time, 0);
+      const text = typeof data.text === 'string' ? data.text : '';
+      return {
+        kind: 'reply',
+        origMsgSeq: seq,
+        ...(sender > 0 ? { origSenderUin: sender } : {}),
+        ...(time > 0 ? { origMsgTime: time } : {}),
+        ...(text ? { origElements: [{ kind: 'text', textContent: text }] } : {}),
+      };
     },
   },
 

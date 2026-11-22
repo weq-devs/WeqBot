@@ -1116,6 +1116,9 @@ export class ConsoleRuntime {
    *
    * 只在**轮换过**才写：没轮换时写进去的还是同一串字节，白开一次库（还要跟 QQ 抢
    * 写锁）。写失败只告警 —— a1 已经能用，不该因为回写失败把上线判失败。
+   *
+   * 原生侧写 `[1004]` 的同时会把 `[1008]` 登录时间刷成当前时间（不传 `lastLoginAt`
+   * 时的默认行为）；`[1013]` 等其它时间字段不动。
    */
   private async writeBackA1(uin: string, used: Uint8Array): Promise<void> {
     const binding = this.options.binding;
