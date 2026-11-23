@@ -53,6 +53,32 @@ test('回读旧发送包中的空 Elem.face 时恢复经典表情 0', () => {
   assert.deepEqual(decodeMessage(oldFace).elements, [{ kind: 'face', faceId: 0, subType: 1 }]);
 });
 
+test('新版小表情与超级表情回读保留编号、外显名称和类型', () => {
+  const { bytes } = buildSendRequest({
+    userUin: 123,
+    userUid: 'u_test',
+    elements: [
+      { kind: 'face', faceId: 0, smallFace: true, faceText: '/惊讶' },
+      { kind: 'face', faceId: 324, smallFace: true, faceText: '/吃糖' },
+      {
+        kind: 'face',
+        faceId: 358,
+        superSticker: { packId: '1', stickerId: '33', sourceType: 2, resultId: '4', text: '/骰子' },
+      },
+    ],
+    clientSequence: 5,
+    random: 7,
+    msgFlag: 123,
+  });
+  const body = decode(SEND_MESSAGE_REQUEST, bytes).messageBody;
+  const faces = decodeMessage(encode(PUSH_MSG_BODY, { body })).elements;
+  assert.deepEqual(faces, [
+    { kind: 'face', faceId: 0, faceText: '/惊讶', subType: 2 },
+    { kind: 'face', faceId: 324, faceText: '/吃糖', subType: 2 },
+    { kind: 'face', faceId: 358, faceText: '/骰子', subType: 3, AniStickerId: '33', innerId: '4' },
+  ]);
+});
+
 test('PbSendMsg group text includes the default dress elements before the text', async () => {
   const { bytes } = await buildSendRequestWithMedia({
     groupId: 123,

@@ -160,7 +160,7 @@ export const SEND_MESSAGE_RESPONSE: ProtoMessage = message([
 
 /** 普通小黄脸（commonElem serviceType=33）的 pbElem。 */
 export const QSMALL_FACE_EXTRA: ProtoMessage = message([
-  f('faceId', 1, 'uint32'),
+  f('faceId', 1, 'uint32', { force: true }),
   f('preview', 2, 'string'),
   f('preview2', 3, 'string'),
 ]);
@@ -175,7 +175,7 @@ export const QSMALL_FACE_EXTRA: ProtoMessage = message([
 export const QFACE_EXTRA: ProtoMessage = message([
   f('packId', 1, 'string'),
   f('stickerId', 2, 'string'),
-  f('qsid', 3, 'int32'),
+  f('qsid', 3, 'int32', { force: true }),
   f('sourceType', 4, 'int32'),
   f('stickerType', 5, 'int32'),
   // QQ 真机即使 resultId 为空也会显式写 `32 00`（抓包实测），用 force 保持字节一致。

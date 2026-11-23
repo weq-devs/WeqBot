@@ -105,16 +105,13 @@ function liftMfaceElem(market: Record<string, unknown>): Record<string, unknown>
   return out;
 }
 
-function liftFaceElem(face: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = { kind: 'face' };
+function liftFaceElem(face: Record<string, unknown>, subType: 2 | 3): Record<string, unknown> {
+  const out: Record<string, unknown> = { kind: 'face', subType };
   if (face.faceId !== undefined) out.faceId = face.faceId;
   if (face.faceText !== undefined) out.faceText = face.faceText;
   if (face.AniStickerId !== undefined) out.AniStickerId = face.AniStickerId;
   if (face.innerId !== undefined) out.innerId = face.innerId;
   if (face.superEmojiFlag1 === 1) out.superEmojiFlag1 = face.superEmojiFlag1;
-  // 老 wire 不下发 NT 的 subType(45003)，前端靠它区分内联小黄脸(1/2)和贴纸(3+)。
-  // 这里按字段派生：带 innerId / 超级表情 -> 3(SUPER_EMOJI)，其余经典表情 -> 1。
-  out.subType = face.superEmojiFlag1 === 1 || face.innerId !== undefined ? 3 : 1;
   return out;
 }
 
@@ -598,10 +595,10 @@ function liftElem(
     return liftEmojiBounceElem(decode(EMOJI_BOUNCE_EXTRA, common.pbElem));
   }
   if (common?.serviceType === 33 && common.pbElem) {
-    return liftFaceElem(decode(FACE_COMMON_PB, common.pbElem) as Record<string, unknown>);
+    return liftFaceElem(decode(FACE_COMMON_PB, common.pbElem), 2);
   }
   if (common?.serviceType === 37 && common.pbElem) {
-    return liftFaceElem(decode(FACE_ELEM, common.pbElem) as Record<string, unknown>);
+    return liftFaceElem(decode(FACE_ELEM, common.pbElem), 3);
   }
   // 普通聊天图片 businessType=20；合并转发（SsoRecvLongMsg）里的图片实测是 10，两者都收。
   if (
