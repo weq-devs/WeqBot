@@ -10,6 +10,7 @@
  */
 
 import { computeBkn, cookieHeader, WebAuthError, type WebCredential } from './credential';
+import { setTimeout as wait } from 'node:timers/promises';
 import { webRequestText } from './http';
 import { assertQzoneWriteAccepted, parseQzoneFormReply } from './qzone-form-reply';
 import { parseQzoneJson } from './qzone';
@@ -46,8 +47,20 @@ interface RawDetail {
   tid?: string;
   uin?: number | string;
   content?: string;
-  conlist?: Array<{ con?: string }> | null;
+  conlist?: Array<{ con?: string; type?: number | string }> | null;
   pic?: RawDetailPic[] | null;
+  video?: unknown[] | null;
+  voice?: unknown[] | null;
+  audio?: unknown[] | null;
+  custom_voices?: unknown[] | null;
+  custom_audios?: unknown[] | null;
+  rt_tid?: number | string;
+  rt_uin?: number | string;
+  rt_source_url?: string;
+  t1_source?: number | string;
+  isEditable?: number | string;
+  public_pav?: number | string;
+  has_more_con?: boolean | number | string;
   richtype?: number | string;
   richval?: string;
   pic_template?: string;
@@ -73,6 +86,7 @@ async function fetchRawDetail(
   cred: WebCredential,
   hostUin: string,
   tid: string,
+  signal?: AbortSignal,
 ): Promise<RawDetail> {
   const query = new URLSearchParams({
     tid,
@@ -85,7 +99,11 @@ async function fetchRawDetail(
   });
   const text = await webRequestText(
     `https://h5.qzone.qq.com/proxy/domain/taotao.qq.com/cgi-bin/emotion_cgi_msgdetail_v6?${query}`,
-    { cookie: cookieHeader(cred), headers: { Referer: `https://user.qzone.qq.com/${hostUin}` } },
+    {
+      cookie: cookieHeader(cred),
+      headers: { Referer: `https://user.qzone.qq.com/${hostUin}`, 'Cache-Control': 'no-cache' },
+      signal,
+    },
   );
   const data = parseQzoneJson<RawDetail>(text);
   const code =
@@ -210,6 +228,113 @@ export async function setQzoneMsgRight(
     throw new Error(`说说权限修改失败：code=${data.code} ${data.message ?? ''}`.trim());
   }
   return { ugc_right: Number(data.ugc_right ?? right) };
+}
+
+export type QzoneTextVisibility = 1 | 4 | 64;
+
+function editableTextPost(
+  detail: RawDetail,
+  hostUin: string,
+  tid: string,
+): { visibility: QzoneTextVisibility; content: string } {
+  if (String(detail.uin) !== hostUin || detail.tid !== tid)
+    throw new Error('说说身份无法核对，请重新打开。');
+  const visibility = Number(detail.ugc_right);
+  if (visibility !== 1 && visibility !== 4 && visibility !== 64)
+    throw new Error('暂不支持修改这条说说的可见范围。');
+  if (
+    typeof detail.content !== 'string' ||
+    !detail.content.trim() ||
+    /@\{|\[em\]|<\/?[a-z][^>]*>/i.test(detail.content) ||
+    (detail.conlist?.length &&
+      (detail.conlist.some((part) => Number(part?.type) !== 2 || typeof part?.con !== 'string') ||
+        detail.conlist.map((part) => part.con).join('') !== detail.content)) ||
+    [
+      detail.pic,
+      detail.video,
+      detail.voice,
+      detail.audio,
+      detail.custom_voices,
+      detail.custom_audios,
+    ].some((items) => items != null && (!Array.isArray(items) || items.length > 0)) ||
+    (detail.richtype !== undefined && Number(detail.richtype) !== 0) ||
+    detail.richval ||
+    detail.special_url ||
+    (detail.rt_tid && detail.rt_tid !== '0') ||
+    Number(detail.rt_uin ?? 0) !== 0 ||
+    detail.rt_source_url ||
+    Number(detail.t1_source) === 2 ||
+    Number(detail.t1_subtype) === 33 ||
+    Number(detail.isEditable) === 0 ||
+    Number(detail.public_pav) === 1 ||
+    (detail.has_more_con !== undefined && Number(detail.has_more_con) !== 0)
+  )
+    throw new Error('当前仅支持修改纯文本说说的可见范围。');
+  return { visibility, content: detail.content };
+}
+
+export async function getQzoneTextPostVisibility(cred: WebCredential, tid: string) {
+  const detail = await fetchRawDetail(cred, cred.uin, tid);
+  const { visibility } = editableTextPost(detail, cred.uin, tid);
+  return { visibility };
+}
+
+/** PC 空间整帖保存。只编辑已验证能从详情原样重建的普通文本。 */
+export async function setQzoneTextPostVisibility(
+  cred: WebCredential,
+  tid: string,
+  expected: QzoneTextVisibility,
+  visibility: QzoneTextVisibility,
+  current: () => void,
+): Promise<{ state: 'confirmed' | 'unchanged' | 'unconfirmed'; visibility?: QzoneTextVisibility }> {
+  const { uin } = cred;
+  const detail = await fetchRawDetail(cred, uin, tid);
+  const before = editableTextPost(detail, uin, tid);
+  current();
+  if (before.visibility === visibility) return { state: 'unchanged', visibility };
+  if (before.visibility !== expected) throw new Error('可见范围已变化，请重新打开后再保存。');
+  const body = buildQzoneUpdatePayload(detail, uin);
+  body.set('richtype', '');
+  body.set('subrichtype', '');
+  body.delete('pic_bo');
+  body.set('con', before.content);
+  body.set('to_sign', '0');
+  body.set('ugc_right', String(visibility));
+  const referrer = `https://user.qzone.qq.com/${uin}/mood/${tid}`;
+  body.set('qzreferrer', referrer);
+  let writeError: unknown;
+  try {
+    const text = await webRequestText(
+      `https://user.qzone.qq.com/proxy/domain/taotao.qzone.qq.com/cgi-bin/emotion_cgi_update?g_tk=${computeBkn(cred.pskey)}`,
+      {
+        method: 'POST',
+        cookie: cookieHeader(cred),
+        body: body.toString(),
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          Origin: 'https://user.qzone.qq.com',
+          Referer: referrer,
+        },
+      },
+    );
+    assertQzoneWriteAccepted(parseQzoneFormReply(text), '可见范围修改');
+  } catch (error) {
+    writeError = error;
+  }
+  const signal = AbortSignal.timeout(6000);
+  for (const delay of [0, 350, 1000]) {
+    if (delay) await wait(delay, undefined, { signal }).catch(() => undefined);
+    current();
+    if (signal.aborted) break;
+    const after = await fetchRawDetail(cred, uin, tid, signal).catch(() => null);
+    current();
+    if (!after || after.tid !== tid || String(after.uin) !== uin) continue;
+    if (after.content !== before.content)
+      throw new Error('说说正文与保存前不同，请到 QQ 空间核对。');
+    if (Number(after.ugc_right) === visibility) return { state: 'confirmed', visibility };
+  }
+  if (writeError) throw writeError;
+  return { state: 'unconfirmed' };
 }
 
 /**

@@ -9,7 +9,7 @@
 import assert from 'node:assert/strict';
 import { afterEach, test } from 'node:test';
 import { parseQzoneFormReply } from '../src/web/qzone-form-reply';
-import { forwardQzoneMsg } from '../src/web/qzone-write';
+import { forwardQzoneMsg, setQzoneTextPostVisibility } from '../src/web/qzone-write';
 
 const cred = { uin: '10001', skey: 'synthetic', pskey: 'synthetic' };
 
@@ -31,6 +31,65 @@ afterEach(() => {
 function formBody(call: { init?: RequestInit }): URLSearchParams {
   return new URLSearchParams(String(call.init?.body ?? ''));
 }
+
+const textPost = {
+  code: 0,
+  tid: '112700000000000000000000',
+  uin: cred.uin,
+  content: '  原正文\n',
+  conlist: [{ type: 2, con: '  原正文\n' }],
+  ugc_right: 64,
+  ugcright_id: 'fixture-right',
+  t1_subtype: 1,
+};
+
+test('官方纯文本编辑表单原样保留正文，只在独立读回后确认权限', async () => {
+  const methods: string[] = [];
+  const full = { ...cred, cookie: 'uin=o10001; p_skey=synthetic; session=fixture' };
+  globalThis.fetch = (async (input: string, init?: RequestInit) => {
+    const url = new URL(input);
+    const method = init?.method ?? 'GET';
+    methods.push(method);
+    if (method === 'POST') {
+      assert.equal(url.host, 'user.qzone.qq.com');
+      assert.match(url.pathname, /\/taotao\.qzone\.qq\.com\/cgi-bin\/emotion_cgi_update$/);
+      assert.equal(new Headers(init?.headers).get('cookie'), full.cookie);
+      const body = formBody({ init });
+      assert.equal(body.get('con'), textPost.content);
+      assert.equal(body.get('ugc_right'), '4');
+      assert.equal(body.get('ugcright_id'), textPost.ugcright_id);
+      assert.equal(body.get('richtype'), '');
+      assert.equal(body.get('subrichtype'), '');
+      assert.equal(body.has('pic_bo'), false);
+      assert.equal(
+        body.get('qzreferrer'),
+        `https://user.qzone.qq.com/${cred.uin}/mood/${textPost.tid}`,
+      );
+      return new Response('<script>frameElement.callback({code:0,subcode:0});</script>');
+    }
+    return Response.json({ ...textPost, ugc_right: methods.length > 1 ? 4 : 64 });
+  }) as typeof fetch;
+  assert.deepEqual(await setQzoneTextPostVisibility(full, textPost.tid, 64, 4, () => {}), {
+    state: 'confirmed',
+    visibility: 4,
+  });
+  assert.deepEqual(methods, ['GET', 'POST', 'GET']);
+});
+
+test('当前权限已变化或存在媒体时停止整帖保存', async () => {
+  const stale = transport(JSON.stringify({ ...textPost, ugc_right: 1 }));
+  await assert.rejects(
+    setQzoneTextPostVisibility(cred, textPost.tid, 64, 4, () => {}),
+    /已变化/,
+  );
+  assert.equal(stale.length, 1);
+  const rich = transport(JSON.stringify({ ...textPost, pic: [{ pic_id: 'fixture' }] }));
+  await assert.rejects(
+    setQzoneTextPostVisibility(cred, textPost.tid, 64, 4, () => {}),
+    /纯文本/,
+  );
+  assert.equal(rich.length, 1);
+});
 
 // ────────────────────────── 回执解析 ──────────────────────────
 
