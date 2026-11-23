@@ -111,8 +111,10 @@ export interface ForwardNode {
   time?: number;
   /** 回显用消息 id；缺省随机。 */
   msgId?: number;
-  /** 回显用序列号；缺省随机。 */
+  /** 原消息的会话序号，有值时写入群的 sequence 或私聊的 ntMsgSeq。 */
   msgSeq?: number;
+  /** 私聊原消息的发送方序号，写入私聊节点的 sequence。 */
+  clientSeq?: number;
   /**
    * 该条消息自己的装扮（气泡 / 字体 / 挂件），可选。
    *
@@ -518,6 +520,8 @@ export async function buildForwardNodeBody(
   const { elems, msgContent } = await buildNodeElems(node, ctx);
   const now = Math.floor(Date.now() / 1000);
   const isGroup = ctx.scene === 'group';
+  const msgSeq = node.msgSeq && node.msgSeq > 0 ? node.msgSeq : undefined;
+  const clientSeq = node.clientSeq && node.clientSeq > 0 ? node.clientSeq : undefined;
 
   return {
     responseHead: {
@@ -532,7 +536,8 @@ export async function buildForwardNodeBody(
       msgType: isGroup ? 82 : 9,
       ...(isGroup ? {} : { subType: 4 }),
       msgId: node.msgId && node.msgId > 0 ? node.msgId : randomUint32(),
-      sequence: node.msgSeq && node.msgSeq > 0 ? node.msgSeq : randomUint32(),
+      sequence: (isGroup ? msgSeq : clientSeq ?? msgSeq) ?? randomUint32(),
+      ...(!isGroup && msgSeq ? { ntMsgSeq: msgSeq } : {}),
       timestamp: node.time && node.time > 0 ? Math.floor(node.time) : now,
     },
     body: { richText: { elems }, ...(msgContent ? { msgContent } : {}) },
