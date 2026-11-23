@@ -107,10 +107,7 @@ function liftMfaceElem(market: Record<string, unknown>): Record<string, unknown>
 
 function liftFaceElem(face: Record<string, unknown>): Record<string, unknown> {
   const out: Record<string, unknown> = { kind: 'face' };
-  // 老 wire 直出的 Elem.face 用 index 存 faceId（im_msg_body.proto message Face），
-  // 骰子/超级表情（commonElem 37）用 faceId，两者都收进来。
-  const faceId = face.faceId ?? face.index;
-  if (faceId !== undefined) out.faceId = faceId;
+  if (face.faceId !== undefined) out.faceId = face.faceId;
   if (face.faceText !== undefined) out.faceText = face.faceText;
   if (face.AniStickerId !== undefined) out.AniStickerId = face.AniStickerId;
   if (face.innerId !== undefined) out.innerId = face.innerId;
@@ -577,8 +574,9 @@ function liftElem(
   if (elem.extraInfo) return undefined;
   const text = elem.text as Record<string, unknown> | undefined;
   if (text) return liftTextElem(text);
-  const face = elem.face as Record<string, unknown> | undefined;
-  if (face) return liftFaceElem(face);
+  const face = elem.face as { index?: number } | undefined;
+  // 旧发送记录可能按 proto3 省略 index=0；Elem.face 已经明确了元素类型。
+  if (face) return { kind: 'face', faceId: face.index ?? 0, subType: 1 };
   const market = elem.marketFace as Record<string, unknown> | undefined;
   if (market) return liftMfaceElem(market);
   const common = elem.commonElem as

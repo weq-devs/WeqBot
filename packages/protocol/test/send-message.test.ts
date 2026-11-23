@@ -1,8 +1,10 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { decodeMessage, type RawMessageBody } from '../src/msg/decode';
+import { PUSH_MSG_BODY } from '../src/msg/schemas';
 import { buildSendRequest, buildSendRequestWithMedia } from '../src/msg/send';
 import { SEND_MESSAGE_REQUEST } from '../src/msg/send-schemas';
-import { decode } from '../src/protobuf';
+import { decode, encode } from '../src/protobuf';
 
 test('PbSendMsg private text uses UID routing and encodes the zero ContentHead fields', async () => {
   const { bytes } = await buildSendRequestWithMedia({
@@ -18,6 +20,37 @@ test('PbSendMsg private text uses UID routing and encodes the zero ContentHead f
     Buffer.from(bytes).toString('hex'),
     '0a0a0a081206755f7465737412060801100018001a0a0a0812060a040a026869200528073202087b',
   );
+});
+
+test('经典表情 0 显式写入发送包，并在回读时保留 ID', () => {
+  const { bytes } = buildSendRequest({
+    userUin: 123,
+    userUid: 'u_test',
+    elements: [
+      { kind: 'text', textContent: 'hi' },
+      { kind: 'face', faceId: 0 },
+      { kind: 'face', faceId: 14 },
+    ],
+    clientSequence: 5,
+    random: 7,
+    msgFlag: 123,
+  });
+  const body = decode(SEND_MESSAGE_REQUEST, bytes).messageBody as RawMessageBody['body'];
+  assert.deepEqual(
+    body?.richText?.elems?.map((elem) => elem.face),
+    [undefined, { index: 0 }, { index: 14 }],
+  );
+  assert.deepEqual(decodeMessage(encode(PUSH_MSG_BODY, { body })).elements, [
+    { kind: 'text', textContent: 'hi' },
+    { kind: 'face', faceId: 0, subType: 1 },
+    { kind: 'face', faceId: 14, subType: 1 },
+  ]);
+});
+
+test('回读旧发送包中的空 Elem.face 时恢复经典表情 0', () => {
+  // PushMsgBody.body.richText.elems[0].face，旧编码未写 index。
+  const oldFace = Buffer.from('1a060a0412021200', 'hex');
+  assert.deepEqual(decodeMessage(oldFace).elements, [{ kind: 'face', faceId: 0, subType: 1 }]);
 });
 
 test('PbSendMsg group text includes the default dress elements before the text', async () => {

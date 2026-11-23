@@ -145,11 +145,11 @@ export const TEXT_PB_RESERVE: ProtoMessage = message([
 
 /**
  * 老 wire 直出的 Elem.face（im_msg_body.proto message Face，Elem tag 2）：
- * tag 1=index（经典表情的真实 faceId）、2=old（老版兼容数据，实测 2 字节）、
+ * tag 1=index（经典表情 ID，0 也是有效值）、2=old（老版兼容数据，实测 2 字节）、
  * 11=buf；其余字段一律丢弃（decode 会自动跳过未声明 tag）。
  */
 export const FACE_OLD_PB: ProtoMessage = message([
-  f('index', 1, 'int32'),
+  f('index', 1, 'int32', { force: true }),
   f('old', 2, 'bytes'),
   f('buf', 11, 'bytes'),
 ]);
