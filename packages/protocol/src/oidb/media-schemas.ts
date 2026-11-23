@@ -341,6 +341,7 @@ const ALBUM_RSP_DATA = message([
   { name: 'mediaList', tag: 3, type: ALBUM_MEDIA_INFO, repeated: true },
   { name: 'prevAttachInfo', tag: 4, type: 'string' },
   { name: 'nextAttachInfo', tag: 5, type: 'string' },
+  { name: 'nextHasMore', tag: 7, type: 'bool' },
   // 逐相册操作能力。`operations` 是**编号列表**，不是位掩码。
   // Android 9.3.85 libkernel: 0x2dd07d8 -> 0x2dcd744。
   {

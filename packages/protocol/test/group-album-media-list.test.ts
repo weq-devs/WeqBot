@@ -18,6 +18,7 @@ type Decoded = {
     albumInfo?: { albumId?: string; name?: string };
     mediaList?: Array<Record<string, unknown>>;
     nextAttachInfo?: string;
+    nextHasMore?: boolean;
     right?: { operations?: number[]; normalUpload?: boolean };
   };
 };
@@ -121,4 +122,14 @@ test('分页游标原样透出', () => {
     (decode(GET_MEDIA_LIST_RESPONSE, body) as Decoded).data?.nextAttachInfo,
     'next-page-token',
   );
+});
+
+test('data tag 7 区分有下一页、末页和缺失', () => {
+  const flag = (data: number[]) => {
+    const bytes = Uint8Array.from([0x22, data.length, ...data]);
+    return (decode(GET_MEDIA_LIST_RESPONSE, bytes) as Decoded).data?.nextHasMore;
+  };
+  assert.equal(flag([0x38, 1]), true);
+  assert.equal(flag([0x38, 0]), false);
+  assert.equal(flag([]), undefined);
 });
