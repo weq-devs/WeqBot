@@ -1,17 +1,17 @@
 /**
- * 群管理设置：单群详情 0x88D_0 + 写入复用 0x89A_0 的不同 settings 字段。
+ * 群管理设置：单群详情走 0x88D_0，成员邀请写入走 0x89A_8，其余下列设置走 0x89A_0。
  *
  * 搬运自 SnowLuma `packages/protocol/src/oidb-services/group-admin/{set-search,
  * set-member-invite-policy,set-new-member-history-visibility,set-member-permission}.ts`
  * 与 `contacts/fetch-group-detail.ts`（2026-11-15），改成 WeqBot 的 `message()` 写法。
  *
- * 0x89A_0 的 settings 是同一个消息域，字段按用途分：
+ * 0x89A 的 settings 共用同一消息结构，字段按用途分：
  *   - 搜索开关 tag 35/36；
- *   - 成员权限和邀请审核 tag 23/24，允许成员邀请单独写 tag 29；
+ *   - 成员权限 tag 23/24，成员邀请启用时同包写审核 tag 23/24 与开关 tag 29；
  *   - 新成员历史 tag 42/43。
  * 每次只带本次要改的字段，未带的字段不下发。
  *
- * 签名：0x88D_0 是新命令字（三端待实测）；0x89A_0 已在 SIGN_RULES。
+ * 签名：0x89A_0 与 0x89A_8 已在 SIGN_RULES。
  */
 
 import { message } from '../../protobuf';
@@ -191,7 +191,7 @@ export namespace FetchGroupDetail {
     invokeOidb(nt, pid, FetchGroupDetail as OidbSpec<Params, GroupDetailInfo>, params);
 }
 
-// ───────────────────────── 共用的 0x89A_0 settings ─────────────────────────
+// ───────────────────────── 共用的 0x89A settings ─────────────────────────
 
 const WRITE_SETTINGS = message([
   { name: 'addType', tag: 16, type: 'uint32' },
@@ -312,16 +312,34 @@ export interface SetGroupInvitePolicyParams {
 
 export namespace SetGroupInvitePolicy {
   export const command = 0x89a;
-  export const subCommand = 0;
+  export const subCommand = 8;
   export const reqSchema = WRITE_REQ;
   export const respSchema = EMPTY_RESP;
 
   export type Params = SetGroupInvitePolicyParams;
 
   export async function invoke(nt: OidbNative, pid: number, p: Params): Promise<void> {
-    const send = (settings: Record<string, number>) => {
-      p.beforeSend?.();
-      return invokeOidb(
+    const disabled = p.policy === 'disabled';
+    if (
+      p.memberInviteAllowed === !disabled &&
+      (disabled ||
+        (p.currentPrivilegeFlag !== undefined &&
+          decodeMemberInvitePolicy(p.currentPrivilegeFlag) === p.policy))
+    )
+      return;
+
+    // Mac QQNT 的 0x89A_8 在开启邀请和切换审核档位时同包提交档位与邀请开关。
+    const settings =
+      p.policy === 'disabled'
+        ? { allowMemberInvite: 0 }
+        : {
+            appPrivilegeFlag: POLICY_PRIVILEGE_BITS[p.policy],
+            appPrivilegeMask: MEMBER_INVITE_PRIVILEGE_MASK,
+            allowMemberInvite: 1,
+          };
+    p.beforeSend?.();
+    try {
+      await invokeOidb(
         nt,
         pid,
         {
@@ -334,36 +352,14 @@ export namespace SetGroupInvitePolicy {
         },
         settings,
       );
-    };
-    if (p.policy === 'disabled') {
-      if (p.memberInviteAllowed !== false) await send({ allowMemberInvite: 0 });
-      return;
-    }
-    // 已禁止邀请的群重新启用时，QQ 会使用「需要审核」作为默认档位。
-    if (p.policy === 'require_approval' && p.memberInviteAllowed === false) {
-      await send({ allowMemberInvite: 1 });
-      return;
-    }
-    // QQ 分别提交审核规则和邀请开关。先写规则，避免以旧规则开放邀请。
-    if (
-      p.currentPrivilegeFlag === undefined ||
-      decodeMemberInvitePolicy(p.currentPrivilegeFlag) !== p.policy
-    ) {
-      try {
-        await send({
-          appPrivilegeFlag: POLICY_PRIVILEGE_BITS[p.policy],
-          appPrivilegeMask: MEMBER_INVITE_PRIVILEGE_MASK,
+    } catch (error) {
+      if (!disabled && error instanceof Error && /OIDB error 1006\b/.test(error.message)) {
+        throw new Error('QQ 拒绝修改邀请审核方式（1006），请在 QQ 群设置中修改', {
+          cause: error,
         });
-      } catch (error) {
-        if (error instanceof Error && /OIDB error 1006\b/.test(error.message)) {
-          throw new Error('QQ 拒绝修改邀请审核方式（1006），请在 QQ 群设置中修改', {
-            cause: error,
-          });
-        }
-        throw error;
       }
+      throw error;
     }
-    if (p.memberInviteAllowed !== true) await send({ allowMemberInvite: 1 });
   }
 }
 

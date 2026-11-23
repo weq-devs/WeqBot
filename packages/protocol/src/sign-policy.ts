@@ -78,6 +78,7 @@ export const SIGN_RULES = {
   'OidbSvcTrpcTcp.0x11ec_1': { sign: 'all', mode2: true },
   'OidbSvcTrpcTcp.0x6d9_4': { sign: 'all', mode2: true },
   'OidbSvcTrpcTcp.0x89a_0': { sign: 'all' },
+  'OidbSvcTrpcTcp.0x89a_8': { sign: 'all' },
   'OidbSvcTrpcTcp.0x89a_15': { sign: 'all', mode2: true },
   'OidbSvcTrpcTcp.0x93d7_1': { sign: 'all', mode2: true },
   'trpc.group.long_msg_interface.MsgService.SsoRecvLongMsg': { sign: 'all' },
