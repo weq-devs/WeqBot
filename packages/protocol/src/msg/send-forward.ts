@@ -522,6 +522,7 @@ export async function buildForwardNodeBody(
   const isGroup = ctx.scene === 'group';
   const msgSeq = node.msgSeq && node.msgSeq > 0 ? node.msgSeq : undefined;
   const clientSeq = node.clientSeq && node.clientSeq > 0 ? node.clientSeq : undefined;
+  const sequence = isGroup ? msgSeq : (clientSeq ?? msgSeq);
 
   return {
     responseHead: {
@@ -536,7 +537,7 @@ export async function buildForwardNodeBody(
       msgType: isGroup ? 82 : 9,
       ...(isGroup ? {} : { subType: 4 }),
       msgId: node.msgId && node.msgId > 0 ? node.msgId : randomUint32(),
-      sequence: (isGroup ? msgSeq : clientSeq ?? msgSeq) ?? randomUint32(),
+      sequence: sequence ?? randomUint32(),
       ...(!isGroup && msgSeq ? { ntMsgSeq: msgSeq } : {}),
       timestamp: node.time && node.time > 0 ? Math.floor(node.time) : now,
     },
