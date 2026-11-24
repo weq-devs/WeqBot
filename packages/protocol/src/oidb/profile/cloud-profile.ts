@@ -1,6 +1,6 @@
 import { encode, decode, message } from '../../protobuf';
 import { GetUserQqLevel } from './get-user-qq-level';
-import { sendOidb, type PacketNative, type OidbNative } from '../../transport';
+import { sendOidb, type PacketNative, type OidbNative, type TrpcNative } from '../../transport';
 import { requireUin, responseObject } from '../write-validation';
 import { invokeLegacyOidb } from '../legacy';
 
@@ -146,19 +146,33 @@ export const commonGroupsResponse = message([
     ]),
   },
 ]);
-export async function getCommonGroups(
-  nt: PacketNative,
+const commonAttributesResponse = message([
+  ...commonGroupsResponse.fields,
+  {
+    name: 'attributes',
+    tag: 14,
+    repeated: true,
+    type: message([
+      { name: 'type', tag: 1, type: 'uint32' },
+      { name: 'wording', tag: 3, type: 'string' },
+    ]),
+  },
+]);
+
+async function readCommonProfile(
+  nt: TrpcNative,
   pid: number,
   self: string,
   target: string,
   clientVersion: string,
+  schema: typeof commonGroupsResponse,
 ) {
   if (!clientVersion) throw new Error('未取得当前 QQ 版本，无法查询共同群');
   const from = requireUin(self),
     to = requireUin(target);
   if (from === to) throw new Error('不能查询与自己的共同群');
   const response = decode(
-    commonGroupsResponse,
+    schema,
     await invokeLegacyOidb(
       nt,
       pid,
@@ -174,7 +188,11 @@ export async function getCommonGroups(
     (response.to !== undefined && response.to !== to)
   )
     throw new Error('共同群响应目标不匹配');
-  const info = responseObject(response.info, '共同群');
+  return response;
+}
+
+function readCommonGroupList(value: unknown) {
+  const info = responseObject(value, '共同群');
   const seen = new Set<string>();
   return ((info.groups ?? []) as unknown[]).map((raw) => {
     const row = responseObject(raw, '共同群记录');
@@ -187,4 +205,55 @@ export async function getCommonGroups(
       name: typeof row.name === 'string' ? row.name : '',
     };
   });
+}
+
+export async function getCommonGroups(
+  nt: TrpcNative,
+  pid: number,
+  self: string,
+  target: string,
+  clientVersion: string,
+) {
+  const response = await readCommonProfile(
+    nt,
+    pid,
+    self,
+    target,
+    clientVersion,
+    commonGroupsResponse,
+  );
+  return readCommonGroupList(response.info);
+}
+
+export async function getCommonAttributes(
+  nt: TrpcNative,
+  pid: number,
+  self: string,
+  target: string,
+  clientVersion: string,
+) {
+  const response = await readCommonProfile(
+    nt,
+    pid,
+    self,
+    target,
+    clientVersion,
+    commonAttributesResponse,
+  );
+  const attributes = response.attributes as Array<{ type?: number; wording?: string }> | undefined;
+  const counts = new Set<number>();
+  if (response.from === BigInt(self) && response.to === BigInt(target)) {
+    for (const { type, wording } of attributes ?? []) {
+      // DnaInfo 的 type 7 是本次实测的共同好友条目，数量在服务端原文中。
+      if (type !== 7 || wording === undefined) continue;
+      const count = /^我们有\s*(\d{1,10})\s*个共同好友[。！!]?$/.exec(wording.trim())?.[1];
+      if (count !== undefined) counts.add(Number(count));
+    }
+  }
+  const friendCount = counts.size === 1 ? (counts.values().next().value ?? null) : null;
+  try {
+    return { friendCount, groups: readCommonGroupList(response.info) };
+  } catch {
+    return { friendCount, groups: null };
+  }
 }

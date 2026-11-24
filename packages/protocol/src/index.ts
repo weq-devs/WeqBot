@@ -189,6 +189,7 @@ export type { SetFriendCategoryParams } from './oidb/set-friend-category';
 export { GetFriendSnsPage, type FriendSnsPage } from './oidb/get-friend-sns';
 export {
   getCloudProfile,
+  getCommonAttributes,
   getCommonFriendCount,
   getCommonGroups,
   cloudProfileResponse,

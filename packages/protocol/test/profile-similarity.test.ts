@@ -3,12 +3,20 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { LegacyOidbRejectedError, legacyOidbEnvelope } from '../src/oidb/legacy';
+import { getCommonAttributes } from '../src/oidb/profile/cloud-profile';
 import { getProfileSimilarity } from '../src/oidb/profile/similarity';
 import { decode, encode, message } from '../src/protobuf';
 
 const identity = Buffer.from('08914e10924e', 'hex');
 const wording = message([{ name: 'text', tag: 3, type: 'bytes' }]);
 const records = message([{ name: 'items', tag: 14, type: wording, repeated: true }]);
+const attributeRecords = message([
+  { name: 'groups', tag: 12, type: 'bytes' },
+  {
+    ...records.fields[0]!,
+    type: message([{ name: 'kind', tag: 1, type: 'uint32' }, ...wording.fields]),
+  },
+]);
 
 function body(texts: string[]): Buffer {
   return Buffer.concat([
@@ -128,5 +136,46 @@ test('无效目标在发包前拒绝', async () => {
     const { calls, nt } = binding(identity);
     await assert.rejects(getProfileSimilarity(nt, 7, self!, target!));
     assert.equal(calls.length, 0);
+  }
+});
+
+test('一次共同属性查询同时读出共同群和 type 7 的计数', async () => {
+  const { calls, nt } = binding(
+    Buffer.concat([
+      identity,
+      encode(attributeRecords, {
+        groups: Buffer.from('0a04107b1a00', 'hex'),
+        items: [
+          { kind: 8, text: Buffer.from('我们有99个共同好友') },
+          { kind: 7, text: Buffer.from('我们有31个共同好友') },
+        ],
+      }),
+    ]),
+  );
+  assert.deepEqual(await getCommonAttributes(nt, 7, '10001', '10002', '7.0.3-54395'), {
+    friendCount: 31,
+    groups: [{ groupCode: '123', groupUin: null, name: '' }],
+  });
+  assert.equal(calls.length, 1);
+});
+
+test('共同属性计数验证身份，支持零并忽略冲突计数', async () => {
+  for (const [ids, counts, expected] of [
+    [identity, [0], 0],
+    [identity, [31, 25], null],
+    [Buffer.from('10924e', 'hex'), [31], null],
+  ] as const) {
+    const { nt } = binding(
+      Buffer.concat([
+        ids,
+        encode(attributeRecords, {
+          items: counts.map((n) => ({ kind: 7, text: Buffer.from(`我们有${n}个共同好友`) })),
+        }),
+      ]),
+    );
+    assert.deepEqual(await getCommonAttributes(nt, 7, '10001', '10002', '7.0.3-54395'), {
+      friendCount: expected,
+      groups: null,
+    });
   }
 });
