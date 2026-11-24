@@ -75,6 +75,15 @@ export async function getGroupAlbumList(
   cred: WebCredential,
   groupId: string,
 ): Promise<GroupAlbum[]> {
+  const listing = await getGroupAlbumListing(cred, groupId);
+  if (!listing.complete) throw new Error('群相册分页结果不完整，请刷新后重试');
+  return listing.albums;
+}
+
+export async function getGroupAlbumListing(
+  cred: WebCredential,
+  groupId: string,
+): Promise<{ albums: GroupAlbum[]; complete: boolean }> {
   const gtk = computeBkn(cred.pskey || cred.skey);
 
   const params = new URLSearchParams({
@@ -95,8 +104,14 @@ export async function getGroupAlbumList(
   const url =
     'https://h5.qzone.qq.com/proxy/domain/u.photo.qzone.qq.com/cgi-bin/upp/qun_list_album_v2';
 
-  const result: GroupAlbum[] = [];
-  const seen = new Set<string>();
+  const result = new Map<string, GroupAlbum>();
+  const conflicting = new Set<string>();
+  let observedTotal: number | null = null;
+  let partial = false;
+  const finish = (complete: boolean) => {
+    if ((!complete || partial) && result.size === 0) throw new Error('群相册分页没有可确认的结果');
+    return { albums: [...result.values()], complete: complete && !partial };
+  };
   let start = 0;
   for (let page = 0; page < 100; page++) {
     params.set('start', String(start));
@@ -131,11 +146,26 @@ export async function getGroupAlbumList(
     )
       throw new Error('群相册列表缺失，不能确认相册是否存在');
     const albums = data.album ?? [];
+    if (total !== null) {
+      partial ||= observedTotal !== null && observedTotal !== total;
+      observedTotal = total;
+    }
     for (const a of albums) {
-      if (!a || typeof a.id !== 'string' || !a.id || seen.has(a.id))
-        throw new Error('群相册标识缺失或分页重复');
-      seen.add(a.id);
-      result.push({
+      if (!a || typeof a.id !== 'string' || !a.id) {
+        partial = true;
+        continue;
+      }
+      if (conflicting.has(a.id)) continue;
+      const previous = result.get(a.id);
+      if (previous) {
+        partial = true;
+        if (previous.createUin && a.createuin && previous.createUin !== a.createuin) {
+          result.delete(a.id);
+          conflicting.add(a.id);
+        }
+        continue;
+      }
+      result.set(a.id, {
         id: a.id,
         title: a.title ?? '',
         photoCount: a.photocnt ?? 0,
@@ -155,15 +185,14 @@ export async function getGroupAlbumList(
         ...(typeof a.lloc === 'string' ? { lloc: a.lloc } : {}),
       });
     }
-    if (total !== null && result.length > total) throw new Error('群相册列表数量与总数不一致');
-    if ((total !== null && result.length === total) || (total === null && albums.length < 1000))
-      return result;
+    if (total !== null && result.size > total) return finish(false);
+    if ((total !== null && result.size === total) || (total === null && albums.length < 1000))
+      return finish(true);
     const next = data.offset;
-    if (!Number.isSafeInteger(next) || next! <= start || !albums.length)
-      throw new Error('群相册分页未完成或游标无效，请重试');
+    if (!Number.isSafeInteger(next) || next! <= start || !albums.length) return finish(false);
     start = next!;
   }
-  throw new Error('群相册分页超过读取上限');
+  return finish(false);
 }
 
 // ───────────────────────── 写操作：上传图片 ─────────────────────────
