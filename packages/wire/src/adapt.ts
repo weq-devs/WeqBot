@@ -257,21 +257,20 @@ export interface RawNativeBinding {
   ): Promise<QuickLoginResult>;
 }
 
-/**
- * trace 级别的收发包日志（`--trace`）。
- *
- * **刻意不脱敏**：这条流的用途就是对着抓包排查字节差异，替换掉字段反而让
- * 它失去意义。它只在 trace 打开时生成 hex（`isEnabled` 先挡一道，避免每次
- * 发包都白算一个字符串），且永不落盘。
- */
+/** Trace 默认记录报文元数据。原始字节需另外为本次运行启用。 */
 function traceSend(
   log: Logger,
   label: string,
   fields: Record<string, unknown>,
   body: Uint8Array,
+  includeBytes: boolean,
 ): number {
   if (!log.isEnabled('trace')) return 0;
-  log.trace(`${label} →`, { ...fields, len: body.byteLength, hex: renderHex(body) });
+  log.trace(`${label} →`, {
+    ...fields,
+    len: body.byteLength,
+    ...(includeBytes ? { hex: renderHex(body) } : {}),
+  });
   return Date.now();
 }
 
@@ -281,28 +280,36 @@ function traceReply(
   fields: Record<string, unknown>,
   reply: Uint8Array,
   startedAt: number,
+  includeBytes: boolean,
 ): void {
   if (!log.isEnabled('trace')) return;
   log.trace(`${label} ←`, {
     ...fields,
     len: reply.byteLength,
     elapsedMs: startedAt === 0 ? undefined : Date.now() - startedAt,
-    hex: renderHex(reply),
+    ...(includeBytes ? { hex: renderHex(reply) } : {}),
   });
 }
 
 export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
   const adapted: Partial<NativePort> = {};
   const log = createLogger('wire');
+  const includeBytes = process.env.WEQBOT_TRACE_PACKET_BYTES === '1';
 
   if (raw.sendPacket) {
     const call = raw.sendPacket.bind(raw);
     adapted.sendPacket = async (sessionId, cmd, body, needSign, signMode) => {
-      const sent = traceSend(log, `sendPacket ${cmd}`, { sessionId, needSign, signMode }, body);
+      const sent = traceSend(
+        log,
+        `sendPacket ${cmd}`,
+        { sessionId, needSign, signMode },
+        body,
+        includeBytes,
+      );
       const reply = new Uint8Array(
         await call(sessionId, cmd, Buffer.from(body), needSign, signMode),
       );
-      traceReply(log, `sendPacket ${cmd}`, { sessionId }, reply, sent);
+      traceReply(log, `sendPacket ${cmd}`, { sessionId }, reply, sent, includeBytes);
       return reply;
     };
   }
@@ -319,11 +326,17 @@ export function adaptNativeBinding(raw: RawNativeBinding): NativePort {
       signMode,
     ) => {
       const label = `sendOidb 0x${command.toString(16)}_${subCommand.toString(16)}`;
-      const sent = traceSend(log, label, { sessionId, isUid, needSign, signMode }, body);
+      const sent = traceSend(
+        log,
+        label,
+        { sessionId, isUid, needSign, signMode },
+        body,
+        includeBytes,
+      );
       const reply = new Uint8Array(
         await call(sessionId, command, subCommand, Buffer.from(body), isUid, needSign, signMode),
       );
-      traceReply(log, label, { sessionId }, reply, sent);
+      traceReply(log, label, { sessionId }, reply, sent, includeBytes);
       return reply;
     };
   }

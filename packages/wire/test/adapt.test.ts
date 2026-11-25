@@ -10,6 +10,7 @@
  */
 
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import test from 'node:test';
 import { adaptNativeBinding } from '../src/adapt';
 import type { SessionStatusEvent } from '../src/types';
@@ -77,4 +78,30 @@ test('push sink 同样是 Node 风格（回归保护）', async () => {
 
   assert.deepEqual(frames, [frame]);
   assert.equal(errors.length, 1);
+});
+
+test('trace 默认只记录报文元数据，原始字节需另行启用', () => {
+  const adaptation = new URL('../src/adapt.ts', import.meta.url).href;
+  const script = `
+    import { adaptNativeBinding } from ${JSON.stringify(adaptation)};
+    const native = adaptNativeBinding({ sendPacket: async () => Buffer.from('synthetic reply') });
+    await native.sendPacket(1, 'fixture.Command', Buffer.from('synthetic request'));
+  `;
+  for (const raw of ['', '1']) {
+    const run = spawnSync(
+      process.execPath,
+      ['--import', 'tsx', '--input-type=module', '-e', script],
+      {
+        env: { ...process.env, WEQBOT_LOG_LEVEL: 'trace', WEQBOT_TRACE_PACKET_BYTES: raw },
+        encoding: 'utf8',
+        timeout: 5000,
+      },
+    );
+    assert.equal(run.status, 0, run.stderr);
+    assert.match(run.stderr, /fixture\.Command/);
+    assert.match(run.stderr, /elapsedMs/);
+    for (const payload of ['synthetic request', 'synthetic reply']) {
+      assert.equal(run.stderr.includes(Buffer.from(payload).toString('hex')), raw === '1');
+    }
+  }
 });
