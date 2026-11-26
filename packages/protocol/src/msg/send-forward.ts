@@ -36,6 +36,7 @@
 import { randomUUID } from 'node:crypto';
 import { gzipSync } from 'node:zlib';
 import { sendGroupFile, sendPrivateFile } from '../file/file-send';
+import { encodePrivateForwardedFile } from '../file/file-forward';
 import { decode, encode, message, type ProtoMessage } from '../protobuf';
 import { sendPacket, type OidbNative, type TrpcNative } from '../transport';
 import { invokeTrpc, type TrpcSpec } from '../oidb/invoke';
@@ -328,33 +329,34 @@ function hexToBytesLocal(hex: string): Uint8Array {
  */
 async function buildGroupFileForwardElem(
   element: SendFileElement,
-  source: string,
   ctx: ForwardEncodeContext,
 ): Promise<Record<string, unknown>> {
   const groupId = ctx.groupId;
   if (!groupId) throw new Error('群聊合并转发里的文件需要 groupId');
-  const uploaded = await sendGroupFile(ctx.nt, ctx.pid, {
-    groupId,
-    filePath: source,
-    selfUin: ctx.selfUin,
-    publish: false,
-    ...(element.fileName ? { fileName: element.fileName } : {}),
-    ...(ctx.log ? { log: ctx.log } : {}),
-  });
+  const uploaded =
+    element.fileReference ??
+    (await sendGroupFile(ctx.nt, ctx.pid, {
+      groupId,
+      filePath: forwardFilePath(element),
+      selfUin: ctx.selfUin,
+      publish: false,
+      ...(element.fileName ? { fileName: element.fileName } : {}),
+      ...(ctx.log ? { log: ctx.log } : {}),
+    }));
   const extraBytes = encode(GROUP_FILE_EXTRA_SEND, {
     field1: 6,
     fileName: uploaded.fileName,
     display: '',
     inner: {
       info: {
-        busId: FORWARD_GROUP_FILE_BUS_ID,
+        busId: element.fileReference?.busId ?? FORWARD_GROUP_FILE_BUS_ID,
         fileId: uploaded.fileId,
         fileSize: BigInt(uploaded.fileSize),
         fileName: uploaded.fileName,
         field5: 0,
-        fileSha: hexToBytesLocal(uploaded.sha1Hex),
+        fileSha: hexToBytesLocal(uploaded.sha1Hex ?? ''),
         extInfoString: '',
-        fileMd5: hexToBytesLocal(uploaded.md5Hex),
+        fileMd5: hexToBytesLocal(uploaded.md5Hex ?? ''),
       },
     },
   });
@@ -377,15 +379,15 @@ async function buildGroupFileForwardElem(
  */
 async function buildC2cFileForwardContent(
   element: SendFileElement,
-  source: string,
   ctx: ForwardEncodeContext,
 ): Promise<Uint8Array> {
+  if (element.fileReference) return encodePrivateForwardedFile(element.fileReference);
   const userUid = ctx.userUid?.trim() ?? '';
   if (!userUid) throw new Error('私聊合并转发里的文件需要 userUid（上传与路由都按 uid 认人）');
   const uploaded = await sendPrivateFile(ctx.nt, ctx.pid, {
     userUid,
     selfUid: ctx.selfUid,
-    filePath: source,
+    filePath: forwardFilePath(element),
     selfUin: ctx.selfUin,
     send: false,
     ...(element.fileName ? { fileName: element.fileName } : {}),
@@ -489,11 +491,10 @@ async function buildNodeElems(
 
   let msgContent: Uint8Array | undefined;
   for (const file of fileElements) {
-    const source = forwardFilePath(file);
     if (ctx.scene === 'group') {
-      elems.push(await buildGroupFileForwardElem(file, source, ctx));
+      elems.push(await buildGroupFileForwardElem(file, ctx));
     } else {
-      msgContent = await buildC2cFileForwardContent(file, source, ctx);
+      msgContent = await buildC2cFileForwardContent(file, ctx);
     }
   }
 

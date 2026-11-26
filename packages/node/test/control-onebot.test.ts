@@ -409,3 +409,108 @@ test('login 之后 attach 被拒（反方向）', async () => {
   assert.ok(!attach.ok);
   assert.equal(attach.error.code, 'ALREADY_ONLINE');
 });
+
+test('OneBot MCP 只列出已注册且获准的能力，纯文本不解析 CQ 码', async () => {
+  const calls: unknown[] = [];
+  const host = createControlHost({
+    uin: '10002',
+    native: {} as NativePort,
+    vault: memoryVault(),
+    botFactory: () => ({
+      ...fakeBot(undefined),
+      onebot: {
+        port: undefined,
+        actions: () => ['get_group_info', 'send_msg', 'bot_exit'],
+        skipped: () => [],
+        networks: () => [],
+        observeMessage: async () => false,
+        start: async () => {},
+        stop: async () => {},
+        describe: () =>
+          ['get_group_info', 'send_msg', 'bot_exit'].map((name) => ({
+            name,
+            summary: name,
+            group: 'fixture',
+            description: name,
+            inputSchema: { type: 'object', properties: {} },
+          })),
+        call: async (name: string, args: unknown) => {
+          calls.push({ name, args });
+          return { status: 'ok', retcode: 0, data: {} };
+        },
+      },
+    }),
+  });
+  assert.equal(
+    (
+      await call(host, 'attach', {
+        pid: 1234,
+        uin: '10002',
+        uid: 'uid-1',
+        guid: 'guid-1',
+        a2: 'aa',
+        d2: 'bb',
+        d2Key: 'cc',
+        subAppId: DEVICE.subAppId,
+      })
+    ).ok,
+    true,
+  );
+  const first = await call(host, 'onebot.mcpList', { allowWrites: true, offset: 0, limit: 1 });
+  assert.deepEqual(first, {
+    ok: true,
+    result: {
+      entries: [
+        { name: 'get_group_info', summary: 'get_group_info', group: 'fixture', access: 'read' },
+      ],
+      nextOffset: 1,
+    },
+  });
+  assert.deepEqual(
+    await call(host, 'onebot.mcpDescribe', { name: 'send_msg', allowWrites: false }),
+    { ok: true, result: null },
+  );
+  assert.equal(
+    (
+      await call(host, 'onebot.mcpCall', {
+        name: 'send_msg',
+        allowWrites: false,
+        arguments: { group_id: 1, message: '文字' },
+      })
+    ).ok,
+    false,
+  );
+  assert.equal(
+    (
+      await call(host, 'onebot.mcpCall', {
+        name: 'send_msg',
+        allowWrites: true,
+        arguments: { group_id: 1, message: [{ type: 'image' }] },
+      })
+    ).ok,
+    false,
+  );
+  assert.equal(
+    (
+      await call(host, 'onebot.mcpCall', {
+        name: 'bot_exit',
+        allowWrites: true,
+        arguments: {},
+      })
+    ).ok,
+    false,
+  );
+  assert.equal(
+    (
+      await call(host, 'onebot.mcpCall', {
+        name: 'send_msg',
+        allowWrites: true,
+        arguments: { group_id: 1, message: '[CQ:image]' },
+      })
+    ).ok,
+    true,
+  );
+  assert.deepEqual(calls, [
+    { name: 'send_msg', args: { group_id: 1, message: '[CQ:image]', auto_escape: true } },
+  ]);
+});

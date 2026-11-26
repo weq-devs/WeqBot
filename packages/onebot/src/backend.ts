@@ -577,7 +577,7 @@ export interface GroupAdminExtraBackend {
   addCategoryTag(groupClass: number, name: string): Promise<void>;
   removeCategoryTag(groupClass: number, name: string): Promise<void>;
   getAdminPermissions(groupId: number, userId: number): Promise<GroupAdminPermissions>;
-  setAdminPermissions(params: {
+  setAdminPermissions?(params: {
     groupId: number;
     userId: number;
     recallMemberMessage?: boolean;
@@ -756,7 +756,7 @@ export interface ContactsExtraBackend {
     srcId: number;
     additionalParam: string;
   }): Promise<string>;
-  sendTuwenArk(params: {
+  sendTuwenArk?(params: {
     targetId: number;
     peerType: 0 | 1;
     title: string;
@@ -1149,7 +1149,6 @@ export interface OneBotBackend {
     userId: number,
     message: import('./segments').Segment[],
     tempGroupId?: number,
-    fontId?: number,
   ): Promise<SendResult>;
 
   recall(target: RecallTarget): Promise<void>;

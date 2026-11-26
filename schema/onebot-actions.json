@@ -202,7 +202,7 @@
               },
               "font_id": {
                 "type": "integer",
-                "description": "本条消息的聊天字体 ID",
+                "description": "仅群聊可指定本条消息的字体 ID",
                 "minimum": 1,
                 "maximum": 65535
               }
@@ -2013,7 +2013,7 @@
         {
           "name": "set_group_admin_permissions",
           "summary": "设置指定管理员的撤回 / 踢人权限",
-          "description": "修改管理员权限；开启踢人时必须给 kick_member_per_day，关闭时不能给。",
+          "description": "指定管理员的撤回和踢人权限写入在内置 WeqBot 后端已停用。启用该动作的其他后端要求开启踢人时传 kick_member_per_day。",
           "inputSchema": {
             "type": "object",
             "properties": {
@@ -4281,7 +4281,7 @@
         {
           "name": "send_tuwen_ark",
           "summary": "发送图文 Ark 卡片",
-          "description": "发送图文 Ark 卡片；user_id 与 group_id 至少给一个。",
+          "description": "图文 Ark 专用动作在内置 WeqBot 后端已停用。",
           "inputSchema": {
             "type": "object",
             "properties": {

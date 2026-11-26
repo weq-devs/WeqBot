@@ -117,12 +117,12 @@ const PublishGroupFile = {
   subCommand: 4,
   reqSchema: OIDB_GROUP_SEND_FILE_REQ,
   respSchema: PUBLISH_EMPTY_RESP,
-  serialize: (p: { groupId: number; fileId: string }): Record<string, unknown> => ({
+  serialize: (p: { groupId: number; fileId: string; busId?: number }): Record<string, unknown> => ({
     body: {
       groupUin: p.groupId,
       type: 2,
       info: {
-        busiType: 102,
+        busiType: p.busId ?? 102,
         fileId: p.fileId,
         // 31 位随机数（Lagrange 同）；field5=true 是服务端认这条分支的判别位。
         field3: Math.floor(Math.random() * 0x7fffffff) >>> 0,
@@ -131,7 +131,15 @@ const PublishGroupFile = {
     },
   }),
   deserialize: (): void => {},
-} satisfies OidbSpec<{ groupId: number; fileId: string }, void>;
+} satisfies OidbSpec<{ groupId: number; fileId: string; busId?: number }, void>;
+
+export function publishGroupFile(
+  nt: OidbNative,
+  pid: number,
+  file: { groupId: number; fileId: string; busId?: number },
+): Promise<void> {
+  return invokeOidb(nt, pid, PublishGroupFile, file);
+}
 
 /** 群文件上传 + 发送参数。 */
 export interface GroupFileSendParams {
@@ -251,7 +259,7 @@ export async function sendGroupFile(
   params.onUploaded?.();
   const publish = params.publish !== false;
   params.beforeSend?.();
-  if (publish) await invokeOidb(nt, pid, PublishGroupFile, { groupId, fileId });
+  if (publish) await publishGroupFile(nt, pid, { groupId, fileId });
 
   return {
     fileId,

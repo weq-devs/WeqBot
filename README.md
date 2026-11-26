@@ -9,7 +9,7 @@
 
 ### OneBot 发送字体
 
-`send_msg` 支持可选的 `font_id`，群聊和私聊都可以传入 1 到 65535 的整数。
+`send_msg` 的可选参数 `font_id` 仅用于群聊，接受 1 到 65535 的整数。私聊传入该参数会返回参数错误。
 
 ```json
 { "action": "send_msg", "params": { "group_id": 12345, "message": "你好", "font_id": 22045 } }
@@ -20,6 +20,8 @@
 `font2=0x11D56` 发送。同一字体 ID 的 `font2=0x184EA` 和 `0x484EA` 在测试中显示为同一款字体。
 
 ### 开发
+
+修改文档时，先推送 [WeqBotDocs](https://github.com/weq-devs/WeqBotDocs) 的提交，再更新主仓里的 `docs` 指针。CI 会递归检出子模块。
 
 ```bash
 git clone --recurse-submodules https://github.com/weq-devs/WeqBot.git

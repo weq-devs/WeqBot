@@ -1,3 +1,4 @@
+import type { OneBotMcpAccess } from './onebot-mcp';
 /**
  * desktop ↔ sidecar 控制通道的线上协议。
  *
@@ -136,6 +137,23 @@ export interface ControlOneBotState {
   listeners: ControlOneBotListener[];
 }
 
+export interface ControlOneBotActionSummary {
+  name: string;
+  summary: string;
+  group?: string;
+  access: OneBotMcpAccess;
+}
+
+export interface ControlOneBotActionList {
+  entries: ControlOneBotActionSummary[];
+  nextOffset: number | null;
+}
+
+export interface ControlOneBotActionDetail extends ControlOneBotActionSummary {
+  description: string;
+  inputSchema: Record<string, unknown>;
+}
+
 /** 宿主观察到的本地 QQ 消息。账号身份来自 daemon 进程，调用方不提供 self。 */
 export interface ControlObservedMessage {
   messageId: string;
@@ -238,6 +256,19 @@ export interface ControlMethods {
   'onebot.set': {
     params: { config: ControlOneBotConfig | null };
     result: ControlOneBotState;
+  };
+  /** 已注册且允许由 MCP 调用的 OneBot action。分页中只包含精简条目。 */
+  'onebot.mcpList': {
+    params: { allowWrites: boolean; group?: string; query?: string; offset: number; limit: number };
+    result: ControlOneBotActionList;
+  };
+  'onebot.mcpDescribe': {
+    params: { allowWrites: boolean; name: string };
+    result: ControlOneBotActionDetail | null;
+  };
+  'onebot.mcpCall': {
+    params: { allowWrites: boolean; name: string; arguments: Record<string, unknown> };
+    result: unknown;
   };
   /** 借用 QQ 会话时接收宿主观察的新消息，复用 OneBot 网络及消息缓存。 */
   'onebot.observeMessage': {

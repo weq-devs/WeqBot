@@ -33,6 +33,9 @@ export {
   type ControlMethods,
   type ControlObservedMessage,
   type ControlOneBotConfig,
+  type ControlOneBotActionSummary,
+  type ControlOneBotActionList,
+  type ControlOneBotActionDetail,
   type ControlOneBotListener,
   type ControlOneBotState,
   type ControlParams,
@@ -43,3 +46,10 @@ export {
   type ControlWsClient,
   type ControlWsServer,
 } from './protocol';
+
+export {
+  oneBotMcpAccess,
+  oneBotMcpTextFields,
+  oneBotMcpBlockedFields,
+  type OneBotMcpAccess,
+} from './onebot-mcp';

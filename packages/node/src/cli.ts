@@ -104,13 +104,14 @@ const USAGE = `weqbot — 独立 QQ bot（mode2 自建上线）
   --serve              常驻 daemon 模式（NDJSON over socket；宿主退出不影响 OneBot）
   --socket <path>      --serve 监听的路径（默认 $XDG_RUNTIME_DIR/weqbot/weqbot-<uin>.sock）
   --verbose            打开 debug 日志
-  --trace              打开 trace 日志：完整打印收发包（不脱敏，只进终端）
+  --trace              打开 trace 日志：记录报文命令、长度及耗时
   -h, --help           显示本帮助
 
 环境变量:
   WEQBOT_WEBUI_TOKEN   固定控制台令牌（默认每次启动随机生成并打印）
   WEQBOT_LOG_DIR       日志落盘目录（默认 ./logs；设为 off 关闭落盘）
   WEQBOT_LOG_LEVEL     终端日志级别：trace / debug / info / warn / error
+  WEQBOT_TRACE_PACKET_BYTES  设为 1 且启用 trace 时额外打印原始报文字节
   WEQBOT_LOG_FILE_LEVEL 落盘级别（默认 debug；trace 不落盘）
   WEQBOT_QQ_INSTALL_DIR QQ 安装根（含 qq / QQ.exe 的目录；macOS 是 QQ.app）
   WEQBOT_QQ_ROOT       QQ 数据根（默认 ~/.config/QQ 等；不是安装目录）

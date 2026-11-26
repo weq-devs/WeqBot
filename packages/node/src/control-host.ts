@@ -26,6 +26,11 @@ import {
   controlEvent,
   controlFailure,
   controlSuccess,
+  oneBotMcpAccess,
+  oneBotMcpBlockedFields,
+  oneBotMcpTextFields,
+  type ControlOneBotActionDetail,
+  type ControlParams,
   type ControlEnvelope,
   type ControlFailure,
   type ControlOneBotConfig,
@@ -391,6 +396,103 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
     return bot !== undefined && bot.state !== 'closed' && bot.state !== 'idle';
   }
 
+  function onlineOneBot() {
+    if (closed || bot?.state !== 'online' || !bot.onebot)
+      throw new Error('当前账号的 OneBot 尚未上线或启用。');
+    return bot.onebot;
+  }
+
+  function mcpActionDetail(
+    action: ReturnType<NonNullable<Bot['onebot']>['describe']>[number],
+    allowWrites: boolean,
+  ): ControlOneBotActionDetail | undefined {
+    const access = oneBotMcpAccess(action.name);
+    if (!access || (access === 'write' && allowWrites !== true)) return;
+    const textFields = oneBotMcpTextFields(action.name);
+    const blockedFields = oneBotMcpBlockedFields(action.name);
+    const original = action.inputSchema.properties;
+    const properties =
+      original && typeof original === 'object' && !Array.isArray(original)
+        ? { ...(original as Record<string, unknown>) }
+        : {};
+    for (const field of textFields)
+      properties[field] = { type: 'string', minLength: 1, maxLength: 4_000 };
+    for (const field of blockedFields) delete properties[field];
+    return {
+      name: action.name,
+      summary: action.summary ?? action.name,
+      group: action.group,
+      access,
+      description: textFields.length
+        ? `${action.summary ?? action.name}。MCP 仅支持纯文本。`
+        : action.description,
+      inputSchema: { ...action.inputSchema, properties },
+    };
+  }
+
+  function listMcpActions(input: ControlParams<'onebot.mcpList'>) {
+    const { allowWrites, offset, limit, group, query } = input;
+    if (
+      !Number.isSafeInteger(offset) ||
+      offset < 0 ||
+      !Number.isInteger(limit) ||
+      limit < 1 ||
+      limit > 50
+    )
+      throw new Error('OneBot 能力分页参数无效。');
+    const keyword = query?.trim().toLowerCase();
+    const matches = onlineOneBot()
+      .describe()
+      .flatMap((action) => {
+        if (group && action.group !== group) return [];
+        if (keyword && !`${action.name} ${action.summary ?? ''}`.toLowerCase().includes(keyword))
+          return [];
+        const detail = mcpActionDetail(action, allowWrites);
+        if (!detail) return [];
+        const { name, summary, group: domain, access } = detail;
+        return [{ name, summary, group: domain, access }];
+      });
+    const next = offset + limit;
+    return {
+      entries: matches.slice(offset, next),
+      nextOffset: next < matches.length ? next : null,
+    };
+  }
+
+  function describeMcpAction(
+    adapter: NonNullable<Bot['onebot']>,
+    name: string,
+    allowWrites: boolean,
+  ) {
+    const action = adapter.describe().find((item) => item.name === name);
+    return action ? mcpActionDetail(action, allowWrites) : undefined;
+  }
+
+  async function callMcpAction(input: ControlParams<'onebot.mcpCall'>) {
+    const adapter = onlineOneBot();
+    if (!describeMcpAction(adapter, input.name, input.allowWrites))
+      throw new Error('当前 OneBot 会话未提供此操作。');
+    if (!input.arguments || typeof input.arguments !== 'object' || Array.isArray(input.arguments))
+      throw new Error('OneBot 操作参数须为对象。');
+    const params = { ...input.arguments };
+    for (const field of oneBotMcpBlockedFields(input.name)) {
+      if (Object.hasOwn(params, field)) throw new Error(`MCP 不接收参数 ${field}。`);
+    }
+    for (const field of oneBotMcpTextFields(input.name)) {
+      const value = params[field];
+      if (typeof value !== 'string' || value.length < 1 || value.length > 4_000)
+        throw new Error(`${field} 须为 1 到 4,000 字符的纯文本。`);
+      if (field === 'message') params.auto_escape = true;
+    }
+    const sessionId = bot?.sessionId;
+    const value = await adapter.call(input.name, params as Parameters<typeof adapter.call>[1]);
+    if (bot?.sessionId !== sessionId || onlineOneBot() !== adapter)
+      throw new Error('OneBot 会话在操作期间已变化，请先核对操作结果。');
+    if (Buffer.byteLength(JSON.stringify(value ?? null)) > 128 * 1024)
+      throw new Error('OneBot 返回过大。查询请缩小范围，写入请先核对操作结果。');
+    return value;
+  }
+
   async function observeMessage(value: unknown): Promise<{ accepted: boolean }> {
     const input = value as { sessionId?: unknown; message?: ControlObservedMessage } | null;
     const adapter = bot?.onebot;
@@ -491,6 +593,32 @@ export function createControlHost(options: ControlHostOptions): ControlHost {
           reply(controlSuccess(envelope.id, await setOnebot(params?.config ?? null)));
           return;
         }
+        case 'onebot.mcpList':
+          reply(
+            controlSuccess(
+              envelope.id,
+              listMcpActions(envelope.params as ControlParams<'onebot.mcpList'>),
+            ),
+          );
+          return;
+        case 'onebot.mcpDescribe': {
+          const input = envelope.params as ControlParams<'onebot.mcpDescribe'>;
+          reply(
+            controlSuccess(
+              envelope.id,
+              describeMcpAction(onlineOneBot(), input.name, input.allowWrites) ?? null,
+            ),
+          );
+          return;
+        }
+        case 'onebot.mcpCall':
+          reply(
+            controlSuccess(
+              envelope.id,
+              await callMcpAction(envelope.params as ControlParams<'onebot.mcpCall'>),
+            ),
+          );
+          return;
         case 'onebot.observeMessage':
           reply(controlSuccess(envelope.id, await observeMessage(envelope.params)));
           return;

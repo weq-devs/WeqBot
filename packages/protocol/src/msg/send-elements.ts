@@ -26,6 +26,7 @@
 
 import { randomUUID } from 'node:crypto';
 import { deflateSync } from 'node:zlib';
+import type { ForwardedFile } from '../file/file-forward';
 import type { MediaNative } from '../highway/ntv2-upload';
 import {
   DEFAULT_BUBBLE_TEMPLATE,
@@ -517,6 +518,8 @@ export interface SendFileElement {
   kind: 'file';
   /** 本机文件路径（上传按路径流式读，不进内存）。 */
   source: MediaSource;
+  /** 由宿主转存得到的目标附件。存在时不从本机读取正文。 */
+  fileReference?: ForwardedFile;
   /** 收端显示的文件名；缺省用路径 basename。 */
   fileName?: string;
 }

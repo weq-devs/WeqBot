@@ -432,7 +432,7 @@ const sendTuwenArk = defineAction(
       };
     },
     run: async (params, ctx) => {
-      await ctx.backend.contactsExtra!.sendTuwenArk(params);
+      await ctx.backend.contactsExtra!.sendTuwenArk!(params);
       return null;
     },
   },

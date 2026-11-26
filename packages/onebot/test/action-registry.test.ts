@@ -177,6 +177,46 @@ test('引用使用原 QQ 序号和发送者，拒绝跨会话的 OneBot 消息 I
   );
 });
 
+test('只允许群消息指定本条字体，私聊拒绝后不发送消息', async () => {
+  const fonts: Array<number | undefined> = [];
+  let privateSends = 0;
+  const backend = makeBackend({
+    sendGroupMessage: async (_, __, fontId) => {
+      fonts.push(fontId);
+      return { sequence: 25 };
+    },
+    sendPrivateMessage: async () => {
+      privateSends++;
+      return { sequence: 26 };
+    },
+  });
+  const registry = new ActionRegistry();
+  registerActions(registry, backend);
+  const ctx = makeContext(backend);
+  const privateMessage = { user_id: 20002, message: 'text' };
+
+  for (const action of ['send_msg', 'send_private_msg']) {
+    const response = await registry.call(action, { ...privateMessage, font_id: 22045 }, ctx);
+    assert.equal(response.retcode, 1400);
+  }
+  const explicitPrivate = await registry.call(
+    'send_msg',
+    { ...privateMessage, message_type: 'private', group_id: 20001, font_id: 22045 },
+    ctx,
+  );
+  assert.equal(explicitPrivate.retcode, 1400);
+  assert.equal(privateSends, 0);
+  assert.equal((await registry.call('send_msg', privateMessage, ctx)).retcode, 0);
+  assert.equal(privateSends, 1);
+  const group = await registry.call(
+    'send_msg',
+    { group_id: 20001, message: 'text', font_id: 22045 },
+    ctx,
+  );
+  assert.equal(group.retcode, 0);
+  assert.deepEqual(fonts, [22045]);
+});
+
 test('get_status 的 time 来自适配器启动时刻', async () => {
   const registry = new ActionRegistry();
   const backend = makeBackend({ getStatus: async () => ({ online: true, good: false }) });

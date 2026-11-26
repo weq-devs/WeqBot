@@ -14,6 +14,13 @@ export {
 } from './file-send';
 
 export {
+  copyForwardFile,
+  publishForwardedFile,
+  type ForwardedFile,
+  type ForwardFileSource,
+} from './file-forward';
+
+export {
   sendDatalineFile,
   DATALINE_UPLOAD_CMD,
   DATALINE_UPLOAD_REQUEST,

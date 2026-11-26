@@ -68,7 +68,6 @@ import {
   GetAdminPermissions,
   GetGroupCategoryTags,
   ModifyGroupExtInfo,
-  SetAdminPermissions,
   SetAdminReceiveVerify,
   SetGroupAddOption,
   SetGroupRequest,
@@ -171,7 +170,6 @@ import {
   SendGroupSign,
   SendPoke,
   SendProfileLike,
-  SendTuwenArk,
   SetDiyOnlineStatus,
   SetFriendCategory,
   SetFriendRemark,
@@ -951,15 +949,11 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
     };
   }
 
-  async function sendPrivateElements(
-    userId: number,
-    elements: SendElement[],
-    fontId?: number,
-  ): Promise<SendResult> {
+  async function sendPrivateElements(userId: number, elements: SendElement[]): Promise<SendResult> {
     const uid = options.resolveUidUin?.uidByUin(String(userId));
     const receipt = await sendC2cMessage(nt, sessionId, userId, elements, {
       ...(uid ? { userUid: uid } : {}),
-      ...sendParams(fontId),
+      ...sendParams(),
     });
     if (!receipt.ok) {
       throw new Error(`发送私聊消息失败：result=${receipt.result} ${receipt.errMsg}`);
@@ -1048,15 +1042,14 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
       userId: number,
       message: Segment[],
       tempGroupId?: number,
-      fontId?: number,
     ): Promise<SendResult> {
       const elements = await toElements(message);
-      if (!tempGroupId) return sendPrivateElements(userId, elements, fontId);
+      if (!tempGroupId) return sendPrivateElements(userId, elements);
       const uid = options.resolveUidUin?.uidByUin(String(userId));
       const receipt = await sendMessage(nt, sessionId, {
         groupTemp: { groupUin: tempGroupId, toUid: uid ?? '' },
         elements,
-        ...sendParams(fontId),
+        ...sendParams(),
       });
       if (!receipt.ok) {
         throw new Error(`发送私聊消息失败：result=${receipt.result} ${receipt.errMsg}`);
@@ -1597,9 +1590,6 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
           kick_member_per_day: snapshot.kickMemberPerDay,
         };
       },
-      async setAdminPermissions(params) {
-        await SetAdminPermissions.invoke(nt, sessionId, params);
-      },
       async setAdminReceiveVerify(groupId, userId, enable) {
         await SetAdminReceiveVerify.invoke(nt, sessionId, { groupId, userId, enable });
       },
@@ -1903,16 +1893,6 @@ export function createProtocolBackend(options: ProtocolBackendOptions): OneBotBa
           needShortUrl: params.needShortUrl,
           additionalParam: params.additionalParam,
         }),
-      async sendTuwenArk(params) {
-        const result = await SendTuwenArk.invoke(nt, sessionId, params);
-        // 外层 OIDB errorCode=0 也可能下发失败，必须看 result.errorCode。
-        if (result.errorCode !== 0) {
-          throw new Error(
-            `图文 Ark 发送失败：code=${result.errorCode} ${result.errorMessage}`.trim(),
-          );
-        }
-        return result;
-      },
     },
 
     flashTransfer: {
