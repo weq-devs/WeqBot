@@ -21,7 +21,7 @@
 
 ### 开发
 
-改动通过 PR 合并到 `main`，合并前需要通过子模块检出检查。修改文档时，先推送 [WeqBotDocs](https://github.com/weq-devs/WeqBotDocs) 的提交，再更新主仓里的 `docs` 指针。
+修改文档时，先推送 [WeqBotDocs](https://github.com/weq-devs/WeqBotDocs) 的提交，再更新主仓里的 `docs` 指针。CI 会递归检出子模块。
 
 ```bash
 git clone --recurse-submodules https://github.com/weq-devs/WeqBot.git
