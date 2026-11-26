@@ -485,7 +485,7 @@ test('配置了 onebot 时会启动适配器，stop 时一起关掉', async () =
   assert.equal(bot.onebot, undefined);
 });
 
-test('OneBot send_msg 将 font_id 编码到群聊和私聊的 font2', async () => {
+test('OneBot send_msg 编码群聊字体，拒绝给私聊指定字体', async () => {
   const { vault } = makeVault();
   const sent: Uint8Array[] = [];
   const harness = makeNative({
@@ -512,7 +512,7 @@ test('OneBot send_msg 将 font_id 编码到群聊和私聊的 font2', async () =
     const params = { message: '你好', font_id: 22045 };
     const cases = [
       { input: { ...params, group_id: 12345 }, retcode: 0 },
-      { input: { ...params, user_id: 20001 }, retcode: 0 },
+      { input: { ...params, user_id: 20001 }, retcode: 1400 },
       { input: { ...params, group_id: 12345, font_id: 65536 }, retcode: 1400 },
     ];
     for (const { input, retcode } of cases) {
@@ -520,17 +520,15 @@ test('OneBot send_msg 将 font_id 编码到群聊和私聊的 font2', async () =
       assert.ok(result && typeof result === 'object' && 'retcode' in result);
       assert.equal(result.retcode, retcode);
     }
-    assert.equal(sent.length, 2);
-    for (const bytes of sent) {
-      const { messageBody } = decode(SEND_MESSAGE_REQUEST, bytes) as {
-        messageBody: {
-          richText: { elems: { generalFlags?: { font: Record<string, unknown> } }[] };
-        };
+    assert.equal(sent.length, 1);
+    const { messageBody } = decode(SEND_MESSAGE_REQUEST, sent[0]!) as {
+      messageBody: {
+        richText: { elems: { generalFlags?: { font: Record<string, unknown> } }[] };
       };
-      const font = messageBody.richText.elems[0]?.generalFlags?.font;
-      assert.equal(font?.fontId1, 0);
-      assert.equal(font?.fontId2, 0x11d56);
-    }
+    };
+    const font = messageBody.richText.elems[0]?.generalFlags?.font;
+    assert.equal(font?.fontId1, 0);
+    assert.equal(font?.fontId2, 0x11d56);
   } finally {
     await bot.stop('closed');
   }
