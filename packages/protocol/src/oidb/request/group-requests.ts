@@ -157,6 +157,8 @@ export interface GroupRequestPage {
   requests: GroupRequest[];
   /** 下一页游标；0 表示没有下一页。 */
   cookie: number;
+  /** 超出 JS 安全整数范围的原始分页游标。 */
+  rawCookie?: bigint;
   latestSequence?: bigint;
   readSequence?: bigint;
 }
@@ -223,6 +225,9 @@ export namespace FetchGroupRequests {
   export const deserialize = (body: Record<string, unknown>, p: Params = {}): GroupRequestPage => ({
     requests: parseRequests(body, p.filtered === true),
     cookie: toInt(body.cookie),
+    ...(typeof body.cookie === 'bigint' && body.cookie > BigInt(Number.MAX_SAFE_INTEGER)
+      ? { rawCookie: body.cookie }
+      : {}),
     ...(typeof body.newLatestSeq === 'bigint' ? { latestSequence: body.newLatestSeq } : {}),
     ...(typeof body.field5 === 'bigint' ? { readSequence: body.field5 } : {}),
   });
