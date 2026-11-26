@@ -312,7 +312,8 @@ export class VideoFrameAssembler {
     this.evictStale(now);
 
     const { rtp, tick, subType, payload } = packet;
-    if (rtp.totalPkg === 0) return null;
+    // 校验片不是数据片。当前组装器不做 FEC 恢复，不能把它计入完整帧。
+    if (rtp.totalPkg === 0 || rtp.pkgIdx >= rtp.totalPkg) return null;
     const key = `${rtp.gidx}:${rtp.fidx}`;
     let slot = this.pending.get(key);
     if (!slot) {
@@ -411,7 +412,10 @@ function assemble(slot: PendingFrame): VideoFrame {
     tick: slot.tick,
     subType: slot.subType,
     // 关键帧按 NAL 类型判，不能按 gidx —— 见 `VideoFrame.isKeyframe` 的注释。
-    isKeyframe: containsIrap(frameData, subHeaderSize),
+    isKeyframe:
+      frameData[3] === 0x05
+        ? splitHevcNals(frameData.subarray(subHeaderSize)).some((nal) => (nal.data[0]! & 0x1f) === 5)
+        : containsIrap(frameData, subHeaderSize),
     subHeaderSize,
     timestamp,
     frameData,
@@ -652,8 +656,11 @@ export function buildVideoPackets(params: {
   maxPayload?: number;
   /** 覆盖单片的 tick（调试用；默认所有分片相同）。 */
   tickForPacket?: (index: number) => number;
-  /** 给数据分片追加 RS(5,3) 校验片（关键帧用）。数据片数不足 3 时忽略。 */
+  /** 给多分片帧追加校验片。H.264 使用一片异或，H.265 使用两片 RS。 */
   fec?: boolean;
+  codec?: 'h264' | 'hevc';
+  /** 帧类型与是否添加校验片可以分别指定。 */
+  keyframe?: boolean;
 }): Uint8Array[] {
   const header = videoFrameHeader(params.frameIndex ?? 0);
   const gidx = params.gidx ?? header.gidx;
@@ -671,7 +678,9 @@ export function buildVideoPackets(params: {
   // QQ 对 WeQ 的 137 帧零 ACK，画面完全不动）。上限按 RS 的约束给
   // （校验片数 ≤ 数据片数）。
   const useFec =
-    params.fec === true && totalPkg >= VIDEO_FEC_DATA && totalPkg <= VIDEO_FEC_MAX_DATA;
+    params.fec === true &&
+    totalPkg >= VIDEO_FEC_DATA &&
+    totalPkg <= (params.codec === 'h264' ? 255 : VIDEO_FEC_MAX_DATA);
 
   const chunks: Uint8Array[] = [];
   for (let i = 0; i < totalPkg; i++) {
@@ -688,7 +697,16 @@ export function buildVideoPackets(params: {
       chunks.push(chunk);
     }
   }
-  const parity = useFec ? rsEncode(chunks, chunkSize, VIDEO_FEC_PARITY) : [];
+  let parity: Uint8Array[] = [];
+  if (useFec && params.codec === 'h264') {
+    const xor = new Uint8Array(chunkSize);
+    for (const chunk of chunks) {
+      for (let i = 0; i < chunk.length; i++) xor[i] = xor[i]! ^ chunk[i]!;
+    }
+    parity = [xor];
+  } else if (useFec) {
+    parity = rsEncode(chunks, chunkSize, VIDEO_FEC_PARITY);
+  }
   const totalFec = parity.length;
 
   const packets: Uint8Array[] = [];
@@ -706,7 +724,9 @@ export function buildVideoPackets(params: {
     // `[4]`：非关键帧 `0x07`、关键帧 `0x00`。两通独立抓包（2026-11-02 第 1/5 通）
     // 上这个规律都成立：QQ 的 489 个非关键帧视频包全是 `0x07`，只有 1 个关键帧是
     // `0x00`。WeQ 此前恒写 `0x00`，是最显眼的结构差异。音频包恒 `0x00`（不动）。
-    out[4] = params.fec === true ? 0x00 : 0x07;
+    const keyframe = (params.keyframe ?? params.fec) === true;
+    // H.264 的普通帧按有无校验片分别标为 0x03、0x02。
+    out[4] = keyframe ? 0x00 : params.codec === 'h264' ? (useFec ? 0x03 : 0x02) : 0x07;
     writeU32be(out, 5, (params.seq + i) >>> 0);
     writeU32be(out, 9, params.sessionTs);
     writeU32be(out, 13, params.tickForPacket ? params.tickForPacket(i) : params.tick >>> 0);
@@ -787,7 +807,8 @@ export const VIDEO_SUBHEADER_LEN = 20;
 export function buildVideoSubHeader(params: {
   /** 发送方向：决定 `[2]` 与时间戳布局。 */
   direction: 'c2s' | 's2c';
-  /** 本会话内第几帧（从 0 起），只取低 8 位。 */
+  codec?: 'h264' | 'hevc';
+  /** H.265 填帧序号，H.264 上行填参考帧的组内序号。只取低 8 位。 */
   frameIndex: number;
   /** `[8:12]`：c2s 填帧 PTS（ms），s2c 填发送时的 tick。 */
   timestampMs: number;
@@ -816,7 +837,7 @@ export function buildVideoSubHeader(params: {
   out[0] = VIDEO_SUBHEADER_LEN;
   out[1] = params.frameIndex & 0xff;
   out[2] = VIDEO_SUBHEADER_DIRECTION[params.direction];
-  out[3] = 0x06;
+  out[3] = params.codec === 'h264' ? 0x05 : 0x06;
   // [4:6] 恒 0。
   out[6] = (params.quality?.rateTier ?? 0) & 0xff;
   out[7] = (params.quality?.frameQuality ?? 0) & 0xff;

@@ -44,8 +44,7 @@ export const GROUP_SSO_CMD = {
  * 开房场景号（`params.f2`）。
  *
  * 实测 **群语音与群视频都是 3** —— 三次抓包里「视频通话」按钮发起的那次也是 3。
- * 群聊与私聊的根本差异：私聊靠 `params.f3` / `ipStack` / `f13` 一组字段切档位，
- * 群聊两种入口共用场景号，初始媒体模式由媒体块携带。
+ * 私聊通过开房 `params.f3` 区分两种入口，群聊初始媒体模式由媒体块携带。
  */
 export const GROUP_CALL_SCENE = {
   audio: 3,
@@ -59,7 +58,7 @@ export const GROUP_CAPABILITY_PROFILE = 10065;
 /**
  * `SsoInviteRoom.params.f5`。三次抓包恒为 15。
  *
- * 私聊邀请是 `inviteF3`（语音 5 / 视频 15），群聊恒 15。
+ * 私聊邀请的 `inviteF3` 在语音和视频里都为 1，群聊此字段为 15。
  */
 export const GROUP_INVITE_F5 = 15;
 

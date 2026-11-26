@@ -304,24 +304,13 @@ export function parseGcsPacket(data: Uint8Array): GcsPacket | null {
  * 「本端能解哪些编码、带宽多少、要不要回声消除」。服务端拿它给房间选路，
  * 内容不必逐字段构造 —— 但**必须存在且能解析**，空 body 会被直接断开。
  *
- * 2026-10-26 逐字节替换为 QQ 本体（Linux 桌面版）实际发送的原文。旧模板是从
- * 语音通话抓的，与视频通话有实质差异，服务端据此可能不把本端当视频/P2P 候选：
- *
- * | 字段 | QQ 本体（语音/视频一致） | 旧模板 |
- * | --- | --- | --- |
- * | `f3` | 15 | 5 |
- * | `f6` | 10063 | 10058 |
- * | `f11` | 1812048064 | 26847424 |
- * | 内层 `f5`/`f6` | 0 / 0（由协商决定） | 2560 / 1440（硬编码） |
- * | 能力条目 | 前 2 条为空 | 前 2 条是 `f1=2`（H.264 480×640@20） |
- * | `f21` | 2 | 1 |
- *
- * 注意 `f3=15` / `f6=10063` 恰好等于 `MEDIA_PROFILE.video` 的
- * `inviteF3` / `inviteF4` —— 能力集与信令档位是配套的。
+ * 2026-11-26 同机 QQ 的语音升级与直接视频样本使用相同的 618 字节能力集。
+ * 顶层 `f3=1`、`f6=10065` 与邀请能力档一致，`f11=2566957248` 也写入
+ * 状态上报的 `f120`。内层编码能力条目随这份模板一起保留。
  */
 export const DEFAULT_CAPABILITIES: Uint8Array = Uint8Array.from(
   atob(
-    'CtMDCgAKAAoZCAMQARiwCSCADygPMIAoONieCEABSABQAQoZCAMQAhiwCSCADygeMIAoOLC9EEABSABQAQoZCAQQARiwCSCADygPMIAoONieCEABSABQAQoZCAQQAhiwCSCADygeMIAoOLC9EEABSABQAQoZCAUQARiwCSCADygPMIAoONieCEABSABQAQoZCAUQAhiwCSCADygeMIAoOLC9EEABSABQAQoXCAYQARjgAyCABSgPMIAoOABAAUgAUAEKFwgGEAIY4AMggAUoDzCAKDgAQAFIAFABCgAKAAoACgAKAAoACgAKABJpCAAQABgAIl6HZUMhAAIAKQMgD6ALuAB+AMAAKwJYD6AF3AB+AMAALgMgD6AJxAB+AMAAQAlgDIAJYAB+AMAAQQlgGQAJYAB+AMAAQglgGQAJYAB+AMAAUAMgD6ALuAB+AMASNFZ4KgEAGgwKCFNoYXJwQ2FtGAEiDQi4FxABGAYgACgAMAAoADAAQAFIAVAAWAJiCwgGEPABGMACIJBOYgwIBhDoAhjgAyDwkwliDAgGEOADGIAFILCuFWIMCAYQ0AUYgAoggOowYgwIBhC4CBiADyCg4WdoAXABeAGAAQGIAQeYAQKoAQIQARgPKGQwz044AUABSgBYwNGG4AZqBAgDEAJyBggAEAAYAIIBVwoiMTAwMTNfYXVkaW9fY29uZmlnXzEwMDExX3Blbmd1aW5zXxIVMjA0X3ZpZGVvX2NvbmZpZ18yMDRfGhoxMDA1MV9jb21tb25fY29uZmlnXzEwMDUxX4oBDggAEgAiBGlvc18qADIAkAEAmAEA',
+    'CtMDCgAKAAoZCAMQARiwCSCADygPMIAoONieCEABSABQAQoZCAMQAhiwCSCADygeMIAoOLC9EEABSABQAQoZCAQQARiwCSCADygPMIAoONieCEABSABQAQoZCAQQAhiwCSCADygeMIAoOLC9EEABSABQAQoZCAUQARiwCSCADygPMIAoONieCEABSABQAQoZCAUQAhiwCSCADygeMIAoOLC9EEABSABQAQoXCAYQARjgAyCABSgPMIAoOABAAUgAUAEKFwgGEAIY4AMggAUoDzCAKDgAQAFIAFABCgAKAAoACgAKAAoACgAKABJpCAAQABgAIl6HZUMhAAIAKQMgD6ALuAB+AMAAKwJYD6AF3AB+AMAALgMgD6AJxAB+AMAAQAlgDIAJYAB+AMAAQQlgGQAJYAB+AMAAQglgGQAJYAB+AMAAUAMgD6ALuAB+AMASNFZ4KgEAGgwKCFNoYXJwQ2FtGAEiDQi4FxABGAYgACgAMAAoADAAQAFIAVAAWAJiCwgGEPABGMACIJBOYgwIBhDoAhjgAyDwkwliDAgGEOADGIAFILCuFWIMCAYQ0AUYgAoggOowYgwIBhC4CBiADyCg4WdoAXABeAGAAQGIAQeYAQKoAQIQARgBKGQw0U44AUABSgBYwNGCyAlqBAgDEAJyBggAEAAYAIIBVwoiMTAwMTNfYXVkaW9fY29uZmlnXzEwMDExX3Blbmd1aW5zXxIVMjA0X3ZpZGVvX2NvbmZpZ18yMDRfGhoxMDA1MV9jb21tb25fY29uZmlnXzEwMDUxX4oBDggAEgAiBGlvc18qADIAkAEAmAEA',
   )
     .split('')
     .map((c) => c.charCodeAt(0)),
@@ -698,9 +687,8 @@ export function buildStatusReport(params: {
   parts.push(pbVarint(113, 0));
   parts.push(pbVarint(114, params.seq >= 3 ? (videoCall ? 6553600 : 2621440) : 0));
   parts.push(pbVarint(115, 0));
-  // 与 DEFAULT_CAPABILITIES.f11 一致。原生语音通话也声明视频能力，
-  // 否则之后动态打开摄像头时服务端不会补发完整的 bt=77 视频流参数。
-  parts.push(pbVarint(120, 1812048064));
+  // 语音与视频都使用 DEFAULT_CAPABILITIES.f11 对应的能力声明。
+  parts.push(pbVarint(120, 2566957248));
   parts.push(pbVarint(123, 0));
   for (let i = 125; i <= 130; i++) parts.push(pbVarint(i, 0));
   parts.push(pbVarint(132, 0));
@@ -775,13 +763,12 @@ export const RelayCmd = {
 } as const;
 
 /**
- * 中继 GET_IN 尾部的能力摘要：`02 | capabilities.f3 | capabilities.f6(BE)`。
+ * 中继 GET_IN 尾部的能力摘要。
  *
- * 实测 QQ 本体（视频档）：`02 0f 27 4f` —— `0x0f`=15、`0x274f`=10063，正好是
- * {@link DEFAULT_CAPABILITIES} 的 `f3` / `f6`。旧实现照抄的是语音档的旧模板
- * `02 05 27 4a`（5 / 10058），与当前发出去的能力集自相矛盾。
+ * 2026-11-26 QQ 语音升级与直接视频样本均为 `02 0f 27 51`。
+ * 尾部 `0x2751`=10065，与邀请和 GCS 入房能力档一致。
  */
-export const RELAY_CAPABILITY_TRIPLE = Uint8Array.from([0x02, 0x0f, 0x27, 0x4f]);
+export const RELAY_CAPABILITY_TRIPLE = Uint8Array.from([0x02, 0x0f, 0x27, 0x51]);
 
 export function buildRelayPacket(params: {
   roomId: bigint;
@@ -816,13 +803,13 @@ export function buildRelayPacket(params: {
 /**
  * 注册到中继（ch=0, cmd=1）。
  *
- * 2026-10-26 抓包逐字段对齐（QQ 本体，P2P 正常）：
+ * 序号、对端和 token 按 2026-10-26 QQ 抓包填写，能力摘要跟随 2026-11-26 样本更新。
  *
  * ```text
  * [23:27] 本端序号         QQ 是 0x70ed 这样的递增计数，旧实现写死 5000
  * [31:35] 对端 uin         QQ 显式填，旧实现写 0
  * [35:39] token            QQ 填 authToken，旧实现只写 2 字节
- * [53:57] 02 0f 27 4f      能力摘要，见 RELAY_CAPABILITY_TRIPLE
+ * [53:57] 02 0f 27 51      能力摘要，见 RELAY_CAPABILITY_TRIPLE
  * ```
  *
  * 这四处不对，中继就不回 GET_IN 应答（cmd=2），也就不会下发对端路径（cmd=3）。
