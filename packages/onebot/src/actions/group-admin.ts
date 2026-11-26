@@ -428,7 +428,7 @@ const setGroupAdminPermissions = defineAction(
       };
     },
     run: async (params, ctx) => {
-      await ctx.backend.groupAdminExtra!.setAdminPermissions(params);
+      await ctx.backend.groupAdminExtra!.setAdminPermissions!(params);
       return null;
     },
   },

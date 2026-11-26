@@ -156,7 +156,7 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
         user_id: userId(),
         message: messageSchema(),
         auto_escape: autoEscape,
-        font_id: int('本条消息的聊天字体 ID', { minimum: 1, maximum: 65535 }),
+        font_id: int('仅群聊可指定本条消息的字体 ID', { minimum: 1, maximum: 65535 }),
       },
       ['message'],
     ),
@@ -414,7 +414,8 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     inputSchema: input({ group_id: groupId(), user_id: memberId() }, ['group_id', 'user_id']),
   },
   set_group_admin_permissions: {
-    description: '修改管理员权限；开启踢人时必须给 kick_member_per_day，关闭时不能给。',
+    description:
+      '指定管理员的撤回和踢人权限写入在内置 WeqBot 后端已停用。启用该动作的其他后端要求开启踢人时传 kick_member_per_day。',
     inputSchema: input(
       {
         group_id: groupId(),
@@ -811,7 +812,7 @@ export const ACTION_METADATA: Record<string, ActionMetadata> = {
     inputSchema: input({ group_id: groupId() }, ['group_id']),
   },
   send_tuwen_ark: {
-    description: '发送图文 Ark 卡片；user_id 与 group_id 至少给一个。',
+    description: '图文 Ark 专用动作在内置 WeqBot 后端已停用。',
     inputSchema: input(
       {
         group_id: groupId(),

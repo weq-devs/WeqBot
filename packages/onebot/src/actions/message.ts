@@ -124,6 +124,7 @@ export const sendPrivateMsg: ActionDefinition<SendPrivateParams, SendOutcome> = 
   name: 'send_private_msg',
   summary: '发送私聊消息',
   parse: (raw) => {
+    if (raw.font_id !== undefined) throw new ParamError('私聊不支持指定 font_id');
     const tempGroupId = optionalPositiveInt(raw, 'group_id');
     return {
       userId: requiredPositiveInt(raw, 'user_id'),
@@ -162,6 +163,7 @@ export const sendMsg: ActionDefinition<SendMsgParams, SendOutcome> = {
     const isGroup = messageType === 'group' || (messageType !== 'private' && groupId !== undefined);
     if (isGroup && groupId === undefined) throw new ParamError('群消息需要 group_id');
     if (!isGroup && userId === undefined) throw new ParamError('私聊消息需要 user_id');
+    if (!isGroup && raw.font_id !== undefined) throw new ParamError('私聊不支持指定 font_id');
     const fontId = raw.font_id === undefined ? undefined : requiredPositiveInt(raw, 'font_id');
     if (fontId !== undefined && fontId > 0xffff) {
       throw new ParamError('font_id 不能超过 65535');
@@ -180,8 +182,6 @@ export const sendMsg: ActionDefinition<SendMsgParams, SendOutcome> = {
     const result = await ctx.backend.sendPrivateMessage(
       userId!,
       resolveReplies(segments, ctx, false, userId!),
-      undefined,
-      fontId,
     );
     return intern(ctx, { isGroup: false, targetId: userId!, ...result });
   },

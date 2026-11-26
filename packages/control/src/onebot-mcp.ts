@@ -128,7 +128,6 @@ const writeActions = new Set([
   'set_group_add_option',
   'add_group_tag',
   'delete_group_tag',
-  'set_group_admin_permissions',
   'set_group_admin_receive_verify',
   'set_group_robot_add_option',
   'set_group_search',
