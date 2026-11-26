@@ -91,8 +91,8 @@ function fixed32Field(field: number, value: number): Uint8Array {
   return out;
 }
 
-/** 开房参数里的 IP 栈标识（fixed32）。 */
-export const CALL_IP_STACK = 88;
+/** 开房 `params.f4` 的语音样本值（fixed32），字段语义待确认。 */
+export const CALL_IP_STACK = 32082;
 
 function concatBytes(parts: Uint8Array[]): Uint8Array {
   let total = 0;
@@ -146,8 +146,8 @@ export const USER_WRAPPER: ProtoMessage = message([f('user', 1, USER_INFO)]);
 /**
  * 房间公共段。
  *
- * `sessionId` 只在服务端回包（以及后续邀请 / 挂断）里有值：开房请求里它是 0，
- * 拿到回包后原样带回，服务端靠它把同一次通话的若干请求串起来。
+ * `sessionId` 来自服务端开房回包。客户端开房、邀请和挂断请求均省略此字段。
+ * `roomId` 在开房请求中为 0，后续请求使用服务端分配的房间号。
  */
 export const C2C_MODE_COMMON: ProtoMessage = message([
   // `force`：开房时 roomId=0 也要显式写出来（`08 00`），与真实客户端一致。
@@ -348,23 +348,23 @@ function baseCommon(roomId: bigint, relationId: number, scene: number, selfUid: 
 /**
  * 开房 / 邀请的媒体类型。
  *
- * ⚠️ 视频**不是**靠改 `scene` 或 `params.video` 区分的 —— 实测这两项在语音和
- * 视频通话里都是 1 / 0。真正的差异在下面这几项（2026-10-25 抓包逐字节比对）：
+ * 语音和视频通话的 `scene` / `params.video` 都为 1 / 0。
+ * 2026-11-26 同机 QQ 的两种入口样本如下。
  *
  * | 字段 | 语音 | 视频 |
  * | --- | --- | --- |
  * | `params.f3` | 1 | 0 |
- * | `params.ipStack` | 88 | 12656 |
- * | `params.f13` | 1 | 3 |
- * | `invite.params.f3` | 5 | 15 |
- * | `invite.params.f4` | 10056 | 10063 |
+ * | `params.f4`（fixed32） | 32082 | 14428 |
+ * | `params.f13` | 1 | 1 |
+ * | `invite.params.f3` | 1 | 1 |
+ * | `invite.params.f4` | 10065 | 10065 |
  *
- * 所以按场景查表，而不是拼一堆 if。
+ * `f4` 沿用各入口样本中的值，字段语义待确认。
  */
 export interface MediaProfile {
   /** `params.f3`。 */
   f3: number;
-  /** `params.ipStack`（fixed32）。 */
+  /** `params.f4`（fixed32）的样本值，字段语义待确认。 */
   ipStack: number;
   /** `params.f13`。 */
   f13: number;
@@ -375,8 +375,8 @@ export interface MediaProfile {
 }
 
 export const MEDIA_PROFILE: Record<'audio' | 'video', MediaProfile> = {
-  audio: { f3: 1, ipStack: CALL_IP_STACK, f13: 1, inviteF3: 5, inviteF4: 10056 },
-  video: { f3: 0, ipStack: 21547, f13: 3, inviteF3: 15, inviteF4: 10063 },
+  audio: { f3: 1, ipStack: CALL_IP_STACK, f13: 1, inviteF3: 1, inviteF4: 10065 },
+  video: { f3: 0, ipStack: 14428, f13: 1, inviteF3: 1, inviteF4: 10065 },
 };
 
 /** 开房 / 邀请请求里的媒体类型。 */
@@ -439,8 +439,8 @@ export const CreateRoom: TrpcSpec<
 /**
  * `SsoInviteUser` —— 把对端拉进房间（对方客户端此时开始振铃）。
  *
- * 必须带开房回包里的 `sessionId`；`relationId` 递增一位即可，与服务端无约定。
- * 视频的 `params.f3/f4` 与语音不同，见 {@link MEDIA_PROFILE}。
+ * `relationId` 在开房请求上递增一位。语音和视频使用相同的邀请能力档，
+ * 见 {@link MEDIA_PROFILE}。
  */
 export const InviteUser: TrpcSpec<
   {
