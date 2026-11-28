@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { decodeMessage, type RawMessageBody } from '../src/msg/decode';
-import { PUSH_MSG_BODY } from '../src/msg/schemas';
+import { MSG_CONTENT, PUSH_MSG_BODY } from '../src/msg/schemas';
 import { buildSendRequest, buildSendRequestWithMedia } from '../src/msg/send';
 import { SEND_MESSAGE_REQUEST } from '../src/msg/send-schemas';
 import { decode, encode } from '../src/protobuf';
@@ -51,6 +51,27 @@ test('回读旧发送包中的空 Elem.face 时恢复经典表情 0', () => {
   // PushMsgBody.body.richText.elems[0].face，旧编码未写 index。
   const oldFace = Buffer.from('1a060a0412021200', 'hex');
   assert.deepEqual(decodeMessage(oldFace).elements, [{ kind: 'face', faceId: 0, subType: 1 }]);
+});
+
+test('私聊文件接收回执和普通文件使用相同载荷但投影为不同元素', () => {
+  const contentHead = { msgType: 529, subType: 4, c2cCmd: 4 };
+  const file = { fileType: 1, fileName: 'notes.txt', fileSize: 1024n, fileUuid: 'transfer-id' };
+  const decodeFile = (head: RawMessageBody['contentHead'], subcmd: number) =>
+    decodeMessage(
+      encode(PUSH_MSG_BODY, {
+        contentHead: head,
+        body: { msgContent: encode(MSG_CONTENT, { notOnlineFile: { ...file, subcmd } }) },
+      }),
+    ).elements[0];
+  assert.deepEqual(decodeFile(contentHead, 2), {
+    kind: 'grayTipFileRecv',
+    subType: 10,
+    fileName: 'notes.txt',
+    fileSize: 1024,
+    fileToken: 'transfer-id',
+  });
+  assert.equal(decodeFile(contentHead, 1)?.kind, 'file');
+  assert.equal(decodeFile({ ...contentHead, c2cCmd: 0 }, 2)?.kind, 'file');
 });
 
 test('新版小表情与超级表情回读保留编号、外显名称和类型', () => {

@@ -486,10 +486,15 @@ function liftFileElem(pb: Record<string, unknown>): Record<string, unknown> {
 /**
  * 把 MsgBody.msgContent / richText.notOnlineFile 提升成 codec 风格 file 元素（私聊文件）：
  * fileUuid→fileToken、fileMd5→md5Bytes2、fileHash→transferFlag45504（OIDB 0xE37_1200 下载
- * 必需）、expireTime→uploadTime、fileType→subType。
+ * 必需）、expireTime→uploadTime。普通文件的 subType 沿用 fileType。
  */
-function liftNotOnlineFileElem(pb: Record<string, unknown>): Record<string, unknown> {
-  const out: Record<string, unknown> = { kind: 'file' };
+function liftNotOnlineFileElem(
+  pb: Record<string, unknown>,
+  privateFileTransfer: boolean,
+): Record<string, unknown> {
+  // 私聊文件接收回执复用文件载荷，QQ 将这类 529/4/4 消息存为 subType=10 的灰条。
+  const receipt = privateFileTransfer && pb.fileType === 1 && pb.subcmd === 2;
+  const out: Record<string, unknown> = { kind: receipt ? 'grayTipFileRecv' : 'file' };
   if (pb.fileName !== undefined) out.fileName = pb.fileName;
   if (pb.fileSize !== undefined) {
     out.fileSize = typeof pb.fileSize === 'bigint' ? Number(pb.fileSize) : pb.fileSize;
@@ -498,7 +503,8 @@ function liftNotOnlineFileElem(pb: Record<string, unknown>): Record<string, unkn
   if (pb.fileMd5 !== undefined) out.md5Bytes2 = pb.fileMd5;
   if (pb.fileHash !== undefined) out.transferFlag45504 = pb.fileHash;
   if (pb.expireTime !== undefined) out.uploadTime = pb.expireTime;
-  if (pb.fileType !== undefined) out.subType = pb.fileType;
+  if (receipt) out.subType = 10;
+  else if (pb.fileType !== undefined) out.subType = pb.fileType;
   return out;
 }
 
@@ -787,15 +793,18 @@ export function decodeMessageBody(raw: RawMessageBody): DecodedMessage {
 
   // 私聊文件不在 richText.elems 里：老 wire 走 MsgBody.msgContent 的 notOnlineFile
   //（部分消息也会放在 richText.notOnlineFile，两种都收）。
+  const privateFileTransfer =
+    !grp.groupUin && head.msgType === 529 && head.subType === 4 && head.c2cCmd === 4;
   const notOnlineFile = raw.body?.richText?.notOnlineFile;
-  if (notOnlineFile) elements.push(liftNotOnlineFileElem(notOnlineFile));
+  if (notOnlineFile) elements.push(liftNotOnlineFileElem(notOnlineFile, privateFileTransfer));
   const msgContent = raw.body?.msgContent;
   if (msgContent && msgContent.length > 0) {
     try {
       const content = decode(MSG_CONTENT, msgContent) as {
         notOnlineFile?: Record<string, unknown>;
       };
-      if (content.notOnlineFile) elements.push(liftNotOnlineFileElem(content.notOnlineFile));
+      if (content.notOnlineFile)
+        elements.push(liftNotOnlineFileElem(content.notOnlineFile, privateFileTransfer));
     } catch {
       // msgContent 不是 MsgContent 结构时忽略，不影响 richText 元素。
     }
