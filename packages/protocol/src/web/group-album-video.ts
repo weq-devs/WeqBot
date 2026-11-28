@@ -14,6 +14,7 @@ export interface GroupAlbumVideoUpload {
   width: number;
   height: number;
   beforeSend: () => void;
+  onVideoProgress?: (confirmedBytes: number, totalBytes: number) => void;
 }
 const root = 'https://h5.qzone.qq.com/webapp/json/sliceUpload/';
 function object(value: unknown): Record<string, unknown> {
@@ -128,6 +129,7 @@ export async function uploadGroupAlbumVideo(cred: WebCredential, params: GroupAl
           },
         ],
       });
+      if (video && data.flag === 0) params.onVideoProgress?.(0, size);
       if (data.flag === 0) {
         const offset = data.offset ?? 0;
         const sliceSize = data.slice_size;
@@ -177,6 +179,7 @@ export async function uploadGroupAlbumVideo(cred: WebCredential, params: GroupAl
           if ((end < size && data.flag !== 0) || (end === size && data.flag !== 1))
             throw new Error('服务器分片完成状态异常，请刷新相册核对，不会重发片段');
           start = end;
+          if (video) params.onVideoProgress?.(end, size);
         }
         if (video && uploadedHash.digest('hex') !== checksum)
           throw new Error('视频读取期间内容发生变化，已停止封面关联，请先核对相册');
